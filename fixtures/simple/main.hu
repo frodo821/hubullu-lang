@@ -1,0 +1,16 @@
+@use * from "profile.hu"
+
+entry faren {
+  headword: "faren"
+  tags: [parts_of_speech=verb]
+  stems { pres: "far", past: "for" }
+  inflection_class: strong_I
+  meaning: "to go"
+}
+
+entry hus {
+  headword: "hus"
+  tags: [parts_of_speech=noun]
+  stems {}
+  meaning: "house"
+}

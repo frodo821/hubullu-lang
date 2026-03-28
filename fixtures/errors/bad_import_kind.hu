@@ -1,0 +1,1 @@
+@use my_entry from "bad_import_entry.hu"

@@ -1,0 +1,17 @@
+@use * from "helpers.hu"
+
+entry alpha {
+  headword: "alpha"
+  tags: [parts_of_speech=noun]
+  stems {}
+  meaning: "alpha"
+  etymology { derived_from: beta }
+}
+
+entry beta {
+  headword: "beta"
+  tags: [parts_of_speech=noun]
+  stems {}
+  meaning: "beta"
+  etymology { derived_from: alpha }
+}

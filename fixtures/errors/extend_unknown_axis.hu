@@ -1,0 +1,3 @@
+@extend vals for tagaxis nonexistent_axis {
+  foo { display: { en: "Foo" } }
+}

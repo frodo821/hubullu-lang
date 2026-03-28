@@ -1,0 +1,39 @@
+tagaxis parts_of_speech {
+  role: classificatory
+  display: { ja: "品詞", en: "Part of Speech" }
+  index: exact
+}
+
+tagaxis tense {
+  role: inflectional
+  display: { ja: "時制", en: "Tense" }
+}
+
+tagaxis number {
+  role: inflectional
+  display: { ja: "数", en: "Number" }
+}
+
+@extend pos_values for tagaxis parts_of_speech {
+  verb { display: { ja: "動詞", en: "Verb" } }
+  noun { display: { ja: "名詞", en: "Noun" } }
+}
+
+@extend tense_values for tagaxis tense {
+  present { display: { en: "Present" } }
+  past { display: { en: "Past" } }
+}
+
+@extend number_values for tagaxis number {
+  sg { display: { en: "Singular" } }
+  pl { display: { en: "Plural" } }
+}
+
+inflection strong_I for {tense, number} {
+  requires stems: pres, past
+
+  [tense=present, number=sg] -> `{pres}s`
+  [tense=present, number=pl] -> `{pres}`
+  [tense=past, number=sg] -> `{past}`
+  [tense=past, number=pl] -> `{past}en`
+}

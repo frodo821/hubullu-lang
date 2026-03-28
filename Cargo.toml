@@ -1,0 +1,26 @@
+[package]
+name = "hubullu"
+version = "0.1.0"
+edition = "2021"
+description = "LexDSL compiler — compiles .hu artificial natural language dictionary files to SQLite"
+license = "MIT"
+rust-version = "1.70"
+
+[features]
+default = ["sqlite", "cli"]
+sqlite = ["dep:rusqlite"]
+cli = ["dep:clap", "sqlite"]
+
+[dependencies]
+rusqlite = { version = "0.31", features = ["bundled"], optional = true }
+clap = { version = "4", features = ["derive"], optional = true }
+thiserror = "1"
+unicode-xid = "0.2"
+
+[[bin]]
+name = "hubullu"
+required-features = ["cli"]
+
+[dev-dependencies]
+insta = "1"
+tempfile = "3"

@@ -1,0 +1,62 @@
+@use * from "profile.hu"
+@reference * as verbs from "verbs.hu"
+
+# ============================================================
+# 名詞エントリ
+# ============================================================
+
+entry hus {
+  headword: "hus"
+  tags: [parts_of_speech=noun, register=formal]
+  stems { root: "hus" }
+  inflection_class: strong_noun_masc
+  meaning: "house, dwelling"
+
+  etymology {
+    proto: "*hūsą"
+    note: "Common Germanic root."
+  }
+}
+
+entry weg {
+  headword: "weg"
+  tags: [parts_of_speech=noun]
+  stems { root: "weg" }
+  inflection_class: strong_noun_masc
+  meaning: "way, path, road"
+
+  examples {
+    example {
+      tokens: "der" weg[case=nom, number=sg]
+      translation: "the way"
+    }
+  }
+}
+
+entry wort {
+  headword: "wort"
+  tags: [parts_of_speech=noun]
+  stems { root: "wort" }
+  inflection_class: strong_noun_masc
+  meaning: "word"
+}
+
+# 複数書記体系のテスト
+entry taberu {
+  headword {
+    default: "食べる"
+    kana: "たべる"
+    romaji: "taberu"
+  }
+  tags: [parts_of_speech=verb]
+  stems {}
+  meaning: "to eat"
+}
+
+# 活用なし名詞
+entry mann {
+  headword: "mann"
+  tags: [parts_of_speech=noun]
+  stems {}
+  meaning: "man, person"
+}

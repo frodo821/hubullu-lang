@@ -1,0 +1,9 @@
+tagaxis my_axis {
+  role: classificatory
+  display: { en: "My Axis" }
+}
+
+tagaxis my_axis {
+  role: inflectional
+  display: { en: "My Axis Again" }
+}

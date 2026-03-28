@@ -1,0 +1,122 @@
+@use * from "profile.hu"
+
+# ============================================================
+# 動詞エントリ
+# ============================================================
+
+# --- 強変化動詞 ---
+
+entry faren {
+  headword: "faren"
+  tags: [parts_of_speech=verb, register=formal]
+  stems { pres: "far", past: "for" }
+  inflection_class: strong_I
+
+  meanings {
+    motion   { "to go, to travel (physically)" }
+    progress { "to proceed, to advance (abstractly)" }
+  }
+
+  forms_override {
+    [tense=future, person=1, number=sg] -> `werde faren`
+  }
+
+  etymology {
+    proto: "*far-"
+    cognates {
+      afaran "prefixed derivative"
+    }
+    note: "Underwent ablaut in the past tense: a -> o."
+  }
+
+  examples {
+    example {
+      tokens: faren[tense=present, person=1, number=sg] "."
+      translation: "I go."
+    }
+  }
+}
+
+entry drinken {
+  headword: "drinken"
+  tags: [parts_of_speech=verb]
+  stems { pres: "drink", past: "dronk" }
+  inflection_class: strong_I
+  meaning: "to drink"
+
+  etymology {
+    derived_from: faren
+    note: "Not actually derived from faren, just testing."
+  }
+}
+
+# --- 弱変化動詞 ---
+
+entry maken {
+  headword: "maken"
+  tags: [parts_of_speech=verb, register=informal]
+  stems { root: "mak" }
+  inflection_class: weak
+  meaning: "to make, to do"
+}
+
+entry leren {
+  headword: "leren"
+  tags: [parts_of_speech=verb]
+  stems { root: "ler" }
+  inflection_class: weak
+  meaning: "to learn, to teach"
+
+  examples {
+    example {
+      tokens: leren[tense=present, person=3, number=sg] "."
+      translation: "He learns."
+    }
+    example {
+      tokens: leren[tense=past, person=1, number=pl] "."
+      translation: "We learned."
+    }
+  }
+}
+
+# --- 不規則動詞（インライン活用） ---
+
+entry wesen {
+  headword: "wesen"
+  tags: [parts_of_speech=verb]
+  stems {}
+  meaning: "to be"
+
+  inflect for {tense, person, number} {
+    [tense=present, person=1, number=sg] -> `bin`
+    [tense=present, person=2, number=sg] -> `bist`
+    [tense=present, person=3, number=sg] -> `is`
+    [tense=present, person=1, number=pl] -> `sind`
+    [tense=present, person=2, number=pl] -> `sind`
+    [tense=present, person=3, number=pl] -> `sind`
+    [tense=past,    person=1, number=sg] -> `was`
+    [tense=past,    person=2, number=sg] -> `warst`
+    [tense=past,    person=3, number=sg] -> `was`
+    [tense=past,    number=pl, _]        -> `waren`
+    [tense=future,  _]                   -> null
+  }
+}
+
+entry haven {
+  headword: "haven"
+  tags: [parts_of_speech=verb]
+  stems {}
+  meaning: "to have"
+
+  inflect for {tense, person, number} {
+    [tense=present, person=1, number=sg] -> `have`
+    [tense=present, person=2, number=sg] -> `havest`
+    [tense=present, person=3, number=sg] -> `haveth`
+    [tense=present, number=pl, _]        -> `haven`
+    [tense=past,    person=1, number=sg] -> `hadde`
+    [tense=past,    person=2, number=sg] -> `haddest`
+    [tense=past,    person=3, number=sg] -> `hadde`
+    [tense=past,    number=pl, _]        -> `hadden`
+    [tense=future,  _]                   -> null
+  }
+}

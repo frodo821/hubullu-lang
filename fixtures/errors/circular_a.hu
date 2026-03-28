@@ -1,0 +1,6 @@
+@use * from "circular_b.hu"
+
+tagaxis dummy_a {
+  role: classificatory
+  display: { en: "Dummy A" }
+}

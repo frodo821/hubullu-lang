@@ -1,0 +1,38 @@
+tagaxis parts_of_speech {
+  role: classificatory
+  display: { en: "Part of Speech" }
+}
+
+tagaxis tense {
+  role: inflectional
+  display: { en: "Tense" }
+}
+
+tagaxis number {
+  role: inflectional
+  display: { en: "Number" }
+}
+
+@extend pos_values for tagaxis parts_of_speech {
+  verb { display: { en: "Verb" } }
+  noun { display: { en: "Noun" } }
+}
+
+@extend tense_values for tagaxis tense {
+  present { display: { en: "Present" } }
+  past { display: { en: "Past" } }
+}
+
+@extend number_values for tagaxis number {
+  sg { display: { en: "Singular" } }
+  pl { display: { en: "Plural" } }
+}
+
+inflection basic_verb for {tense, number} {
+  requires stems: root
+
+  [tense=present, number=sg] -> `{root}s`
+  [tense=present, number=pl] -> `{root}`
+  [tense=past, number=sg] -> `{root}ed`
+  [tense=past, number=pl] -> `{root}ed`
+}

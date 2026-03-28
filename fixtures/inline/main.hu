@@ -1,0 +1,21 @@
+
+tagaxis tense {
+  role: inflectional
+  display: { en: "Tense" }
+}
+
+@extend tense_vals for tagaxis tense {
+  present { display: { en: "Present" } }
+  past { display: { en: "Past" } }
+}
+
+entry sein {
+  headword: "sein"
+  tags: []
+  stems {}
+  meaning: "to be"
+  inflect for {tense} {
+    [tense=present] -> `bin`
+    [tense=past] -> `war`
+  }
+}

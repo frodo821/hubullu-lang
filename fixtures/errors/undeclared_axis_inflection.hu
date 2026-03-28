@@ -1,0 +1,7 @@
+@use * from "helpers.hu"
+
+inflection bad_infl for {tense, nonexistent_axis} {
+  requires stems: root
+
+  [tense=present, nonexistent_axis=x] -> `{root}`
+}

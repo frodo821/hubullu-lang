@@ -1,0 +1,9 @@
+@use * from "helpers.hu"
+
+entry broken {
+  headword: "broken"
+  tags: [parts_of_speech=verb]
+  stems { root: "break" }
+  inflection_class: nonexistent_class
+  meaning: "to break"
+}

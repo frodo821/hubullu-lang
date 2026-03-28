@@ -1,0 +1,29 @@
+@use * from "profile.hu"
+
+# ============================================================
+# 形容詞エントリ（委譲活用のテスト）
+# ============================================================
+
+entry grot {
+  headword: "grot"
+  tags: [parts_of_speech=adj]
+  stems { root: "grot" }
+  inflection_class: adj_strong
+  meaning: "great, large"
+}
+
+entry lut {
+  headword: "lut"
+  tags: [parts_of_speech=adj]
+  stems { root: "lut" }
+  inflection_class: adj_strong
+  meaning: "small, little"
+}
+
+entry alt {
+  headword: "alt"
+  tags: [parts_of_speech=adj]
+  stems { root: "alt" }
+  inflection_class: adj_strong
+  meaning: "old"
+}

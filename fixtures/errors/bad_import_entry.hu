@@ -1,0 +1,8 @@
+@use * from "helpers.hu"
+
+entry my_entry {
+  headword: "test"
+  tags: [parts_of_speech=noun]
+  stems {}
+  meaning: "a test"
+}

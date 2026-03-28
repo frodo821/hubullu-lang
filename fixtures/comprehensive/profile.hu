@@ -1,0 +1,195 @@
+# ============================================================
+# 架空ゲルマン語 "Aldisch" のプロファイル
+# ============================================================
+
+# --- タグ軸定義 ---
+
+tagaxis parts_of_speech {
+  role: classificatory
+  display: { ja: "品詞", en: "Part of Speech", de: "Wortart" }
+  index: exact
+}
+
+tagaxis tense {
+  role: inflectional
+  display: { ja: "時制", en: "Tense" }
+}
+
+tagaxis number {
+  role: inflectional
+  display: { ja: "数", en: "Number" }
+}
+
+tagaxis person {
+  role: inflectional
+  display: { ja: "人称", en: "Person" }
+}
+
+tagaxis case {
+  role: inflectional
+  display: { ja: "格", en: "Case" }
+}
+
+tagaxis gender {
+  role: inflectional
+  display: { ja: "性", en: "Gender" }
+}
+
+tagaxis mood {
+  role: inflectional
+  display: { ja: "法", en: "Mood" }
+}
+
+tagaxis register {
+  role: classificatory
+  display: { ja: "語域", en: "Register" }
+}
+
+tagaxis stem_type {
+  role: structural
+  display: { ja: "語幹型", en: "Stem Type" }
+}
+
+# --- @extend: タグ軸に値を追加 ---
+
+@extend basic_pos for tagaxis parts_of_speech {
+  verb { display: { ja: "動詞", en: "Verb" } }
+  noun { display: { ja: "名詞", en: "Noun" } }
+  adj  { display: { ja: "形容詞", en: "Adjective" } }
+}
+
+@extend tense_values for tagaxis tense {
+  present { display: { ja: "現在", en: "Present" } }
+  past    { display: { ja: "過去", en: "Past" } }
+  future  { display: { ja: "未来", en: "Future" } }
+}
+
+@extend number_values for tagaxis number {
+  sg { display: { ja: "単数", en: "Singular" } }
+  pl { display: { ja: "複数", en: "Plural" } }
+}
+
+@extend person_values for tagaxis person {
+  1 { display: { en: "1st" } }
+  2 { display: { en: "2nd" } }
+  3 { display: { en: "3rd" } }
+}
+
+@extend case_values for tagaxis case {
+  nom { display: { ja: "主格", en: "Nominative" } }
+  acc { display: { ja: "対格", en: "Accusative" } }
+  dat { display: { ja: "与格", en: "Dative" } }
+  gen { display: { ja: "属格", en: "Genitive" } }
+}
+
+@extend gender_values for tagaxis gender {
+  masc { display: { ja: "男性", en: "Masculine" } }
+  fem  { display: { ja: "女性", en: "Feminine" } }
+  neut { display: { ja: "中性", en: "Neuter" } }
+}
+
+@extend mood_values for tagaxis mood {
+  ind  { display: { ja: "直説法", en: "Indicative" } }
+  subj { display: { ja: "接続法", en: "Subjunctive" } }
+}
+
+@extend register_values for tagaxis register {
+  formal   { display: { ja: "格式体", en: "Formal" } }
+  informal { display: { ja: "口語体", en: "Informal" } }
+}
+
+# --- 活用クラス: 強変化動詞 I類 ---
+
+inflection strong_I for {tense, person, number} {
+  requires stems: pres, past
+
+  [tense=present, person=1, number=sg] -> `{pres}e`
+  [tense=present, person=2, number=sg] -> `{pres}est`
+  [tense=present, person=3, number=sg] -> `{pres}eth`
+  [tense=present, number=pl, _]        -> `{pres}en`
+  [tense=past,    person=1, number=sg] -> `{past}`
+  [tense=past,    person=2, number=sg] -> `{past}e`
+  [tense=past,    person=3, number=sg] -> `{past}`
+  [tense=past,    number=pl, _]        -> `{past}en`
+  [tense=future,  _]                   -> null
+}
+
+# --- 活用クラス: 弱変化動詞 ---
+
+inflection weak for {tense, person, number} {
+  requires stems: root
+
+  [tense=present, person=1, number=sg] -> `{root}e`
+  [tense=present, person=2, number=sg] -> `{root}est`
+  [tense=present, person=3, number=sg] -> `{root}et`
+  [tense=present, number=pl, _]        -> `{root}en`
+  [tense=past,    person=1, number=sg] -> `{root}te`
+  [tense=past,    person=2, number=sg] -> `{root}test`
+  [tense=past,    person=3, number=sg] -> `{root}te`
+  [tense=past,    number=pl, _]        -> `{root}ten`
+  [tense=future,  _]                   -> null
+}
+
+# --- 名詞変化: 強変化 ---
+
+inflection strong_noun_masc for {case, number} {
+  requires stems: root
+
+  [case=nom, number=sg] -> `{root}`
+  [case=acc, number=sg] -> `{root}`
+  [case=dat, number=sg] -> `{root}e`
+  [case=gen, number=sg] -> `{root}es`
+  [case=nom, number=pl] -> `{root}e`
+  [case=acc, number=pl] -> `{root}e`
+  [case=dat, number=pl] -> `{root}en`
+  [case=gen, number=pl] -> `{root}e`
+}
+
+# --- 形容詞変化: 性による委譲 ---
+
+inflection adj_strong for {case, number, gender} {
+  requires stems: root
+
+  [gender=masc, _] -> adj_masc[case, number] with stems { root: root }
+  [gender=fem,  _] -> adj_fem[case, number]  with stems { root: root }
+  [gender=neut, _] -> adj_neut[case, number] with stems { root: root }
+}
+
+inflection adj_masc for {case, number} {
+  requires stems: root
+
+  [case=nom, number=sg] -> `{root}er`
+  [case=acc, number=sg] -> `{root}en`
+  [case=dat, number=sg] -> `{root}em`
+  [case=gen, number=sg] -> `{root}es`
+  [case=nom, number=pl] -> `{root}e`
+  [case=acc, number=pl] -> `{root}e`
+  [case=dat, number=pl] -> `{root}en`
+  [case=gen, number=pl] -> `{root}er`
+}
+
+inflection adj_fem for {case, number} {
+  requires stems: root
+
+  [case=nom, number=sg] -> `{root}e`
+  [case=acc, number=sg] -> `{root}e`
+  [case=dat, number=sg] -> `{root}er`
+  [case=gen, number=sg] -> `{root}er`
+  [case=nom, number=pl] -> `{root}e`
+  [case=acc, number=pl] -> `{root}e`
+  [case=dat, number=pl] -> `{root}en`
+  [case=gen, number=pl] -> `{root}er`
+}
+
+inflection adj_neut for {case, number} {
+  requires stems: root
+
+  [case=nom, number=sg] -> `{root}es`
+  [case=acc, number=sg] -> `{root}es`
+  [case=dat, number=sg] -> `{root}em`
+  [case=gen, number=sg] -> `{root}es`
+  [case=nom, number=pl] -> `{root}e`
+  [case=acc, number=pl] -> `{root}e`
+  [case=dat, number=pl] -> `{root}en`
+  [case=gen, number=pl] -> `{root}er`
+}
