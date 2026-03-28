@@ -54,6 +54,9 @@ pub mod symbol_table;
 pub mod token;
 /// AST visitor trait with default walk functions.
 pub mod visit;
+/// Language Server Protocol implementation.
+#[cfg(feature = "lsp")]
+pub mod lsp;
 
 use std::path::Path;
 

@@ -30,6 +30,9 @@ enum Command {
         #[clap(long)]
         db: PathBuf,
     },
+    /// Start the Language Server Protocol server
+    #[cfg(feature = "lsp")]
+    Lsp,
 }
 
 fn main() {
@@ -86,6 +89,10 @@ fn main() {
             let (separator, no_sep_before) = hubullu::render::read_render_config(&conn);
             let output = hubullu::render::smart_join(&parts, &separator, &no_sep_before);
             println!("{}", output);
+        }
+        #[cfg(feature = "lsp")]
+        Command::Lsp => {
+            hubullu::lsp::run_server();
         }
     }
 }
