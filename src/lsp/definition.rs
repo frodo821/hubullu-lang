@@ -7,6 +7,7 @@ use crate::span::FileId;
 use crate::token::{Token, TokenKind};
 
 use super::convert;
+use super::hover::{find_extend_value, find_tag_value_axis};
 
 /// Find the definition of the symbol at the given byte offset.
 pub fn goto_definition(
@@ -19,6 +20,16 @@ pub fn goto_definition(
 
     match &tok.node {
         TokenKind::Ident(name) => {
+            // Check tag value context first.
+            if let Some(axis_name) = find_tag_value_axis(tokens, tok_idx) {
+                if let Some((val_fid, _ext, val)) =
+                    find_extend_value(Some(&axis_name), name, phase1)
+                {
+                    let uri = convert::path_to_uri(phase1.source_map.path(val_fid))?;
+                    let range = convert::span_to_range(&val.name.span, &phase1.source_map);
+                    return Some(GotoDefinitionResponse::Scalar(Location { uri, range }));
+                }
+            }
             if let Some(ns_name) = find_namespace(tokens, tok_idx) {
                 resolve_qualified(&ns_name, name, file_id, phase1)
             } else {

@@ -18,7 +18,7 @@ pub fn hover(
     phase1: &Phase1Result,
 ) -> Option<Hover> {
     // Find the token at cursor.
-    let tok = tokens.iter().find(|t| {
+    let (tok_idx, tok) = tokens.iter().enumerate().find(|(_, t)| {
         t.span.file_id == file_id && t.span.start <= offset && offset < t.span.end
     })?;
 
@@ -26,6 +26,21 @@ pub fn hover(
         TokenKind::Ident(n) => n,
         _ => return None,
     };
+
+    // Check if cursor is on a tag axis value (after `=` in `[axis=value]`).
+    if let Some(axis_name) = find_tag_value_axis(tokens, tok_idx) {
+        if let Some((_, ext, val)) = find_extend_value(Some(&axis_name), name, phase1) {
+            let markdown = format_tag_value(val, ext);
+            let range = convert::span_to_range(&tok.span, &phase1.source_map);
+            return Some(Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value: markdown,
+                }),
+                range: Some(range),
+            });
+        }
+    }
 
     // Resolve symbol.
     let scope = phase1.symbol_table.scope(file_id)?;
@@ -152,4 +167,61 @@ fn format_extend(ext: &ast::Extend) -> String {
         ext.target_axis.node,
         values.join(", ")
     )
+}
+
+fn format_tag_value(val: &ast::ExtendValue, ext: &ast::Extend) -> String {
+    let display: Vec<_> = val
+        .display
+        .iter()
+        .map(|(k, v)| format!("{}: \"{}\"", k.node, v.node))
+        .collect();
+
+    let mut lines = format!(
+        "```hubullu\n{} (value of {})\n```\n---\n**axis**: {}",
+        val.name.node, ext.target_axis.node, ext.target_axis.node
+    );
+    if !display.is_empty() {
+        lines.push_str(&format!("\\\n**display**: {}", display.join(", ")));
+    }
+    if !val.slots.is_empty() {
+        let slots: Vec<_> = val.slots.iter().map(|s| s.node.as_str()).collect();
+        lines.push_str(&format!("\\\n**slots**: {}", slots.join(", ")));
+    }
+    lines
+}
+
+/// Detect if the token at `tok_idx` is in the value position of `[axis=value]`.
+/// Returns the axis name if so.
+pub(crate) fn find_tag_value_axis(tokens: &[Token], tok_idx: usize) -> Option<String> {
+    if tok_idx >= 2 {
+        if let TokenKind::Eq = &tokens[tok_idx - 1].node {
+            if let TokenKind::Ident(axis) = &tokens[tok_idx - 2].node {
+                return Some(axis.clone());
+            }
+        }
+    }
+    None
+}
+
+/// Search all @extend blocks for a value definition.
+/// If `axis_name` is Some, only match extends targeting that axis.
+pub(crate) fn find_extend_value<'a>(
+    axis_name: Option<&str>,
+    value_name: &str,
+    phase1: &'a Phase1Result,
+) -> Option<(FileId, &'a ast::Extend, &'a ast::ExtendValue)> {
+    for (&fid, file) in &phase1.files {
+        for item in &file.items {
+            if let Item::Extend(ext) = &item.node {
+                if axis_name.map_or(true, |a| ext.target_axis.node == a) {
+                    for val in &ext.values {
+                        if val.name.node == value_name {
+                            return Some((fid, ext, val));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
 }
