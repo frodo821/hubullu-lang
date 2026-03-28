@@ -142,28 +142,50 @@ pub fn evaluate_rules(
     struct_stems: &HashMap<String, HashMap<String, String>>,
     resolver: &dyn DelegateResolver,
 ) -> Result<ExpandedParadigm, Vec<Diagnostic>> {
+    evaluate_rules_with_overrides(rules, &[], cells, stems, struct_stems, resolver)
+}
+
+/// Evaluate a rule-based paradigm with 2-pass override logic.
+///
+/// Per cell: try `overrides` first; if matched, use it. Otherwise fall back to `rules`.
+/// Ambiguity checking stays intact **within** each tier. Overrides always win regardless
+/// of specificity.
+pub fn evaluate_rules_with_overrides(
+    rules: &[InflectionRule],
+    overrides: &[InflectionRule],
+    cells: &[Cell],
+    stems: &HashMap<String, String>,
+    struct_stems: &HashMap<String, HashMap<String, String>>,
+    resolver: &dyn DelegateResolver,
+) -> Result<ExpandedParadigm, Vec<Diagnostic>> {
     let mut forms = Vec::new();
     let mut errors = Vec::new();
 
     for cell in cells {
+        // Tier 1: try overrides
+        match find_best_match(overrides, cell) {
+            Ok(Some(rule)) => {
+                match apply_rule(rule, cell, stems, struct_stems, resolver) {
+                    Ok(result) => forms.push((cell.clone(), result)),
+                    Err(e) => errors.push(e),
+                }
+                continue;
+            }
+            Ok(None) => {} // no override matched, fall through
+            Err(e) => {
+                errors.push(e);
+                continue;
+            }
+        }
+
+        // Tier 2: class rules
         match find_best_match(rules, cell) {
-            Ok(Some(rule)) => match &rule.rhs.node {
-                RuleRhs::Template(tmpl) => {
-                    match render_template(tmpl, stems, struct_stems) {
-                        Ok(s) => forms.push((cell.clone(), CellResult::Form(s))),
-                        Err(e) => errors.push(e),
-                    }
+            Ok(Some(rule)) => {
+                match apply_rule(rule, cell, stems, struct_stems, resolver) {
+                    Ok(result) => forms.push((cell.clone(), result)),
+                    Err(e) => errors.push(e),
                 }
-                RuleRhs::Null => {
-                    forms.push((cell.clone(), CellResult::Null));
-                }
-                RuleRhs::Delegate(deleg) => {
-                    match resolve_delegate(deleg, cell, stems, struct_stems, resolver) {
-                        Ok(result) => forms.push((cell.clone(), result)),
-                        Err(e) => errors.push(e),
-                    }
-                }
-            },
+            }
             Ok(None) => {
                 let tag_desc = cell
                     .tags
@@ -184,6 +206,25 @@ pub fn evaluate_rules(
         Ok(ExpandedParadigm { forms })
     } else {
         Err(errors)
+    }
+}
+
+/// Apply a matched rule to produce a CellResult.
+fn apply_rule(
+    rule: &InflectionRule,
+    cell: &Cell,
+    stems: &HashMap<String, String>,
+    struct_stems: &HashMap<String, HashMap<String, String>>,
+    resolver: &dyn DelegateResolver,
+) -> Result<CellResult, Diagnostic> {
+    match &rule.rhs.node {
+        RuleRhs::Template(tmpl) => {
+            render_template(tmpl, stems, struct_stems).map(CellResult::Form)
+        }
+        RuleRhs::Null => Ok(CellResult::Null),
+        RuleRhs::Delegate(deleg) => {
+            resolve_delegate(deleg, cell, stems, struct_stems, resolver)
+        }
     }
 }
 
@@ -232,7 +273,7 @@ fn resolve_delegate(
             evaluate_rules(rules, &cells, &delegate_stems, struct_stems, resolver)
         }
         InflectionBody::Compose(comp) => {
-            evaluate_compose(comp, &cells, &delegate_stems, struct_stems)
+            evaluate_compose(comp, &[], &cells, &delegate_stems, struct_stems)
         }
     };
 
@@ -253,9 +294,15 @@ fn resolve_delegate(
     }
 }
 
-/// Evaluate a compose-based paradigm.
+/// Evaluate a compose-based paradigm with entry-level overrides.
+///
+/// Per cell, evaluation order:
+/// 1. `entry_overrides` (forms_override from entry) — highest priority
+/// 2. `compose.overrides` (override rules from inflection class) — second priority
+/// 3. Slot composition — fallback
 pub fn evaluate_compose(
     compose: &ComposeBody,
+    entry_overrides: &[InflectionRule],
     cells: &[Cell],
     stems: &HashMap<String, String>,
     struct_stems: &HashMap<String, HashMap<String, String>>,
@@ -264,21 +311,53 @@ pub fn evaluate_compose(
     let mut errors = Vec::new();
 
     for cell in cells {
-        // Check overrides first
-        if let Ok(Some(rule)) = find_best_match(&compose.overrides, cell) {
-            match &rule.rhs.node {
-                RuleRhs::Template(tmpl) => {
-                    match render_template(tmpl, stems, struct_stems) {
-                        Ok(s) => forms.push((cell.clone(), CellResult::Form(s))),
-                        Err(e) => errors.push(e),
+        // Tier 1: entry-level overrides
+        match find_best_match(entry_overrides, cell) {
+            Ok(Some(rule)) => {
+                match &rule.rhs.node {
+                    RuleRhs::Template(tmpl) => {
+                        match render_template(tmpl, stems, struct_stems) {
+                            Ok(s) => forms.push((cell.clone(), CellResult::Form(s))),
+                            Err(e) => errors.push(e),
+                        }
+                        continue;
                     }
-                    continue;
+                    RuleRhs::Null => {
+                        forms.push((cell.clone(), CellResult::Null));
+                        continue;
+                    }
+                    _ => {}
                 }
-                RuleRhs::Null => {
-                    forms.push((cell.clone(), CellResult::Null));
-                    continue;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                errors.push(e);
+                continue;
+            }
+        }
+
+        // Tier 2: compose-level overrides
+        match find_best_match(&compose.overrides, cell) {
+            Ok(Some(rule)) => {
+                match &rule.rhs.node {
+                    RuleRhs::Template(tmpl) => {
+                        match render_template(tmpl, stems, struct_stems) {
+                            Ok(s) => forms.push((cell.clone(), CellResult::Form(s))),
+                            Err(e) => errors.push(e),
+                        }
+                        continue;
+                    }
+                    RuleRhs::Null => {
+                        forms.push((cell.clone(), CellResult::Null));
+                        continue;
+                    }
+                    _ => {}
                 }
-                _ => {}
+            }
+            Ok(None) => {}
+            Err(e) => {
+                errors.push(e);
+                continue;
             }
         }
 
@@ -474,5 +553,122 @@ mod tests {
         assert_eq!(result.forms.len(), 2);
         assert!(matches!(&result.forms[0].1, CellResult::Form(s) if s == "walks"));
         assert!(matches!(&result.forms[1].1, CellResult::Null));
+    }
+
+    fn make_rule(conditions: &[(&str, &str)], wildcard: bool, template_lit: &str) -> InflectionRule {
+        let span = make_span();
+        InflectionRule {
+            condition: TagConditionList {
+                conditions: conditions
+                    .iter()
+                    .map(|(a, v)| TagCondition {
+                        axis: make_ident(a),
+                        value: make_ident(v),
+                    })
+                    .collect(),
+                wildcard,
+                span,
+            },
+            rhs: Spanned::new(
+                RuleRhs::Template(Template {
+                    segments: vec![TemplateSegment::Lit(template_lit.to_string())],
+                    span,
+                }),
+                span,
+            ),
+        }
+    }
+
+    #[test]
+    fn test_override_wins_over_same_specificity() {
+        // Class rule and override have same specificity (2 conditions).
+        // Without 2-pass, this would be an ambiguity error.
+        let class_rules = vec![
+            make_rule(&[("tense", "present"), ("number", "sg")], true, "class_form"),
+        ];
+        let overrides = vec![
+            make_rule(&[("tense", "present"), ("number", "sg")], true, "override_form"),
+        ];
+        let cells = vec![Cell {
+            tags: [
+                ("tense".to_string(), "present".to_string()),
+                ("number".to_string(), "sg".to_string()),
+            ].into(),
+        }];
+        let stems = HashMap::new();
+        let struct_stems = HashMap::new();
+
+        let result = evaluate_rules_with_overrides(
+            &class_rules, &overrides, &cells, &stems, &struct_stems, &NullResolver,
+        ).unwrap();
+        assert_eq!(result.forms.len(), 1);
+        assert!(matches!(&result.forms[0].1, CellResult::Form(s) if s == "override_form"));
+    }
+
+    #[test]
+    fn test_override_wins_over_higher_specificity() {
+        // Class rule has specificity 2, override has specificity 1.
+        // Override still wins because it's a higher tier.
+        let class_rules = vec![
+            make_rule(&[("tense", "present"), ("number", "sg")], false, "class_form"),
+        ];
+        let overrides = vec![
+            make_rule(&[("tense", "present")], true, "override_form"),
+        ];
+        let cells = vec![Cell {
+            tags: [
+                ("tense".to_string(), "present".to_string()),
+                ("number".to_string(), "sg".to_string()),
+            ].into(),
+        }];
+        let stems = HashMap::new();
+        let struct_stems = HashMap::new();
+
+        let result = evaluate_rules_with_overrides(
+            &class_rules, &overrides, &cells, &stems, &struct_stems, &NullResolver,
+        ).unwrap();
+        assert_eq!(result.forms.len(), 1);
+        assert!(matches!(&result.forms[0].1, CellResult::Form(s) if s == "override_form"));
+    }
+
+    #[test]
+    fn test_class_ambiguity_still_detected() {
+        // Two class rules with same specificity → ambiguity error.
+        let class_rules = vec![
+            make_rule(&[("tense", "present")], true, "form_a"),
+            make_rule(&[("tense", "present")], true, "form_b"),
+        ];
+        let cells = vec![Cell {
+            tags: [("tense".to_string(), "present".to_string())].into(),
+        }];
+        let stems = HashMap::new();
+        let struct_stems = HashMap::new();
+
+        let result = evaluate_rules_with_overrides(
+            &class_rules, &[], &cells, &stems, &struct_stems, &NullResolver,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_override_ambiguity_still_detected() {
+        // Two overrides with same specificity → ambiguity error.
+        let class_rules = vec![
+            make_rule(&[("tense", "present")], true, "class_form"),
+        ];
+        let overrides = vec![
+            make_rule(&[("tense", "present")], true, "override_a"),
+            make_rule(&[("tense", "present")], true, "override_b"),
+        ];
+        let cells = vec![Cell {
+            tags: [("tense".to_string(), "present".to_string())].into(),
+        }];
+        let stems = HashMap::new();
+        let struct_stems = HashMap::new();
+
+        let result = evaluate_rules_with_overrides(
+            &class_rules, &overrides, &cells, &stems, &struct_stems, &NullResolver,
+        );
+        assert!(result.is_err());
     }
 }

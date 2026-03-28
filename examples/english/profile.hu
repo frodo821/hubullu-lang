@@ -54,14 +54,13 @@ tagaxis degree {
   superlative { display: { en: "Superlative" } }
 }
 
-# English verb conjugation (base forms only).
-# The class uses low-specificity wildcards so that entries
-# can override individual cells via forms_override.
-inflection en_verb for {tense, person, number} {
+# English regular verb conjugation.
+inflection regular_verb for {tense, person, number} {
   requires stems: root, past
 
-  [tense=present, _] -> `{root}`
-  [tense=past, _]    -> `{past}`
+  [tense=present, person=3, number=sg] -> `{root}s`
+  [tense=present, _]                   -> `{root}`
+  [tense=past, _]                      -> `{past}`
 }
 
 # Regular noun plural

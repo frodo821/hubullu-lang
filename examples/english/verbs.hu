@@ -3,17 +3,13 @@
 # English Verbs
 
 # Regular verb: walk
-# The en_verb class gives base forms; forms_override adds 3sg -s.
+# Gets 3sg "walks" from the regular_verb class rule.
 entry walk {
   headword: "walk"
   tags: [pos=verb]
   stems { root: "walk", past: "walked" }
-  inflection_class: en_verb
+  inflection_class: regular_verb
   meaning: "to walk"
-
-  forms_override {
-    [tense=present, person=3, number=sg] -> `walks`
-  }
 }
 
 # Irregular 3sg: go → goes (forms_override)
@@ -21,7 +17,7 @@ entry go {
   headword: "go"
   tags: [pos=verb]
   stems { root: "go", past: "went" }
-  inflection_class: en_verb
+  inflection_class: regular_verb
   meaning: "to go"
 
   forms_override {

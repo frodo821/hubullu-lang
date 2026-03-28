@@ -10,7 +10,7 @@ use crate::ast::*;
 use crate::dag;
 use crate::error::{Diagnostic, Diagnostics};
 use crate::inflection_eval::{
-    enumerate_cells, evaluate_compose, evaluate_rules, CellResult, DelegateResolver,
+    enumerate_cells, evaluate_compose, evaluate_rules_with_overrides, CellResult, DelegateResolver,
 };
 use crate::phase1::Phase1Result;
 use crate::span::FileId;
@@ -358,12 +358,12 @@ impl<'a> Phase2Ctx<'a> {
                         let resolver = Phase2Resolver { ctx: self, file_id };
                         let result = match &body {
                             InflectionBody::Rules(rules) => {
-                                let mut all_rules = rules.clone();
-                                all_rules.extend(entry.forms_override.clone());
-                                evaluate_rules(&all_rules, &cells, &stems, &struct_stems, &resolver)
+                                evaluate_rules_with_overrides(
+                                    rules, &entry.forms_override, &cells, &stems, &struct_stems, &resolver,
+                                )
                             }
                             InflectionBody::Compose(comp) => {
-                                evaluate_compose(comp, &cells, &stems, &struct_stems)
+                                evaluate_compose(comp, &entry.forms_override, &cells, &stems, &struct_stems)
                             }
                         };
 
