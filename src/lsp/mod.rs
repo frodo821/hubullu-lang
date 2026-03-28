@@ -389,6 +389,7 @@ fn handle_semantic_tokens(id: RequestId, req: Request, s: &ServerState) -> Respo
         semantic_tokens::generate(
             &doc.parse_result.tokens, &[],
             doc.parse_result.file_id, &doc.parse_result.source_map,
+            &doc.parse_result.file,
         )
     });
     Response::new_ok(id, serde_json::to_value(result).unwrap())
