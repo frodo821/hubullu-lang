@@ -1,3 +1,5 @@
+# @source main.hu
+
 # The cat walks.
 "The" cat walk[tense=present, person=3, number=sg] "."
 

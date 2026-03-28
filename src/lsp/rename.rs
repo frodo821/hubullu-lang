@@ -36,6 +36,7 @@ pub fn rename(
     new_name: &str,
     tokens: &[Token],
     phase1: &Phase1Result,
+    token_cache: &HashMap<FileId, Vec<Token>>,
 ) -> Option<WorkspaceEdit> {
     let tok = find_ident_at(tokens, file_id, offset)?;
     let old_name = match &tok.node {
@@ -43,27 +44,27 @@ pub fn rename(
         _ => return None,
     };
 
-    // Resolve the symbol to find its canonical definition.
     let scope = phase1.symbol_table.scope(file_id)?;
     let resolved = scope.resolve(&old_name);
     let def = resolved.first()?;
 
     let mut changes: HashMap<Uri, Vec<TextEdit>> = HashMap::new();
 
-    // Scan all files for occurrences.
+    // Scan all files using cached tokens.
     for (&fid, _) in &phase1.files {
+        let file_tokens = match token_cache.get(&fid) {
+            Some(t) => t,
+            None => continue,
+        };
+
         let file_uri = match convert::path_to_uri(phase1.source_map.path(fid)) {
             Some(u) => u,
             None => continue,
         };
 
-        let source = phase1.source_map.source(fid);
-        let lexer = crate::lexer::Lexer::new(source, fid);
-        let (file_tokens, _) = lexer.tokenize();
-
         let file_scope = phase1.symbol_table.scope(fid);
 
-        for ft in &file_tokens {
+        for ft in file_tokens {
             if let TokenKind::Ident(name) = &ft.node {
                 if name == &old_name || name == &def.name {
                     let is_match = if let Some(scope) = file_scope {
