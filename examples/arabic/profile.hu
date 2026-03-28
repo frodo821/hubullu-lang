@@ -99,7 +99,26 @@ inflection form_I_imperfect for {person, number, gender} {
 }
 
 # ---------------------------------------------------------------------------
-# Form I — dispatches by tense to perfect/imperfect
+# Form I Imperfect (yaf`alu pattern) — for fa`ala/yaf`alu verbs
+# ---------------------------------------------------------------------------
+
+inflection form_I_imperfect_a for {person, number, gender} {
+  requires stems: root[root_type=triliteral]
+
+  [person=3, number=sg, gender=masc] -> `ya{root.C1}{root.C2}a{root.C3}u`
+  [person=3, number=sg, gender=fem]  -> `ta{root.C1}{root.C2}a{root.C3}u`
+  [person=3, number=pl, gender=masc] -> `ya{root.C1}{root.C2}a{root.C3}uuna`
+  [person=3, number=pl, gender=fem]  -> `ya{root.C1}{root.C2}a{root.C3}na`
+  [person=2, number=sg, gender=masc] -> `ta{root.C1}{root.C2}a{root.C3}u`
+  [person=2, number=sg, gender=fem]  -> `ta{root.C1}{root.C2}a{root.C3}iina`
+  [person=2, number=pl, gender=masc] -> `ta{root.C1}{root.C2}a{root.C3}uuna`
+  [person=2, number=pl, gender=fem]  -> `ta{root.C1}{root.C2}a{root.C3}na`
+  [person=1, number=sg, _]           -> `a{root.C1}{root.C2}a{root.C3}u`
+  [person=1, number=pl, _]           -> `na{root.C1}{root.C2}a{root.C3}u`
+}
+
+# ---------------------------------------------------------------------------
+# Form I — dispatches by tense to perfect/imperfect (yaf`ulu)
 # ---------------------------------------------------------------------------
 
 inflection form_I for {tense, person, number, gender} {
@@ -107,4 +126,15 @@ inflection form_I for {tense, person, number, gender} {
 
   [tense=perfect, _]   -> form_I_perfect[person, number, gender] with stems { root: root }
   [tense=imperfect, _] -> form_I_imperfect[person, number, gender] with stems { root: root }
+}
+
+# ---------------------------------------------------------------------------
+# Form I-a — dispatches by tense to perfect/imperfect (yaf`alu)
+# ---------------------------------------------------------------------------
+
+inflection form_I_a for {tense, person, number, gender} {
+  requires stems: root[root_type=triliteral]
+
+  [tense=perfect, _]   -> form_I_perfect[person, number, gender] with stems { root: root }
+  [tense=imperfect, _] -> form_I_imperfect_a[person, number, gender] with stems { root: root }
 }

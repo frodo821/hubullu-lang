@@ -70,23 +70,41 @@ tagaxis case {
 # Phonological rules
 # ---------------------------------------------------------------------------
 
-# 2-way vowel harmony (e/a alternation for suffixes)
+# Vowel harmony (2-way for low vowels, 4-way for high vowels)
 phonrule harmony {
   class front = ["e", "i", "ö", "ü"]
   class back  = ["a", "ı", "o", "u"]
   class V = front | back
 
-  # Map front vowels to their back counterparts
-  map to_back = c -> match {
+  class high = ["i", "ı", "u", "ü"]
+  class low  = ["e", "a", "ö", "o"]
+
+  class back_unrounded = ["a", "ı"]
+  class back_rounded   = ["o", "u"]
+  class front_rounded  = ["ö", "ü"]
+
+  # --- Low vowels: 2-way (front → back) ---
+  map to_back_low = c -> match {
     "e" -> "a",
-    "i" -> "ı",
-    "ö" -> "o",
-    "ü" -> "u",
+    "ö" -> "a",
     else -> c
   }
+  low -> to_back_low / back !V* + !V* _
 
-  # A vowel becomes back when the preceding vowel (across boundaries) is back
-  V -> to_back / back !V* + !V* _
+  # --- High vowels: 4-way ---
+  map to_back_unrounded_high = c -> match {
+    "i" -> "ı", "ü" -> "ı", "u" -> "ı", else -> c
+  }
+  map to_back_rounded_high = c -> match {
+    "i" -> "u", "ı" -> "u", "ü" -> "u", else -> c
+  }
+  map to_front_rounded_high = c -> match {
+    "i" -> "ü", "ı" -> "ü", "u" -> "ü", else -> c
+  }
+
+  high -> to_back_unrounded_high / back_unrounded !V* + !V* _
+  high -> to_back_rounded_high / back_rounded !V* + !V* _
+  high -> to_front_rounded_high / front_rounded !V* + !V* _
 }
 
 # Vowel elision: drop suffix-initial vowel when stem ends in a vowel
@@ -110,7 +128,7 @@ inflection verb_conj for {tense, person, number, negation} {
 
   slot neg_sfx {
     [negation=pos, _]                    -> ``
-    [negation=neg, tense=present_cont]   -> `m`
+    [negation=neg, tense=present_cont]   -> `mi`
     [negation=neg, tense=past]           -> `me`
   }
 
