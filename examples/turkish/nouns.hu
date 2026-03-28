@@ -1,0 +1,21 @@
+@use * from "profile.hu"
+
+# Turkish Nouns
+
+# ev — house (front vowel)
+entry ev {
+  headword: "ev"
+  tags: [pos=noun]
+  stems { root: "ev" }
+  inflection_class: noun_front
+  meaning: "house"
+}
+
+# yol — road (back vowel)
+entry yol {
+  headword: "yol"
+  tags: [pos=noun]
+  stems { root: "yol" }
+  inflection_class: noun_back
+  meaning: "road, path"
+}

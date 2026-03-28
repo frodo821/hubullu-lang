@@ -1,0 +1,21 @@
+@use * from "profile.hu"
+
+# Dutch Nouns
+
+# het-woord: huis (house)
+entry huis {
+  headword: "huis"
+  tags: [pos=noun, gender=neuter]
+  stems { sg: "huis", pl: "huizen" }
+  inflection_class: noun_pl
+  meaning: "house"
+}
+
+# de-woord: kat (cat)
+entry kat {
+  headword: "kat"
+  tags: [pos=noun, gender=common]
+  stems { sg: "kat", pl: "katten" }
+  inflection_class: noun_pl
+  meaning: "cat"
+}

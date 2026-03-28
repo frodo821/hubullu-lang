@@ -1,0 +1,28 @@
+@use * from "profile.hu"
+
+# Turkish Verbs
+
+# gelmek — to come (front vowel)
+entry gelmek {
+  headword: "gelmek"
+  tags: [pos=verb]
+  stems { root: "gel" }
+  inflection_class: verb_conj
+  meaning: "to come"
+
+  examples {
+    example {
+      tokens: gelmek[tense=present_cont, person=1, number=sg, negation=pos] "."
+      translation: "I am coming."
+    }
+  }
+}
+
+# yazmak — to write (back vowel)
+entry yazmak {
+  headword: "yazmak"
+  tags: [pos=verb]
+  stems { root: "yaz" }
+  inflection_class: verb_conj
+  meaning: "to write"
+}

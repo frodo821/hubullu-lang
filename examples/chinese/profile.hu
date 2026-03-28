@@ -1,0 +1,37 @@
+# Chinese Profile
+
+tagaxis pos {
+  role: classificatory
+  display: { en: "Part of Speech", zh: "词性" }
+  index: exact
+}
+
+tagaxis register {
+  role: classificatory
+  display: { en: "Register", zh: "语域" }
+}
+
+tagaxis classifier_type {
+  role: classificatory
+  display: { en: "Classifier Type", zh: "量词类型" }
+}
+
+@extend pos_values for tagaxis pos {
+  verb       { display: { en: "Verb", zh: "动词" } }
+  noun       { display: { en: "Noun", zh: "名词" } }
+  adj        { display: { en: "Adjective", zh: "形容词" } }
+  classifier { display: { en: "Classifier", zh: "量词" } }
+  particle   { display: { en: "Particle", zh: "助词" } }
+}
+
+@extend register_values for tagaxis register {
+  formal     { display: { en: "Formal", zh: "正式" } }
+  colloquial { display: { en: "Colloquial", zh: "口语" } }
+  literary   { display: { en: "Literary", zh: "文言" } }
+}
+
+@extend classifier_type_values for tagaxis classifier_type {
+  general { display: { en: "General", zh: "通用" } }
+  flat    { display: { en: "Flat objects", zh: "扁平物" } }
+  long    { display: { en: "Long objects", zh: "长形物" } }
+}

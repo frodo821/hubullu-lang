@@ -1,0 +1,85 @@
+@use * from "profile.hu"
+
+# Chinese Words
+
+# chi — to eat
+entry chi {
+  headword {
+    default: "吃"
+    pinyin: "chī"
+  }
+  tags: [pos=verb, register=colloquial]
+  stems {}
+  meaning: "to eat"
+}
+
+# shu — book (polysemous)
+entry shu {
+  headword {
+    default: "书"
+    traditional: "書"
+    pinyin: "shū"
+  }
+  tags: [pos=noun]
+  stems {}
+
+  meanings {
+    reading_material { "book, written work" }
+    letter           { "letter, correspondence" }
+  }
+}
+
+# ben — classifier for books
+entry ben {
+  headword {
+    default: "本"
+    pinyin: "běn"
+  }
+  tags: [pos=classifier, classifier_type=general]
+  stems {}
+  meaning: "classifier for books and bound objects"
+}
+
+# da — big
+entry da {
+  headword {
+    default: "大"
+    pinyin: "dà"
+  }
+  tags: [pos=adj]
+  stems {}
+  meaning: "big, large, great"
+}
+
+# le — aspect particle (polysemous)
+entry le {
+  headword {
+    default: "了"
+    pinyin: "le"
+  }
+  tags: [pos=particle]
+  stems {}
+
+  meanings {
+    perfective { "perfective aspect marker (after verb)" }
+    change     { "change of state marker (sentence-final)" }
+  }
+}
+
+# hao — good
+entry hao {
+  headword {
+    default: "好"
+    pinyin: "hǎo"
+  }
+  tags: [pos=adj]
+  stems {}
+  meaning: "good, fine, well"
+
+  examples {
+    example {
+      tokens: "这" "是" "一" ben shu "。"
+      translation: "This is a book."
+    }
+  }
+}

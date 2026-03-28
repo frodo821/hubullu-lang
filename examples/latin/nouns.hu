@@ -1,0 +1,51 @@
+@use * from "profile.hu"
+
+# Latin Nouns and Adjectives
+
+# 1st declension: puella (girl)
+entry puella {
+  headword: "puella"
+  tags: [pos=noun, gender=fem]
+  stems { base: "puell" }
+  inflection_class: first_decl
+  meaning: "girl"
+
+  examples {
+    example {
+      tokens: puella[case=nom, number=sg] "cantat."
+      translation: "The girl sings."
+    }
+  }
+}
+
+# 2nd declension masculine: servus (slave)
+entry servus {
+  headword: "servus"
+  tags: [pos=noun, gender=masc]
+  stems { base: "serv" }
+  inflection_class: second_decl_masc
+  meaning: "slave, servant"
+}
+
+# 2nd declension neuter: bellum (war)
+entry bellum {
+  headword: "bellum"
+  tags: [pos=noun, gender=neut]
+  stems { base: "bell" }
+  inflection_class: second_decl_neut
+  meaning: "war"
+}
+
+# 1-2 declension adjective: bonus (good)
+entry bonus {
+  headword: "bonus"
+  tags: [pos=adj]
+  stems { base: "bon" }
+  inflection_class: adj_12
+  meaning: "good"
+
+  etymology {
+    proto: "*dw-eno-"
+    note: "From Old Latin duenos."
+  }
+}

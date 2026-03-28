@@ -1,0 +1,54 @@
+@use * from "profile.hu"
+
+# English Verbs
+
+# Regular verb: walk
+# The en_verb class gives base forms; forms_override adds 3sg -s.
+entry walk {
+  headword: "walk"
+  tags: [pos=verb]
+  stems { root: "walk", past: "walked" }
+  inflection_class: en_verb
+  meaning: "to walk"
+
+  forms_override {
+    [tense=present, person=3, number=sg] -> `walks`
+  }
+}
+
+# Irregular 3sg: go → goes (forms_override)
+entry go {
+  headword: "go"
+  tags: [pos=verb]
+  stems { root: "go", past: "went" }
+  inflection_class: en_verb
+  meaning: "to go"
+
+  forms_override {
+    [tense=present, person=3, number=sg] -> `goes`
+  }
+
+  etymology {
+    proto: "*ǵʰeh₁-"
+    note: "Suppletive past from Old English wendan."
+  }
+}
+
+# Fully suppletive: be (inline inflect)
+entry be {
+  headword: "be"
+  tags: [pos=verb]
+  stems {}
+  meaning: "to be"
+
+  inflect for {tense, person, number} {
+    [tense=present, person=1, number=sg] -> `am`
+    [tense=present, person=2, number=sg] -> `are`
+    [tense=present, person=3, number=sg] -> `is`
+    [tense=present, number=pl, _]        -> `are`
+    [tense=past, person=1, number=sg]    -> `was`
+    [tense=past, person=2, number=sg]    -> `were`
+    [tense=past, person=3, number=sg]    -> `was`
+    [tense=past, number=pl, _]           -> `were`
+  }
+}

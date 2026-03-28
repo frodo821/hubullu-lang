@@ -1,0 +1,5 @@
+# Dutch Dictionary
+
+@use * from "profile.hu"
+@reference * from "verbs.hu"
+@reference * from "nouns.hu"

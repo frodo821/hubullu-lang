@@ -1,0 +1,46 @@
+@use * from "profile.hu"
+
+# Latin Verbs
+
+# 1st conjugation: amare (to love)
+entry amare {
+  headword: "amare"
+  tags: [pos=verb]
+  stems { pres: "am" }
+  inflection_class: first_conj
+  meaning: "to love"
+
+  etymology {
+    proto: "*h₂em-"
+    note: "From Proto-Italic, related to amicus."
+  }
+}
+
+# Deponent verb: sequi (to follow) — passive forms only
+entry sequi {
+  headword: "sequi"
+  tags: [pos=verb]
+  stems {}
+  meaning: "to follow"
+
+  inflect for {tense, person, number} {
+    [tense=present, person=1, number=sg] -> `sequor`
+    [tense=present, person=2, number=sg] -> `sequeris`
+    [tense=present, person=3, number=sg] -> `sequitur`
+    [tense=present, person=1, number=pl] -> `sequimur`
+    [tense=present, person=2, number=pl] -> `sequimini`
+    [tense=present, person=3, number=pl] -> `sequuntur`
+    [tense=imperfect, person=1, number=sg] -> `sequebar`
+    [tense=imperfect, person=2, number=sg] -> `sequebaris`
+    [tense=imperfect, person=3, number=sg] -> `sequebatur`
+    [tense=imperfect, person=1, number=pl] -> `sequebamur`
+    [tense=imperfect, person=2, number=pl] -> `sequebamini`
+    [tense=imperfect, person=3, number=pl] -> `sequebantur`
+    [tense=future, person=1, number=sg] -> `sequar`
+    [tense=future, person=2, number=sg] -> `sequeris`
+    [tense=future, person=3, number=sg] -> `sequetur`
+    [tense=future, person=1, number=pl] -> `sequemur`
+    [tense=future, person=2, number=pl] -> `sequemini`
+    [tense=future, person=3, number=pl] -> `sequentur`
+  }
+}

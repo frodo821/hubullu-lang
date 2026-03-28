@@ -1,0 +1,82 @@
+# English Profile
+
+tagaxis pos {
+  role: classificatory
+  display: { en: "Part of Speech" }
+  index: exact
+}
+
+tagaxis tense {
+  role: inflectional
+  display: { en: "Tense" }
+}
+
+tagaxis number {
+  role: inflectional
+  display: { en: "Number" }
+}
+
+tagaxis person {
+  role: inflectional
+  display: { en: "Person" }
+}
+
+tagaxis degree {
+  role: inflectional
+  display: { en: "Degree" }
+}
+
+@extend pos_values for tagaxis pos {
+  verb { display: { en: "Verb" } }
+  noun { display: { en: "Noun" } }
+  adj  { display: { en: "Adjective" } }
+}
+
+@extend tense_values for tagaxis tense {
+  present { display: { en: "Present" } }
+  past    { display: { en: "Past" } }
+}
+
+@extend number_values for tagaxis number {
+  sg { display: { en: "Singular" } }
+  pl { display: { en: "Plural" } }
+}
+
+@extend person_values for tagaxis person {
+  1 { display: { en: "1st" } }
+  2 { display: { en: "2nd" } }
+  3 { display: { en: "3rd" } }
+}
+
+@extend degree_values for tagaxis degree {
+  positive    { display: { en: "Positive" } }
+  comparative { display: { en: "Comparative" } }
+  superlative { display: { en: "Superlative" } }
+}
+
+# English verb conjugation (base forms only).
+# The class uses low-specificity wildcards so that entries
+# can override individual cells via forms_override.
+inflection en_verb for {tense, person, number} {
+  requires stems: root, past
+
+  [tense=present, _] -> `{root}`
+  [tense=past, _]    -> `{past}`
+}
+
+# Regular noun plural
+inflection regular_noun for {number} {
+  requires stems: sg, pl
+
+  [number=sg] -> `{sg}`
+  [number=pl] -> `{pl}`
+}
+
+# Regular adjective comparison
+inflection regular_adj for {degree} {
+  requires stems: root
+
+  [degree=positive]    -> `{root}`
+  [degree=comparative] -> `{root}er`
+  [degree=superlative] -> `{root}est`
+}

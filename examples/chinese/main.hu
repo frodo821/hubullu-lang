@@ -1,0 +1,4 @@
+# Chinese Dictionary
+
+@use * from "profile.hu"
+@reference * from "words.hu"

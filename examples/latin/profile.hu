@@ -1,0 +1,192 @@
+# Latin Profile
+
+tagaxis pos {
+  role: classificatory
+  display: { en: "Part of Speech" }
+  index: exact
+}
+
+tagaxis case {
+  role: inflectional
+  display: { en: "Case" }
+}
+
+tagaxis number {
+  role: inflectional
+  display: { en: "Number" }
+}
+
+tagaxis gender {
+  role: inflectional
+  display: { en: "Gender" }
+}
+
+tagaxis tense {
+  role: inflectional
+  display: { en: "Tense" }
+}
+
+tagaxis person {
+  role: inflectional
+  display: { en: "Person" }
+}
+
+tagaxis voice {
+  role: inflectional
+  display: { en: "Voice" }
+}
+
+@extend pos_values for tagaxis pos {
+  verb { display: { en: "Verb" } }
+  noun { display: { en: "Noun" } }
+  adj  { display: { en: "Adjective" } }
+}
+
+@extend case_values for tagaxis case {
+  nom { display: { en: "Nominative" } }
+  gen { display: { en: "Genitive" } }
+  dat { display: { en: "Dative" } }
+  acc { display: { en: "Accusative" } }
+  abl { display: { en: "Ablative" } }
+}
+
+@extend number_values for tagaxis number {
+  sg { display: { en: "Singular" } }
+  pl { display: { en: "Plural" } }
+}
+
+@extend gender_values for tagaxis gender {
+  masc { display: { en: "Masculine" } }
+  fem  { display: { en: "Feminine" } }
+  neut { display: { en: "Neuter" } }
+}
+
+@extend tense_values for tagaxis tense {
+  present   { display: { en: "Present" } }
+  imperfect { display: { en: "Imperfect" } }
+  future    { display: { en: "Future" } }
+}
+
+@extend person_values for tagaxis person {
+  1 { display: { en: "1st" } }
+  2 { display: { en: "2nd" } }
+  3 { display: { en: "3rd" } }
+}
+
+@extend voice_values for tagaxis voice {
+  active  { display: { en: "Active" } }
+  passive { display: { en: "Passive" } }
+}
+
+# 1st declension (puella-type, feminine)
+inflection first_decl for {case, number} {
+  requires stems: base
+
+  [case=nom, number=sg] -> `{base}a`
+  [case=gen, number=sg] -> `{base}ae`
+  [case=dat, number=sg] -> `{base}ae`
+  [case=acc, number=sg] -> `{base}am`
+  [case=abl, number=sg] -> `{base}a`
+  [case=nom, number=pl] -> `{base}ae`
+  [case=gen, number=pl] -> `{base}arum`
+  [case=dat, number=pl] -> `{base}is`
+  [case=acc, number=pl] -> `{base}as`
+  [case=abl, number=pl] -> `{base}is`
+}
+
+# 2nd declension masculine (servus-type)
+inflection second_decl_masc for {case, number} {
+  requires stems: base
+
+  [case=nom, number=sg] -> `{base}us`
+  [case=gen, number=sg] -> `{base}i`
+  [case=dat, number=sg] -> `{base}o`
+  [case=acc, number=sg] -> `{base}um`
+  [case=abl, number=sg] -> `{base}o`
+  [case=nom, number=pl] -> `{base}i`
+  [case=gen, number=pl] -> `{base}orum`
+  [case=dat, number=pl] -> `{base}is`
+  [case=acc, number=pl] -> `{base}os`
+  [case=abl, number=pl] -> `{base}is`
+}
+
+# 2nd declension neuter (bellum-type)
+inflection second_decl_neut for {case, number} {
+  requires stems: base
+
+  [case=nom, number=sg] -> `{base}um`
+  [case=gen, number=sg] -> `{base}i`
+  [case=dat, number=sg] -> `{base}o`
+  [case=acc, number=sg] -> `{base}um`
+  [case=abl, number=sg] -> `{base}o`
+  [case=nom, number=pl] -> `{base}a`
+  [case=gen, number=pl] -> `{base}orum`
+  [case=dat, number=pl] -> `{base}is`
+  [case=acc, number=pl] -> `{base}a`
+  [case=abl, number=pl] -> `{base}is`
+}
+
+# 1st conjugation: delegates by voice
+inflection first_conj for {tense, person, number, voice} {
+  requires stems: pres
+
+  [voice=active, _]  -> first_conj_active[tense, person, number] with stems { pres: pres }
+  [voice=passive, _] -> first_conj_passive[tense, person, number] with stems { pres: pres }
+}
+
+# 1st conjugation active
+inflection first_conj_active for {tense, person, number} {
+  requires stems: pres
+
+  [tense=present, person=1, number=sg] -> `{pres}o`
+  [tense=present, person=2, number=sg] -> `{pres}as`
+  [tense=present, person=3, number=sg] -> `{pres}at`
+  [tense=present, person=1, number=pl] -> `{pres}amus`
+  [tense=present, person=2, number=pl] -> `{pres}atis`
+  [tense=present, person=3, number=pl] -> `{pres}ant`
+  [tense=imperfect, person=1, number=sg] -> `{pres}abam`
+  [tense=imperfect, person=2, number=sg] -> `{pres}abas`
+  [tense=imperfect, person=3, number=sg] -> `{pres}abat`
+  [tense=imperfect, person=1, number=pl] -> `{pres}abamus`
+  [tense=imperfect, person=2, number=pl] -> `{pres}abatis`
+  [tense=imperfect, person=3, number=pl] -> `{pres}abant`
+  [tense=future, person=1, number=sg] -> `{pres}abo`
+  [tense=future, person=2, number=sg] -> `{pres}abis`
+  [tense=future, person=3, number=sg] -> `{pres}abit`
+  [tense=future, person=1, number=pl] -> `{pres}abimus`
+  [tense=future, person=2, number=pl] -> `{pres}abitis`
+  [tense=future, person=3, number=pl] -> `{pres}abunt`
+}
+
+# 1st conjugation passive
+inflection first_conj_passive for {tense, person, number} {
+  requires stems: pres
+
+  [tense=present, person=1, number=sg] -> `{pres}or`
+  [tense=present, person=2, number=sg] -> `{pres}aris`
+  [tense=present, person=3, number=sg] -> `{pres}atur`
+  [tense=present, person=1, number=pl] -> `{pres}amur`
+  [tense=present, person=2, number=pl] -> `{pres}amini`
+  [tense=present, person=3, number=pl] -> `{pres}antur`
+  [tense=imperfect, person=1, number=sg] -> `{pres}abar`
+  [tense=imperfect, person=2, number=sg] -> `{pres}abaris`
+  [tense=imperfect, person=3, number=sg] -> `{pres}abatur`
+  [tense=imperfect, person=1, number=pl] -> `{pres}abamur`
+  [tense=imperfect, person=2, number=pl] -> `{pres}abamini`
+  [tense=imperfect, person=3, number=pl] -> `{pres}abantur`
+  [tense=future, person=1, number=sg] -> `{pres}abor`
+  [tense=future, person=2, number=sg] -> `{pres}aberis`
+  [tense=future, person=3, number=sg] -> `{pres}abitur`
+  [tense=future, person=1, number=pl] -> `{pres}abimur`
+  [tense=future, person=2, number=pl] -> `{pres}abimini`
+  [tense=future, person=3, number=pl] -> `{pres}abuntur`
+}
+
+# 1-2 declension adjective: delegates by gender
+inflection adj_12 for {case, number, gender} {
+  requires stems: base
+
+  [gender=masc, _] -> second_decl_masc[case, number] with stems { base: base }
+  [gender=fem, _]  -> first_decl[case, number] with stems { base: base }
+  [gender=neut, _] -> second_decl_neut[case, number] with stems { base: base }
+}

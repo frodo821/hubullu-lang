@@ -1,0 +1,121 @@
+# Dutch Profile
+
+tagaxis pos {
+  role: classificatory
+  display: { en: "Part of Speech" }
+  index: exact
+}
+
+tagaxis tense {
+  role: inflectional
+  display: { en: "Tense" }
+}
+
+tagaxis number {
+  role: inflectional
+  display: { en: "Number" }
+}
+
+tagaxis person {
+  role: inflectional
+  display: { en: "Person" }
+}
+
+tagaxis gender {
+  role: classificatory
+  display: { en: "Gender" }
+}
+
+tagaxis separability {
+  role: inflectional
+  display: { en: "Separability" }
+}
+
+@extend pos_values for tagaxis pos {
+  verb { display: { en: "Verb" } }
+  noun { display: { en: "Noun" } }
+}
+
+@extend tense_values for tagaxis tense {
+  present { display: { en: "Present" } }
+  past { display: { en: "Past" } }
+}
+
+@extend number_values for tagaxis number {
+  sg { display: { en: "Singular" } }
+  pl { display: { en: "Plural" } }
+}
+
+@extend person_values for tagaxis person {
+  1 { display: { en: "1st" } }
+  2 { display: { en: "2nd" } }
+  3 { display: { en: "3rd" } }
+}
+
+@extend gender_values for tagaxis gender {
+  common { display: { en: "Common (de)" } }
+  neuter { display: { en: "Neuter (het)" } }
+}
+
+@extend sep_values for tagaxis separability {
+  joined { display: { en: "Joined" } }
+  separated { display: { en: "Separated" } }
+}
+
+# Weak verb conjugation
+inflection weak_verb for {tense, person, number} {
+  requires stems: root, past_root
+
+  [tense=present, person=1, number=sg] -> `{root}`
+  [tense=present, person=2, number=sg] -> `{root}t`
+  [tense=present, person=3, number=sg] -> `{root}t`
+  [tense=present, number=pl, _]        -> `{root}en`
+  [tense=past, person=1, number=sg]    -> `{past_root}e`
+  [tense=past, person=2, number=sg]    -> `{past_root}e`
+  [tense=past, person=3, number=sg]    -> `{past_root}e`
+  [tense=past, number=pl, _]           -> `{past_root}en`
+}
+
+# Strong verb conjugation
+inflection strong_verb for {tense, person, number} {
+  requires stems: pres, past_sg, past_pl
+
+  [tense=present, person=1, number=sg] -> `{pres}`
+  [tense=present, person=2, number=sg] -> `{pres}t`
+  [tense=present, person=3, number=sg] -> `{pres}t`
+  [tense=present, number=pl, _]        -> `{pres}en`
+  [tense=past, person=1, number=sg]    -> `{past_sg}`
+  [tense=past, person=2, number=sg]    -> `{past_sg}`
+  [tense=past, person=3, number=sg]    -> `{past_sg}`
+  [tense=past, number=pl, _]           -> `{past_pl}en`
+}
+
+# Separable weak verb -- joined and separated forms
+inflection separable_weak for {tense, person, number, separability} {
+  requires stems: root, past_root, prefix
+
+  [separability=joined, tense=present, person=1, number=sg]  -> `{prefix}{root}`
+  [separability=joined, tense=present, person=2, number=sg]  -> `{prefix}{root}t`
+  [separability=joined, tense=present, person=3, number=sg]  -> `{prefix}{root}t`
+  [separability=joined, tense=present, number=pl, _]         -> `{prefix}{root}en`
+  [separability=joined, tense=past, person=1, number=sg]     -> `{prefix}{past_root}e`
+  [separability=joined, tense=past, person=2, number=sg]     -> `{prefix}{past_root}e`
+  [separability=joined, tense=past, person=3, number=sg]     -> `{prefix}{past_root}e`
+  [separability=joined, tense=past, number=pl, _]            -> `{prefix}{past_root}en`
+  [separability=separated, tense=present, person=1, number=sg] -> `{root}`
+  [separability=separated, tense=present, person=2, number=sg] -> `{root}t`
+  [separability=separated, tense=present, person=3, number=sg] -> `{root}t`
+  [separability=separated, tense=present, number=pl, _]        -> `{root}en`
+  [separability=separated, tense=past, person=1, number=sg]    -> `{past_root}e`
+  [separability=separated, tense=past, person=2, number=sg]    -> `{past_root}e`
+  [separability=separated, tense=past, person=3, number=sg]    -> `{past_root}e`
+  [separability=separated, tense=past, number=pl, _]           -> `{past_root}en`
+}
+
+# Noun plural
+inflection noun_pl for {number} {
+  requires stems: sg, pl
+
+  [number=sg] -> `{sg}`
+  [number=pl] -> `{pl}`
+}

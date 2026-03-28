@@ -1,0 +1,48 @@
+@use * from "profile.hu"
+
+# English Nouns and Adjectives
+
+# Regular noun: cat
+entry cat {
+  headword: "cat"
+  tags: [pos=noun]
+  stems { sg: "cat", pl: "cats" }
+  inflection_class: regular_noun
+  meaning: "cat"
+}
+
+# Irregular noun: child/children (inline inflect)
+entry child {
+  headword: "child"
+  tags: [pos=noun]
+  stems {}
+  meaning: "child"
+
+  inflect for {number} {
+    [number=sg] -> `child`
+    [number=pl] -> `children`
+  }
+}
+
+# Suppletive adjective: good/better/best
+entry good {
+  headword: "good"
+  tags: [pos=adj]
+  stems {}
+  meaning: "good"
+
+  inflect for {degree} {
+    [degree=positive]    -> `good`
+    [degree=comparative] -> `better`
+    [degree=superlative] -> `best`
+  }
+}
+
+# Regular adjective: tall
+entry tall {
+  headword: "tall"
+  tags: [pos=adj]
+  stems { root: "tall" }
+  inflection_class: regular_adj
+  meaning: "tall, of great height"
+}

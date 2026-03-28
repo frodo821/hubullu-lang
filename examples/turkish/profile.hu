@@ -1,0 +1,142 @@
+# Turkish Profile
+
+tagaxis pos {
+  role: classificatory
+  display: { en: "Part of Speech" }
+  index: exact
+}
+
+tagaxis tense {
+  role: inflectional
+  display: { en: "Tense" }
+}
+
+tagaxis person {
+  role: inflectional
+  display: { en: "Person" }
+}
+
+tagaxis number {
+  role: inflectional
+  display: { en: "Number" }
+}
+
+tagaxis negation {
+  role: inflectional
+  display: { en: "Negation" }
+}
+
+tagaxis case {
+  role: inflectional
+  display: { en: "Case" }
+}
+
+@extend pos_values for tagaxis pos {
+  verb { display: { en: "Verb" } }
+  noun { display: { en: "Noun" } }
+}
+
+@extend tense_values for tagaxis tense {
+  present_cont { display: { en: "Present Continuous" } }
+  past         { display: { en: "Past" } }
+}
+
+@extend person_values for tagaxis person {
+  1 { display: { en: "1st" } }
+  2 { display: { en: "2nd" } }
+  3 { display: { en: "3rd" } }
+}
+
+@extend number_values for tagaxis number {
+  sg { display: { en: "Singular" } }
+  pl { display: { en: "Plural" } }
+}
+
+@extend negation_values for tagaxis negation {
+  pos { display: { en: "Positive" } }
+  neg { display: { en: "Negative" } }
+}
+
+@extend case_values for tagaxis case {
+  nom { display: { en: "Nominative" } }
+  acc { display: { en: "Accusative" } }
+  dat { display: { en: "Dative" } }
+  gen { display: { en: "Genitive" } }
+  loc { display: { en: "Locative" } }
+  abl { display: { en: "Ablative" } }
+}
+
+# Verb conjugation with compose (present continuous + past)
+inflection verb_conj for {tense, person, number, negation} {
+  requires stems: root
+
+  compose root + neg_sfx + tense_sfx + pn_sfx
+
+  slot neg_sfx {
+    [negation=pos, _]                    -> ``
+    [negation=neg, tense=present_cont]   -> `m`
+    [negation=neg, tense=past]           -> `me`
+  }
+
+  slot tense_sfx {
+    [tense=present_cont, _] -> `iyor`
+    [tense=past, _]         -> `di`
+  }
+
+  slot pn_sfx {
+    [tense=present_cont, person=1, number=sg] -> `um`
+    [tense=present_cont, person=2, number=sg] -> `sun`
+    [tense=present_cont, person=3, number=sg] -> ``
+    [tense=present_cont, person=1, number=pl] -> `uz`
+    [tense=present_cont, person=2, number=pl] -> `sunuz`
+    [tense=present_cont, person=3, number=pl] -> `lar`
+    [tense=past, person=1, number=sg]         -> `m`
+    [tense=past, person=2, number=sg]         -> `n`
+    [tense=past, person=3, number=sg]         -> ``
+    [tense=past, person=1, number=pl]         -> `k`
+    [tense=past, person=2, number=pl]         -> `niz`
+    [tense=past, person=3, number=pl]         -> `ler`
+  }
+}
+
+# Noun declension — front vowel harmony (e-type)
+inflection noun_front for {number, case} {
+  requires stems: root
+
+  compose root + plural_sfx + case_sfx
+
+  slot plural_sfx {
+    [number=sg, _] -> ``
+    [number=pl, _] -> `ler`
+  }
+
+  slot case_sfx {
+    [case=nom, _] -> ``
+    [case=acc, _] -> `i`
+    [case=dat, _] -> `e`
+    [case=gen, _] -> `in`
+    [case=loc, _] -> `de`
+    [case=abl, _] -> `den`
+  }
+}
+
+# Noun declension — back vowel harmony (a-type)
+inflection noun_back for {number, case} {
+  requires stems: root
+
+  compose root + plural_sfx + case_sfx
+
+  slot plural_sfx {
+    [number=sg, _] -> ``
+    [number=pl, _] -> `lar`
+  }
+
+  slot case_sfx {
+    [case=nom, _] -> ``
+    [case=acc, _] -> `ı`
+    [case=dat, _] -> `a`
+    [case=gen, _] -> `ın`
+    [case=loc, _] -> `da`
+    [case=abl, _] -> `dan`
+  }
+}

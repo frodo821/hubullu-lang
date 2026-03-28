@@ -1,0 +1,61 @@
+@use * from "profile.hu"
+
+# Dutch Verbs
+
+# Weak verb: werken (to work)
+entry werken {
+  headword: "werken"
+  tags: [pos=verb]
+  stems { root: "werk", past_root: "werkt" }
+  inflection_class: weak_verb
+  meaning: "to work"
+}
+
+# Strong verb: rijden (to drive)
+entry rijden {
+  headword: "rijden"
+  tags: [pos=verb]
+  stems { pres: "rijd", past_sg: "reed", past_pl: "red" }
+  inflection_class: strong_verb
+  meaning: "to drive"
+
+  etymology {
+    proto: "*rīdaną"
+    note: "Strong verb with ablaut: ij/ee/e."
+  }
+}
+
+# Separable weak verb: opbellen (to phone)
+entry opbellen {
+  headword: "opbellen"
+  tags: [pos=verb]
+  stems { root: "bel", past_root: "beld", prefix: "op" }
+  inflection_class: separable_weak
+  meaning: "to call, to phone"
+
+  examples {
+    example {
+      tokens: "Ik" opbellen[tense=present, person=1, number=sg, separability=separated] "je" "op."
+      translation: "I call you up."
+    }
+  }
+}
+
+# Suppletive: zijn (to be)
+entry zijn {
+  headword: "zijn"
+  tags: [pos=verb]
+  stems {}
+  meaning: "to be"
+
+  inflect for {tense, person, number} {
+    [tense=present, person=1, number=sg] -> `ben`
+    [tense=present, person=2, number=sg] -> `bent`
+    [tense=present, person=3, number=sg] -> `is`
+    [tense=present, number=pl, _]        -> `zijn`
+    [tense=past, person=1, number=sg]    -> `was`
+    [tense=past, person=2, number=sg]    -> `was`
+    [tense=past, person=3, number=sg]    -> `was`
+    [tense=past, number=pl, _]           -> `waren`
+  }
+}
