@@ -57,7 +57,12 @@ pub fn run_server() {
 
     main_loop(&connection, init_params);
 
-    io_threads.join().unwrap();
+    // After handle_shutdown returns true and main_loop exits, the client
+    // will send an `exit` notification. io_threads.join() blocks until
+    // the stdin reader receives it, but the reader can hang if the client
+    // closes the pipe before sending exit. Exit the process directly to
+    // avoid zombie server processes.
+    std::process::exit(0);
 }
 
 fn server_capabilities() -> ServerCapabilities {
