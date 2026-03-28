@@ -33,6 +33,11 @@ entry opbellen {
   inflection_class: separable_weak
   meaning: "to call, to phone"
 
+  forms_override {
+    [separability=joined, tense=present, number=pl, _]    -> `opbellen`
+    [separability=separated, tense=present, number=pl, _] -> `bellen`
+  }
+
   examples {
     example {
       tokens: "Ik" opbellen[tense=present, person=1, number=sg, separability=separated] "je" "op."

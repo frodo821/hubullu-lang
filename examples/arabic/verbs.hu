@@ -20,6 +20,6 @@ entry fataha {
   headword: "fataha"
   tags: [pos=verb, root_type=triliteral]
   stems { root: "fth" }
-  inflection_class: form_I
+  inflection_class: form_I_a
   meaning: "to open"
 }
