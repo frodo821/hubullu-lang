@@ -6,21 +6,24 @@
 use std::path::{Path, PathBuf};
 
 /// Opaque file identifier for multi-file span resolution.
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FileId(pub u32);
 
 /// Maps FileId → source text and file path.
-#[derive(Debug, Default)]
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Default, Clone)]
 pub struct SourceMap {
     files: Vec<SourceFile>,
 }
 
-#[derive(Debug)]
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone)]
 struct SourceFile {
-    path: PathBuf,
-    source: String,
+    pub(crate) path: PathBuf,
+    pub(crate) source: String,
     /// Byte offset of each line start (for line/col calculation).
-    line_starts: Vec<usize>,
+    pub(crate) line_starts: Vec<usize>,
 }
 
 impl SourceMap {

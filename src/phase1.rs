@@ -15,6 +15,8 @@ use crate::span::{FileId, SourceMap};
 use crate::symbol_table::{ImportedSymbol, SymbolKind, SymbolTable};
 
 /// Result of phase 1: all files parsed, symbols registered.
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone)]
 pub struct Phase1Result {
     pub files: HashMap<FileId, File>,
     pub source_map: SourceMap,

@@ -4,6 +4,7 @@ use crate::ast::Span;
 use crate::span::SourceMap;
 
 /// Severity level of a diagnostic.
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
     Error,
@@ -11,6 +12,7 @@ pub enum Severity {
 }
 
 /// A label pointing to a span in the source with a message.
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone)]
 pub struct Label {
     pub span: Span,
@@ -18,6 +20,7 @@ pub struct Label {
 }
 
 /// A single diagnostic (error or warning) with optional source labels.
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone)]
 pub struct Diagnostic {
     pub severity: Severity,
@@ -85,7 +88,8 @@ impl Diagnostic {
 }
 
 /// Collect diagnostics during compilation.
-#[derive(Debug, Default)]
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Default, Clone)]
 pub struct Diagnostics {
     pub errors: Vec<Diagnostic>,
 }

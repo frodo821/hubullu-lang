@@ -18,6 +18,7 @@ use crate::span::FileId;
 use crate::symbol_table::SymbolKind;
 
 /// Resolved extend: axis name → list of values.
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Default, Clone)]
 pub struct ResolvedAxis {
     pub values: Vec<String>,
@@ -27,6 +28,7 @@ pub struct ResolvedAxis {
 }
 
 /// Resolved render configuration.
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone)]
 pub struct ResolvedRenderConfig {
     pub separator: String,
@@ -43,6 +45,8 @@ impl Default for ResolvedRenderConfig {
 }
 
 /// Result of phase 2.
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone)]
 pub struct Phase2Result {
     /// All resolved axis values.
     pub axes: HashMap<String, ResolvedAxis>,
@@ -53,7 +57,8 @@ pub struct Phase2Result {
     pub diagnostics: Diagnostics,
 }
 
-#[derive(Debug)]
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone)]
 pub struct ResolvedEntry {
     pub entry_id: String,
     pub headword: String,
@@ -65,13 +70,15 @@ pub struct ResolvedEntry {
     pub links: Vec<ResolvedLink>,
 }
 
-#[derive(Debug)]
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone)]
 pub struct ResolvedForm {
     pub form_str: String,
     pub tags: Vec<(String, String)>,
 }
 
-#[derive(Debug)]
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone)]
 pub struct ResolvedLink {
     pub dst_entry_id: String,
     pub link_type: String,

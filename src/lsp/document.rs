@@ -22,10 +22,29 @@ pub struct DocumentStore {
     documents: HashMap<String, DocumentState>,
 }
 
+/// Build a parse result for a document.
+/// `.hut` files are not parsed as `.hu` source — they get an empty result.
+fn build_parse_result(uri: &Uri, text: &str) -> ParseResult {
+    if super::is_hut_uri(uri) {
+        let filename = convert::uri_to_filename(uri);
+        let mut source_map = crate::span::SourceMap::new();
+        let file_id = source_map.add_file(filename.into(), text.to_string());
+        ParseResult {
+            file: crate::ast::File { items: Vec::new() },
+            tokens: Vec::new(),
+            diagnostics: Vec::new(),
+            source_map,
+            file_id,
+        }
+    } else {
+        let filename = convert::uri_to_filename(uri);
+        crate::parse_source(text, &filename)
+    }
+}
+
 impl DocumentStore {
     pub fn open(&mut self, uri: &Uri, text: String, version: i32) {
-        let filename = convert::uri_to_filename(uri);
-        let parse_result = crate::parse_source(&text, &filename);
+        let parse_result = build_parse_result(uri, &text);
         self.documents.insert(uri.as_str().to_string(), DocumentState {
             text,
             version,
@@ -34,8 +53,7 @@ impl DocumentStore {
     }
 
     pub fn change(&mut self, uri: &Uri, text: String, version: i32) {
-        let filename = convert::uri_to_filename(uri);
-        let parse_result = crate::parse_source(&text, &filename);
+        let parse_result = build_parse_result(uri, &text);
         let key = uri.as_str().to_string();
         if let Some(doc) = self.documents.get_mut(&key) {
             doc.text = text;

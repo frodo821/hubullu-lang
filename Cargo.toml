@@ -10,7 +10,8 @@ rust-version = "1.70"
 default = ["sqlite", "cli"]
 sqlite = ["dep:rusqlite"]
 cli = ["dep:clap", "sqlite", "lsp"]
-lsp = ["dep:lsp-server", "dep:lsp-types", "dep:serde_json", "dep:serde"]
+serialization = ["dep:serde"]
+lsp = ["dep:lsp-server", "dep:lsp-types", "dep:serde_json", "serialization"]
 
 [dependencies]
 rusqlite = { version = "0.31", features = ["bundled"], optional = true }

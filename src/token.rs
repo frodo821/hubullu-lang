@@ -3,6 +3,7 @@
 use crate::ast::{Span, Spanned};
 
 /// The kind of a lexical token.
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokenKind {
     // Identifiers & literals
@@ -43,6 +44,7 @@ pub enum TokenKind {
 }
 
 /// A segment of a template literal.
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TemplateSeg {
     /// Literal text between interpolations.

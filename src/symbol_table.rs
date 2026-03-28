@@ -11,6 +11,7 @@ use crate::error::Diagnostic;
 use crate::span::FileId;
 
 /// Kind of symbol in the symbol table.
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SymbolKind {
     TagAxis,
@@ -21,6 +22,7 @@ pub enum SymbolKind {
 }
 
 /// A registered symbol.
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone)]
 pub struct Symbol {
     pub name: String,
@@ -32,6 +34,7 @@ pub struct Symbol {
 }
 
 /// Imported symbol with optional alias and namespace.
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone)]
 pub struct ImportedSymbol {
     pub original_name: String,
@@ -44,7 +47,8 @@ pub struct ImportedSymbol {
 }
 
 /// Per-file scope for name resolution.
-#[derive(Debug, Default)]
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Default, Clone)]
 pub struct Scope {
     /// Symbols defined locally in this file.
     pub locals: HashMap<String, Symbol>,
@@ -109,6 +113,7 @@ impl Scope {
     }
 }
 
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone)]
 pub struct ResolvedSymbol {
     pub name: String,
@@ -119,7 +124,8 @@ pub struct ResolvedSymbol {
 }
 
 /// Global symbol table spanning all files.
-#[derive(Debug, Default)]
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Default, Clone)]
 pub struct SymbolTable {
     pub scopes: HashMap<FileId, Scope>,
 }

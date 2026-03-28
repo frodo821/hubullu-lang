@@ -7,6 +7,7 @@ mod completion;
 mod convert;
 mod definition;
 mod diagnostics;
+mod disk_cache;
 mod document;
 mod document_link;
 mod folding;
@@ -592,8 +593,20 @@ fn try_analyze_project(root: &PathBuf) -> Option<ProjectState> {
 }
 
 /// Build a complete ProjectState from an entry file path.
-/// Runs phase1 (+ phase2 if no errors), caches tokens, builds URI map.
+/// Tries disk cache first; if stale or missing, runs full analysis and saves.
 fn build_project_state(entry_path: &std::path::Path) -> Option<ProjectState> {
+    // Try disk cache first.
+    if let Some(cached) = disk_cache::load(entry_path) {
+        let url_to_file_id = build_url_map(&cached.phase1.source_map);
+        return Some(ProjectState {
+            phase1: cached.phase1,
+            phase2: cached.phase2,
+            token_cache: cached.token_cache,
+            url_to_file_id,
+        });
+    }
+
+    // Cache miss — run full analysis.
     let phase1 = crate::phase1::run_phase1(entry_path);
 
     let phase2 = if !phase1.diagnostics.has_errors() {
@@ -611,15 +624,22 @@ fn build_project_state(entry_path: &std::path::Path) -> Option<ProjectState> {
         token_cache.insert(fid, tokens);
     }
 
-    let mut url_to_file_id = std::collections::HashMap::new();
-    for fid in phase1.source_map.file_ids() {
-        let path = phase1.source_map.path(fid);
+    // Save to disk cache for next startup.
+    disk_cache::save(entry_path, &phase1, phase2.as_ref(), &token_cache);
+
+    let url_to_file_id = build_url_map(&phase1.source_map);
+    Some(ProjectState { phase1, phase2, token_cache, url_to_file_id })
+}
+
+fn build_url_map(source_map: &crate::span::SourceMap) -> std::collections::HashMap<String, FileId> {
+    let mut map = std::collections::HashMap::new();
+    for fid in source_map.file_ids() {
+        let path = source_map.path(fid);
         if let Some(uri) = convert::path_to_uri(path) {
-            url_to_file_id.insert(uri.as_str().to_string(), fid);
+            map.insert(uri.as_str().to_string(), fid);
         }
     }
-
-    Some(ProjectState { phase1, phase2, token_cache, url_to_file_id })
+    map
 }
 
 fn find_entry_file(root: &PathBuf) -> Option<PathBuf> {
@@ -645,7 +665,7 @@ fn find_file_id(uri: &Uri, project: &ProjectState) -> Option<FileId> {
     project.url_to_file_id.get(uri.as_str()).copied()
 }
 
-fn is_hut_uri(uri: &Uri) -> bool {
+pub(super) fn is_hut_uri(uri: &Uri) -> bool {
     uri.as_str().ends_with(".hut")
 }
 
