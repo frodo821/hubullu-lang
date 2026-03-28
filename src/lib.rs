@@ -37,6 +37,8 @@ pub mod inflection_eval;
 pub mod lexer;
 /// Recursive descent parser — tokens to [`ast::File`].
 pub mod parser;
+/// Phonological rule evaluation engine.
+pub mod phonrule_eval;
 /// Phase 1: file loading, `@use`/`@reference` resolution, symbol registration.
 pub mod phase1;
 /// Phase 2: `@extend` resolution, inflection validation, entry expansion.

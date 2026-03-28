@@ -138,7 +138,7 @@ impl Parser {
             match self.peek() {
                 TokenKind::Eof => break,
                 TokenKind::AtUse | TokenKind::AtReference | TokenKind::AtExtend => break,
-                TokenKind::Ident(s) if matches!(s.as_str(), "tagaxis" | "inflection" | "entry") => {
+                TokenKind::Ident(s) if matches!(s.as_str(), "tagaxis" | "inflection" | "entry" | "phonrule") => {
                     break
                 }
                 _ => {
@@ -178,6 +178,10 @@ impl Parser {
             TokenKind::Ident(s) if s == "entry" => {
                 self.advance();
                 Item::Entry(self.parse_entry()?)
+            }
+            TokenKind::Ident(s) if s == "phonrule" => {
+                self.advance();
+                Item::PhonRule(self.parse_phonrule()?)
             }
             _ => {
                 return Err(self.error(format!(
@@ -493,11 +497,15 @@ impl Parser {
                     depth -= 1;
                     if depth == 0 {
                         // Check what follows ]
+                        // A stem constraint is followed by `,` (more stems),
+                        // an ident (next stem), `[` (first rule), `}` (end of block),
+                        // `compose` keyword, or EOF.
                         let next = i + 1;
                         if next < self.tokens.len() {
                             return matches!(
                                 &self.tokens[next].node,
                                 TokenKind::Comma | TokenKind::Eof
+                                    | TokenKind::LBracket | TokenKind::RBrace
                             ) || matches!(&self.tokens[next].node, TokenKind::Ident(_));
                         }
                         return true;
@@ -610,14 +618,34 @@ impl Parser {
                 Ok(RuleRhs::Null)
             }
             TokenKind::Ident(_) => {
-                // Delegation
-                Ok(RuleRhs::Delegate(self.parse_delegate()?))
+                // Look ahead: Ident + '(' = PhonApply, Ident + '[' = Delegate
+                if self.is_next_lparen() {
+                    let rule = self.expect_ident()?;
+                    self.expect(&TokenKind::LParen)?;
+                    let inner_start = self.current_span().start;
+                    let inner = self.parse_rule_rhs()?;
+                    self.expect(&TokenKind::RParen)?;
+                    Ok(RuleRhs::PhonApply {
+                        rule,
+                        inner: Box::new(Spanned::new(inner, self.span_from(inner_start))),
+                    })
+                } else {
+                    // Delegation
+                    Ok(RuleRhs::Delegate(self.parse_delegate()?))
+                }
             }
             _ => Err(self.error(format!(
                 "expected template, 'null', or delegation, found {:?}",
                 self.peek()
             ))),
         }
+    }
+
+    /// Check if the token after the current one is LParen.
+    fn is_next_lparen(&self) -> bool {
+        self.tokens.get(self.pos + 1)
+            .map(|t| matches!(t.node, TokenKind::LParen))
+            .unwrap_or(false)
     }
 
     fn segs_to_template(&self, segs: Vec<TemplateSeg>, span: Span) -> Template {
@@ -693,13 +721,8 @@ impl Parser {
     fn parse_compose_body(&mut self) -> Result<ComposeBody, Diagnostic> {
         self.expect_keyword("compose")?;
 
-        // Parse chain: root + sfx1 + sfx2
-        let mut chain = Vec::new();
-        chain.push(self.expect_ident()?);
-        while matches!(self.peek(), TokenKind::Plus) {
-            self.advance();
-            chain.push(self.expect_ident()?);
-        }
+        // Parse compose expression: harmony(root + sfx1 + sfx2) or root + sfx1 + sfx2
+        let chain = self.parse_compose_expr()?;
 
         let mut slots = Vec::new();
         let mut overrides = Vec::new();
@@ -728,6 +751,343 @@ impl Parser {
             slots,
             overrides,
         })
+    }
+
+    /// Parse a compose expression.
+    /// ```text
+    /// compose_expr = compose_term ('+' compose_term)*
+    /// compose_term = IDENT '(' compose_expr ')'   // PhonApply
+    ///              | IDENT                          // Slot
+    /// ```
+    fn parse_compose_expr(&mut self) -> Result<ComposeExpr, Diagnostic> {
+        let mut terms = Vec::new();
+        terms.push(self.parse_compose_term()?);
+        while matches!(self.peek(), TokenKind::Plus) {
+            self.advance();
+            terms.push(self.parse_compose_term()?);
+        }
+        if terms.len() == 1 {
+            Ok(terms.pop().unwrap())
+        } else {
+            Ok(ComposeExpr::Concat(terms))
+        }
+    }
+
+    fn parse_compose_term(&mut self) -> Result<ComposeExpr, Diagnostic> {
+        let ident = self.expect_ident()?;
+        if matches!(self.peek(), TokenKind::LParen) {
+            // PhonApply: name(inner_expr)
+            self.advance();
+            let inner = self.parse_compose_expr()?;
+            self.expect(&TokenKind::RParen)?;
+            Ok(ComposeExpr::PhonApply {
+                rule: ident,
+                inner: Box::new(inner),
+            })
+        } else {
+            Ok(ComposeExpr::Slot(ident))
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // phonrule
+    // -----------------------------------------------------------------------
+
+    fn parse_phonrule(&mut self) -> Result<PhonRule, Diagnostic> {
+        let start = self.current_span().start;
+        let name = self.expect_ident()?;
+        self.expect(&TokenKind::LBrace)?;
+
+        let mut classes = Vec::new();
+        let mut maps = Vec::new();
+        let mut rules = Vec::new();
+
+        while !matches!(self.peek(), TokenKind::RBrace | TokenKind::Eof) {
+            if self.at_ident("class") {
+                classes.push(self.parse_char_class()?);
+            } else if self.at_ident("map") {
+                maps.push(self.parse_phon_map()?);
+            } else {
+                // Must be a rewrite rule
+                rules.push(self.parse_phon_rewrite_rule()?);
+            }
+        }
+
+        self.expect(&TokenKind::RBrace)?;
+        Ok(PhonRule {
+            name,
+            classes,
+            maps,
+            rules,
+            span: self.span_from(start),
+        })
+    }
+
+    /// Parse `class NAME = ["a", "b"] | class NAME = A | B`
+    fn parse_char_class(&mut self) -> Result<CharClassDef, Diagnostic> {
+        self.expect_keyword("class")?;
+        let name = self.expect_ident()?;
+        self.expect(&TokenKind::Eq)?;
+
+        if matches!(self.peek(), TokenKind::LBracket) {
+            // List form: ["a", "b", "c"]
+            self.advance();
+            let mut list = Vec::new();
+            while !matches!(self.peek(), TokenKind::RBracket | TokenKind::Eof) {
+                list.push(self.expect_string()?);
+                if matches!(self.peek(), TokenKind::Comma) {
+                    self.advance();
+                }
+            }
+            self.expect(&TokenKind::RBracket)?;
+            Ok(CharClassDef {
+                name,
+                body: CharClassBody::List(list),
+            })
+        } else {
+            // Union form: A | B | C
+            let mut members = Vec::new();
+            members.push(self.expect_ident()?);
+            while matches!(self.peek(), TokenKind::Pipe) {
+                self.advance();
+                members.push(self.expect_ident()?);
+            }
+            Ok(CharClassDef {
+                name,
+                body: CharClassBody::Union(members),
+            })
+        }
+    }
+
+    /// Parse `map NAME = param -> match { "a" -> "b", else -> param }`
+    fn parse_phon_map(&mut self) -> Result<PhonMapDef, Diagnostic> {
+        self.expect_keyword("map")?;
+        let name = self.expect_ident()?;
+        self.expect(&TokenKind::Eq)?;
+        let param = self.expect_ident()?;
+        self.expect(&TokenKind::Arrow)?;
+        self.expect_keyword("match")?;
+        self.expect(&TokenKind::LBrace)?;
+
+        let mut arms = Vec::new();
+        let mut else_arm = None;
+
+        while !matches!(self.peek(), TokenKind::RBrace | TokenKind::Eof) {
+            if self.at_ident("else") {
+                self.advance();
+                self.expect(&TokenKind::Arrow)?;
+                else_arm = Some(self.parse_phon_map_else()?);
+                // Allow trailing comma
+                if matches!(self.peek(), TokenKind::Comma) {
+                    self.advance();
+                }
+                break;
+            }
+            let from = self.expect_string()?;
+            self.expect(&TokenKind::Arrow)?;
+            let to = self.parse_phon_map_result()?;
+            arms.push(PhonMapArm { from, to });
+            if matches!(self.peek(), TokenKind::Comma) {
+                self.advance();
+            }
+        }
+
+        self.expect(&TokenKind::RBrace)?;
+        Ok(PhonMapDef {
+            name,
+            param,
+            body: PhonMapBody::Match { arms, else_arm },
+        })
+    }
+
+    fn parse_phon_map_result(&mut self) -> Result<PhonMapResult, Diagnostic> {
+        match self.peek().clone() {
+            TokenKind::StringLit(_) => {
+                let s = self.expect_string()?;
+                Ok(PhonMapResult::Literal(s))
+            }
+            TokenKind::Ident(_) => {
+                let id = self.expect_ident()?;
+                Ok(PhonMapResult::Var(id))
+            }
+            _ => Err(self.error(format!(
+                "expected string literal or identifier in map result, found {:?}",
+                self.peek()
+            ))),
+        }
+    }
+
+    fn parse_phon_map_else(&mut self) -> Result<PhonMapElse, Diagnostic> {
+        match self.peek().clone() {
+            TokenKind::StringLit(_) => {
+                let s = self.expect_string()?;
+                Ok(PhonMapElse::Literal(s))
+            }
+            TokenKind::Ident(_) => {
+                let id = self.expect_ident()?;
+                Ok(PhonMapElse::Var(id))
+            }
+            _ => Err(self.error(format!(
+                "expected string literal or identifier in else arm, found {:?}",
+                self.peek()
+            ))),
+        }
+    }
+
+    /// Parse a rewrite rule: `FROM -> TO` or `FROM -> TO / CONTEXT`
+    fn parse_phon_rewrite_rule(&mut self) -> Result<PhonRewriteRule, Diagnostic> {
+        let start = self.current_span().start;
+
+        // FROM: class name or string literal
+        let from = match self.peek().clone() {
+            TokenKind::StringLit(_) => {
+                let s = self.expect_string()?;
+                PhonPattern::Literal(s)
+            }
+            TokenKind::Ident(_) => {
+                let id = self.expect_ident()?;
+                PhonPattern::Class(id)
+            }
+            _ => return Err(self.error(format!(
+                "expected class name or string literal in rewrite rule, found {:?}",
+                self.peek()
+            ))),
+        };
+
+        self.expect(&TokenKind::Arrow)?;
+
+        // TO: map name, string literal, or "null"
+        let to = match self.peek().clone() {
+            TokenKind::StringLit(_) => {
+                let s = self.expect_string()?;
+                PhonReplacement::Literal(s)
+            }
+            TokenKind::Ident(s) if s == "null" => {
+                self.advance();
+                PhonReplacement::Null
+            }
+            TokenKind::Ident(_) => {
+                let id = self.expect_ident()?;
+                PhonReplacement::Map(id)
+            }
+            _ => return Err(self.error(format!(
+                "expected map name, string literal, or 'null' in rewrite rule, found {:?}",
+                self.peek()
+            ))),
+        };
+
+        // Optional context: / LEFT _ RIGHT
+        let context = if matches!(self.peek(), TokenKind::Slash) {
+            self.advance();
+            Some(self.parse_phon_context()?)
+        } else {
+            None
+        };
+
+        Ok(PhonRewriteRule {
+            from,
+            to,
+            context,
+            span: self.span_from(start),
+        })
+    }
+
+    /// Parse phonological context: elements before `_` and elements after `_`.
+    fn parse_phon_context(&mut self) -> Result<PhonContext, Diagnostic> {
+        let mut left = Vec::new();
+        let mut right = Vec::new();
+        let mut seen_underscore = false;
+
+        loop {
+            // Check for end of context (next rewrite rule, class/map keyword, or })
+            match self.peek() {
+                TokenKind::RBrace | TokenKind::Eof => break,
+                // If we see an ident followed by ->, it's the start of a new rewrite rule
+                TokenKind::Ident(s) if matches!(s.as_str(), "class" | "map") => break,
+                TokenKind::Ident(_) => {
+                    // Check if this is the start of a new rewrite rule (ident -> ...)
+                    if !seen_underscore && self.is_new_rewrite_rule_ahead() {
+                        break;
+                    }
+                    if seen_underscore && self.is_new_rewrite_rule_ahead() {
+                        break;
+                    }
+                }
+                TokenKind::StringLit(_) => {
+                    // Check if string -> ... (new rewrite rule)
+                    if self.is_next_arrow() {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+
+            if matches!(self.peek(), TokenKind::Underscore) {
+                self.advance();
+                seen_underscore = true;
+                continue;
+            }
+
+            let elem = self.parse_phon_context_elem()?;
+            if seen_underscore {
+                right.push(elem);
+            } else {
+                left.push(elem);
+            }
+        }
+
+        Ok(PhonContext { left, right })
+    }
+
+    /// Check if current ident position looks like the start of a new rewrite rule.
+    fn is_new_rewrite_rule_ahead(&self) -> bool {
+        // IDENT -> ... (new rewrite rule)
+        self.tokens.get(self.pos + 1)
+            .map(|t| matches!(t.node, TokenKind::Arrow))
+            .unwrap_or(false)
+    }
+
+    /// Check if the next token is Arrow.
+    fn is_next_arrow(&self) -> bool {
+        self.tokens.get(self.pos + 1)
+            .map(|t| matches!(t.node, TokenKind::Arrow))
+            .unwrap_or(false)
+    }
+
+    fn parse_phon_context_elem(&mut self) -> Result<PhonContextElem, Diagnostic> {
+        let elem = match self.peek().clone() {
+            TokenKind::Plus => {
+                self.advance();
+                return Ok(PhonContextElem::Boundary);
+            }
+            TokenKind::Bang => {
+                self.advance();
+                let id = self.expect_ident()?;
+                PhonContextElem::NegClass(id)
+            }
+            TokenKind::StringLit(_) => {
+                let s = self.expect_string()?;
+                PhonContextElem::Literal(s)
+            }
+            TokenKind::Ident(_) => {
+                let id = self.expect_ident()?;
+                PhonContextElem::Class(id)
+            }
+            _ => {
+                return Err(self.error(format!(
+                    "expected context element, found {:?}",
+                    self.peek()
+                )));
+            }
+        };
+
+        // Check for * (repeat)
+        if matches!(self.peek(), TokenKind::Star) {
+            self.advance();
+            Ok(PhonContextElem::Repeat(Box::new(elem)))
+        } else {
+            Ok(elem)
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -1195,7 +1555,11 @@ mod tests {
         match &file.items[0].node {
             Item::Inflection(infl) => match &infl.body {
                 InflectionBody::Compose(comp) => {
-                    assert_eq!(comp.chain.len(), 3);
+                    // chain should be Concat of 3 Slots
+                    match &comp.chain {
+                        ComposeExpr::Concat(terms) => assert_eq!(terms.len(), 3),
+                        _ => panic!("expected Concat compose expr"),
+                    }
                     assert_eq!(comp.slots.len(), 2);
                     assert_eq!(comp.overrides.len(), 1);
                 }

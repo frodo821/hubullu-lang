@@ -27,6 +27,9 @@ pub enum TokenKind {
     Plus,      // +
     Underscore, // _ (standalone wildcard)
     Star,       // *
+    Slash,     // /
+    Bang,      // !
+    Pipe,      // |
 
     // @-prefixed directives
     AtUse,       // @use

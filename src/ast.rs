@@ -71,6 +71,7 @@ pub enum Item {
     Extend(Extend),
     Inflection(Inflection),
     Entry(Entry),
+    PhonRule(PhonRule),
 }
 
 // ---------------------------------------------------------------------------
@@ -152,6 +153,106 @@ pub struct ExtendValue {
 }
 
 // ---------------------------------------------------------------------------
+// phonrule
+// ---------------------------------------------------------------------------
+
+/// A `phonrule` block defining phonological rewrite rules.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PhonRule {
+    pub name: Ident,
+    pub classes: Vec<CharClassDef>,
+    pub maps: Vec<PhonMapDef>,
+    pub rules: Vec<PhonRewriteRule>,
+    pub span: Span,
+}
+
+/// `class front = ["e", "i"]` or `class V = front | back`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CharClassDef {
+    pub name: Ident,
+    pub body: CharClassBody,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CharClassBody {
+    /// Literal list: `["e", "i", "ö", "ü"]`
+    List(Vec<StringLit>),
+    /// Union of other classes: `front | back`
+    Union(Vec<Ident>),
+}
+
+/// `map to_back = c -> match { "e" -> "a", else -> c }`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PhonMapDef {
+    pub name: Ident,
+    pub param: Ident,
+    pub body: PhonMapBody,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PhonMapBody {
+    Match {
+        arms: Vec<PhonMapArm>,
+        else_arm: Option<PhonMapElse>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PhonMapArm {
+    pub from: StringLit,
+    pub to: PhonMapResult,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PhonMapResult {
+    Literal(StringLit),
+    Var(Ident),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PhonMapElse {
+    Literal(StringLit),
+    Var(Ident),
+}
+
+/// A phonological rewrite rule: `V -> to_back / back !back* + !back* _`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PhonRewriteRule {
+    pub from: PhonPattern,
+    pub to: PhonReplacement,
+    pub context: Option<PhonContext>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PhonPattern {
+    Class(Ident),
+    Literal(StringLit),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PhonReplacement {
+    Map(Ident),
+    Literal(StringLit),
+    Null,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PhonContext {
+    pub left: Vec<PhonContextElem>,
+    pub right: Vec<PhonContextElem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PhonContextElem {
+    Class(Ident),
+    NegClass(Ident),
+    Boundary,
+    Literal(StringLit),
+    Repeat(Box<PhonContextElem>),
+}
+
+// ---------------------------------------------------------------------------
 // inflection
 // ---------------------------------------------------------------------------
 
@@ -183,10 +284,21 @@ pub enum InflectionBody {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComposeBody {
-    /// Ordered list of slot references in `compose a + b + c`.
-    pub chain: Vec<Ident>,
+    /// Compose expression: `harmony(root + sfx1 + sfx2)` or `root + sfx1 + sfx2`.
+    pub chain: ComposeExpr,
     pub slots: Vec<SlotDef>,
     pub overrides: Vec<InflectionRule>,
+}
+
+/// Expression tree for compose chains, supporting phonrule application.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ComposeExpr {
+    /// A single slot reference: `root`, `sfx1`
+    Slot(Ident),
+    /// Concatenation of elements: `root + sfx1 + sfx2`
+    Concat(Vec<ComposeExpr>),
+    /// Phonological rule application: `harmony(root + sfx1 + sfx2)`
+    PhonApply { rule: Ident, inner: Box<ComposeExpr> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -224,6 +336,11 @@ pub enum RuleRhs {
     Null,
     /// Delegation to another inflection.
     Delegate(Delegate),
+    /// Phonological rule application: `harmony(`{root}ler`)`
+    PhonApply {
+        rule: Ident,
+        inner: Box<Spanned<RuleRhs>>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

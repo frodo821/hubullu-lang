@@ -1,0 +1,110 @@
+# Arabic Profile — Triliteral root morphology
+
+tagaxis pos {
+  role: classificatory
+  display: { en: "Part of Speech" }
+  index: exact
+}
+
+tagaxis root_type {
+  role: structural
+  display: { en: "Root Type" }
+}
+
+tagaxis person {
+  role: inflectional
+  display: { en: "Person" }
+}
+
+tagaxis number {
+  role: inflectional
+  display: { en: "Number" }
+}
+
+tagaxis gender {
+  role: inflectional
+  display: { en: "Gender" }
+}
+
+tagaxis tense {
+  role: inflectional
+  display: { en: "Tense" }
+}
+
+@extend pos_values for tagaxis pos {
+  verb { display: { en: "Verb" } }
+}
+
+@extend root_type_values for tagaxis root_type {
+  triliteral { display: { en: "Triliteral" } slots: [C1, C2, C3] }
+}
+
+@extend person_values for tagaxis person {
+  1 { display: { en: "1st" } }
+  2 { display: { en: "2nd" } }
+  3 { display: { en: "3rd" } }
+}
+
+@extend number_values for tagaxis number {
+  sg { display: { en: "Singular" } }
+  pl { display: { en: "Plural" } }
+}
+
+@extend gender_values for tagaxis gender {
+  masc { display: { en: "Masculine" } }
+  fem  { display: { en: "Feminine" } }
+}
+
+@extend tense_values for tagaxis tense {
+  perfect   { display: { en: "Perfect" } }
+  imperfect { display: { en: "Imperfect" } }
+}
+
+# ---------------------------------------------------------------------------
+# Form I Perfect (fa`ala pattern)
+# ---------------------------------------------------------------------------
+
+inflection form_I_perfect for {person, number, gender} {
+  requires stems: root[root_type=triliteral]
+
+  [person=3, number=sg, gender=masc] -> `{root.C1}a{root.C2}a{root.C3}a`
+  [person=3, number=sg, gender=fem]  -> `{root.C1}a{root.C2}a{root.C3}at`
+  [person=3, number=pl, gender=masc] -> `{root.C1}a{root.C2}a{root.C3}uu`
+  [person=3, number=pl, gender=fem]  -> `{root.C1}a{root.C2}a{root.C3}na`
+  [person=2, number=sg, gender=masc] -> `{root.C1}a{root.C2}a{root.C3}ta`
+  [person=2, number=sg, gender=fem]  -> `{root.C1}a{root.C2}a{root.C3}ti`
+  [person=2, number=pl, gender=masc] -> `{root.C1}a{root.C2}a{root.C3}tum`
+  [person=2, number=pl, gender=fem]  -> `{root.C1}a{root.C2}a{root.C3}tunna`
+  [person=1, number=sg, _]           -> `{root.C1}a{root.C2}a{root.C3}tu`
+  [person=1, number=pl, _]           -> `{root.C1}a{root.C2}a{root.C3}naa`
+}
+
+# ---------------------------------------------------------------------------
+# Form I Imperfect (yaf`ulu pattern) — prefix + interleaved
+# ---------------------------------------------------------------------------
+
+inflection form_I_imperfect for {person, number, gender} {
+  requires stems: root[root_type=triliteral]
+
+  [person=3, number=sg, gender=masc] -> `ya{root.C1}{root.C2}u{root.C3}u`
+  [person=3, number=sg, gender=fem]  -> `ta{root.C1}{root.C2}u{root.C3}u`
+  [person=3, number=pl, gender=masc] -> `ya{root.C1}{root.C2}u{root.C3}uuna`
+  [person=3, number=pl, gender=fem]  -> `ya{root.C1}{root.C2}u{root.C3}na`
+  [person=2, number=sg, gender=masc] -> `ta{root.C1}{root.C2}u{root.C3}u`
+  [person=2, number=sg, gender=fem]  -> `ta{root.C1}{root.C2}u{root.C3}iina`
+  [person=2, number=pl, gender=masc] -> `ta{root.C1}{root.C2}u{root.C3}uuna`
+  [person=2, number=pl, gender=fem]  -> `ta{root.C1}{root.C2}u{root.C3}na`
+  [person=1, number=sg, _]           -> `a{root.C1}{root.C2}u{root.C3}u`
+  [person=1, number=pl, _]           -> `na{root.C1}{root.C2}u{root.C3}u`
+}
+
+# ---------------------------------------------------------------------------
+# Form I — dispatches by tense to perfect/imperfect
+# ---------------------------------------------------------------------------
+
+inflection form_I for {tense, person, number, gender} {
+  requires stems: root[root_type=triliteral]
+
+  [tense=perfect, _]   -> form_I_perfect[person, number, gender] with stems { root: root }
+  [tense=imperfect, _] -> form_I_imperfect[person, number, gender] with stems { root: root }
+}

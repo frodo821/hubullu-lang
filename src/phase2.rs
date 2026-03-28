@@ -11,6 +11,7 @@ use crate::dag;
 use crate::error::{Diagnostic, Diagnostics};
 use crate::inflection_eval::{
     enumerate_cells, evaluate_compose, evaluate_rules_with_overrides, CellResult, DelegateResolver,
+    PhonRuleResolver,
 };
 use crate::phase1::Phase1Result;
 use crate::span::FileId;
@@ -68,6 +69,7 @@ pub fn run_phase2(p1: &Phase1Result) -> Phase2Result {
     };
 
     ctx.resolve_extends();
+    ctx.validate_phonrules();
     ctx.validate_inflections();
     ctx.resolve_entries();
     ctx.check_dag();
@@ -235,6 +237,135 @@ impl<'a> Phase2Ctx<'a> {
     }
 
     // -----------------------------------------------------------------------
+    // phonrule validation
+    // -----------------------------------------------------------------------
+
+    fn validate_phonrules(&mut self) {
+        for (_file_id, file) in &self.p1.files {
+            for item in &file.items {
+                if let Item::PhonRule(pr) = &item.node {
+                    self.validate_phonrule(pr);
+                }
+            }
+        }
+    }
+
+    fn validate_phonrule(&mut self, pr: &PhonRule) {
+        let class_names: HashSet<_> = pr.classes.iter().map(|c| &c.name.node).collect();
+
+        // Validate union references
+        for cls in &pr.classes {
+            if let CharClassBody::Union(members) = &cls.body {
+                for member in members {
+                    if !class_names.contains(&member.node) {
+                        self.diagnostics.add(
+                            Diagnostic::error(format!(
+                                "phonrule '{}': class union references undefined class '{}'",
+                                pr.name.node, member.node
+                            ))
+                            .with_label(member.span, "undefined class"),
+                        );
+                    }
+                }
+            }
+        }
+
+        let map_names: HashSet<_> = pr.maps.iter().map(|m| &m.name.node).collect();
+
+        // Validate rewrite rules
+        for rule in &pr.rules {
+            // FROM references
+            if let PhonPattern::Class(name) = &rule.from {
+                if !class_names.contains(&name.node) {
+                    self.diagnostics.add(
+                        Diagnostic::error(format!(
+                            "phonrule '{}': rewrite rule references undefined class '{}'",
+                            pr.name.node, name.node
+                        ))
+                        .with_label(name.span, "undefined class"),
+                    );
+                }
+            }
+
+            // TO references
+            if let PhonReplacement::Map(name) = &rule.to {
+                if !map_names.contains(&name.node) {
+                    self.diagnostics.add(
+                        Diagnostic::error(format!(
+                            "phonrule '{}': rewrite rule references undefined map '{}'",
+                            pr.name.node, name.node
+                        ))
+                        .with_label(name.span, "undefined map"),
+                    );
+                }
+            }
+
+            // Context references
+            if let Some(ctx) = &rule.context {
+                for elem in ctx.left.iter().chain(ctx.right.iter()) {
+                    self.validate_context_elem(pr, elem, &class_names);
+                }
+            }
+        }
+    }
+
+    fn validate_context_elem(
+        &mut self,
+        pr: &PhonRule,
+        elem: &PhonContextElem,
+        class_names: &HashSet<&String>,
+    ) {
+        match elem {
+            PhonContextElem::Class(name) | PhonContextElem::NegClass(name) => {
+                if !class_names.contains(&name.node) {
+                    self.diagnostics.add(
+                        Diagnostic::error(format!(
+                            "phonrule '{}': context references undefined class '{}'",
+                            pr.name.node, name.node
+                        ))
+                        .with_label(name.span, "undefined class"),
+                    );
+                }
+            }
+            PhonContextElem::Repeat(inner) => {
+                self.validate_context_elem(pr, inner, class_names);
+            }
+            PhonContextElem::Boundary | PhonContextElem::Literal(_) => {}
+        }
+    }
+
+    fn find_phonrule(&self, name: &str, file_id: FileId) -> Option<&PhonRule> {
+        // Search via symbol table
+        if let Some(scope) = self.p1.symbol_table.scope(file_id) {
+            let resolved = scope.resolve(name);
+            for sym in resolved {
+                if sym.kind == SymbolKind::PhonRule {
+                    if let Some(file) = self.p1.files.get(&sym.file_id) {
+                        if let Some(item) = file.items.get(sym.item_index) {
+                            if let Item::PhonRule(pr) = &item.node {
+                                return Some(pr);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback: search all files
+        for (_, file) in &self.p1.files {
+            for item in &file.items {
+                if let Item::PhonRule(pr) = &item.node {
+                    if pr.name.node == name {
+                        return Some(pr);
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    // -----------------------------------------------------------------------
     // entry resolution
     // -----------------------------------------------------------------------
 
@@ -314,13 +445,13 @@ impl<'a> Phase2Ctx<'a> {
         let mut forms = Vec::new();
 
         if let Some(infl) = &entry.inflection {
-            let (axes, body) = match infl {
+            let (axes, body, stem_reqs) = match infl {
                 EntryInflection::Class(class_name) => {
                     // Find the inflection class
                     if let Some(infl_def) = self.find_inflection(&class_name.node, file_id) {
                         let axes: Vec<String> =
                             infl_def.axes.iter().map(|a| a.node.clone()).collect();
-                        (axes, Some(infl_def.body.clone()))
+                        (axes, Some(infl_def.body.clone()), infl_def.required_stems.clone())
                     } else {
                         self.diagnostics.add(
                             Diagnostic::error(format!(
@@ -329,13 +460,13 @@ impl<'a> Phase2Ctx<'a> {
                             ))
                             .with_label(class_name.span, "not found"),
                         );
-                        (Vec::new(), None)
+                        (Vec::new(), None, Vec::new())
                     }
                 }
                 EntryInflection::Inline(inline) => {
                     let axes: Vec<String> =
                         inline.axes.iter().map(|a| a.node.clone()).collect();
-                    (axes, Some(inline.body.clone()))
+                    (axes, Some(inline.body.clone()), Vec::new())
                 }
             };
 
@@ -354,16 +485,48 @@ impl<'a> Phase2Ctx<'a> {
 
                 match enumerate_cells(&axes, &axis_values) {
                     Ok(cells) => {
-                        let struct_stems = HashMap::new();
+                        // Build struct_stems from required_stems constraints + axis slots
+                        let mut struct_stems: HashMap<String, HashMap<String, String>> = HashMap::new();
+                        for req in &stem_reqs {
+                            if req.constraint.is_empty() { continue; }
+                            let stem_val = match stems.get(&req.name.node) {
+                                Some(v) => v,
+                                None => continue,
+                            };
+                            for cond in &req.constraint {
+                                if let Some(axis) = self.axes.get(&cond.axis.node) {
+                                    if let Some(slot_names) = axis.slots.get(&cond.value.node) {
+                                        if slot_names.is_empty() { continue; }
+                                        let chars: Vec<String> = stem_val.chars().map(|c| c.to_string()).collect();
+                                        if chars.len() != slot_names.len() {
+                                            self.diagnostics.add(
+                                                Diagnostic::error(format!(
+                                                    "stem '{}' has {} characters but axis value '{}' expects {} slots",
+                                                    req.name.node, chars.len(), cond.value.node, slot_names.len()
+                                                ))
+                                                .with_label(req.name.span, "stem length mismatch"),
+                                            );
+                                            continue;
+                                        }
+                                        let slot_map: HashMap<String, String> = slot_names.iter()
+                                            .zip(chars.iter())
+                                            .map(|(name, ch)| (name.clone(), ch.clone()))
+                                            .collect();
+                                        struct_stems.insert(req.name.node.clone(), slot_map);
+                                    }
+                                }
+                            }
+                        }
                         let resolver = Phase2Resolver { ctx: self, file_id };
+                        let phon_resolver = Phase2PhonResolver { ctx: self, file_id };
                         let result = match &body {
                             InflectionBody::Rules(rules) => {
                                 evaluate_rules_with_overrides(
-                                    rules, &entry.forms_override, &cells, &stems, &struct_stems, &resolver,
+                                    rules, &entry.forms_override, &cells, &stems, &struct_stems, &resolver, &phon_resolver,
                                 )
                             }
                             InflectionBody::Compose(comp) => {
-                                evaluate_compose(comp, &entry.forms_override, &cells, &stems, &struct_stems)
+                                evaluate_compose(comp, &entry.forms_override, &cells, &stems, &struct_stems, &phon_resolver)
                             }
                         };
 
@@ -508,5 +671,17 @@ impl<'a, 'b> DelegateResolver for Phase2Resolver<'a, 'b> {
             .get(axis)
             .map(|ra| ra.values.clone())
             .unwrap_or_default()
+    }
+}
+
+/// PhonRuleResolver implementation for Phase2.
+struct Phase2PhonResolver<'a, 'b> {
+    ctx: &'a Phase2Ctx<'b>,
+    file_id: FileId,
+}
+
+impl<'a, 'b> PhonRuleResolver for Phase2PhonResolver<'a, 'b> {
+    fn resolve(&self, name: &str) -> Option<&PhonRule> {
+        self.ctx.find_phonrule(name, self.file_id)
     }
 }

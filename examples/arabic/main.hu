@@ -1,0 +1,2 @@
+@use * from "profile.hu"
+@reference * from "verbs.hu"

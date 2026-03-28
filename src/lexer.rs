@@ -163,6 +163,18 @@ impl<'a> Lexer<'a> {
                 self.advance();
                 Some(self.make_token(TokenKind::Star, start, self.pos))
             }
+            '/' => {
+                self.advance();
+                Some(self.make_token(TokenKind::Slash, start, self.pos))
+            }
+            '!' => {
+                self.advance();
+                Some(self.make_token(TokenKind::Bang, start, self.pos))
+            }
+            '|' => {
+                self.advance();
+                Some(self.make_token(TokenKind::Pipe, start, self.pos))
+            }
             '-' => {
                 if self.peek_at(1) == Some('>') {
                     self.advance();

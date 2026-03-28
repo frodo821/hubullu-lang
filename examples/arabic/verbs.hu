@@ -1,0 +1,25 @@
+@use * from "profile.hu"
+
+entry kataba {
+  headword: "kataba"
+  tags: [pos=verb, root_type=triliteral]
+  stems { root: "ktb" }
+  inflection_class: form_I
+  meaning: "to write"
+}
+
+entry darasa {
+  headword: "darasa"
+  tags: [pos=verb, root_type=triliteral]
+  stems { root: "drs" }
+  inflection_class: form_I
+  meaning: "to study"
+}
+
+entry fataha {
+  headword: "fataha"
+  tags: [pos=verb, root_type=triliteral]
+  stems { root: "fth" }
+  inflection_class: form_I
+  meaning: "to open"
+}

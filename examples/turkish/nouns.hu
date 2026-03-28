@@ -7,7 +7,7 @@ entry ev {
   headword: "ev"
   tags: [pos=noun]
   stems { root: "ev" }
-  inflection_class: noun_front
+  inflection_class: noun_decl
   meaning: "house"
 }
 
@@ -16,6 +16,6 @@ entry yol {
   headword: "yol"
   tags: [pos=noun]
   stems { root: "yol" }
-  inflection_class: noun_back
+  inflection_class: noun_decl
   meaning: "road, path"
 }

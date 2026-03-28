@@ -66,11 +66,47 @@ tagaxis case {
   abl { display: { en: "Ablative" } }
 }
 
+# ---------------------------------------------------------------------------
+# Phonological rules
+# ---------------------------------------------------------------------------
+
+# 2-way vowel harmony (e/a alternation for suffixes)
+phonrule harmony {
+  class front = ["e", "i", "ö", "ü"]
+  class back  = ["a", "ı", "o", "u"]
+  class V = front | back
+
+  # Map front vowels to their back counterparts
+  map to_back = c -> match {
+    "e" -> "a",
+    "i" -> "ı",
+    "ö" -> "o",
+    "ü" -> "u",
+    else -> c
+  }
+
+  # A vowel becomes back when the preceding vowel (across boundaries) is back
+  V -> to_back / back !V* + !V* _
+}
+
+# Vowel elision: drop suffix-initial vowel when stem ends in a vowel
+phonrule elision {
+  class V = ["a", "e", "ı", "i", "o", "ö", "u", "ü"]
+
+  # Delete a vowel at the start of a suffix when immediately preceded by a vowel
+  V -> null / V + _
+}
+
+# ---------------------------------------------------------------------------
+# Inflection classes
+# ---------------------------------------------------------------------------
+
 # Verb conjugation with compose (present continuous + past)
+# harmony applied to the entire chain, elision for vowel-final stems
 inflection verb_conj for {tense, person, number, negation} {
   requires stems: root
 
-  compose root + neg_sfx + tense_sfx + pn_sfx
+  compose harmony(elision(root + neg_sfx + tense_sfx + pn_sfx))
 
   slot neg_sfx {
     [negation=pos, _]                    -> ``
@@ -99,11 +135,11 @@ inflection verb_conj for {tense, person, number, negation} {
   }
 }
 
-# Noun declension — front vowel harmony (e-type)
-inflection noun_front for {number, case} {
+# Unified noun declension with vowel harmony
+inflection noun_decl for {number, case} {
   requires stems: root
 
-  compose root + plural_sfx + case_sfx
+  compose harmony(root + plural_sfx + case_sfx)
 
   slot plural_sfx {
     [number=sg, _] -> ``
@@ -117,26 +153,5 @@ inflection noun_front for {number, case} {
     [case=gen, _] -> `in`
     [case=loc, _] -> `de`
     [case=abl, _] -> `den`
-  }
-}
-
-# Noun declension — back vowel harmony (a-type)
-inflection noun_back for {number, case} {
-  requires stems: root
-
-  compose root + plural_sfx + case_sfx
-
-  slot plural_sfx {
-    [number=sg, _] -> ``
-    [number=pl, _] -> `lar`
-  }
-
-  slot case_sfx {
-    [case=nom, _] -> ``
-    [case=acc, _] -> `ı`
-    [case=dat, _] -> `a`
-    [case=gen, _] -> `ın`
-    [case=loc, _] -> `da`
-    [case=abl, _] -> `dan`
   }
 }

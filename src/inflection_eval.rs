@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 use crate::ast::*;
 use crate::error::Diagnostic;
+use crate::phonrule_eval::{apply_phonrule, strip_boundaries, BOUNDARY};
 
 /// A single cell in the paradigm (one combination of axis values).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,6 +135,17 @@ impl DelegateResolver for NullResolver {
     fn axis_values(&self, _axis: &str) -> Vec<String> { Vec::new() }
 }
 
+/// Callback for resolving phonological rules.
+pub trait PhonRuleResolver {
+    fn resolve(&self, name: &str) -> Option<&PhonRule>;
+}
+
+/// No-op phonrule resolver.
+pub struct NullPhonResolver;
+impl PhonRuleResolver for NullPhonResolver {
+    fn resolve(&self, _name: &str) -> Option<&PhonRule> { None }
+}
+
 /// Evaluate a simple rule-based paradigm.
 pub fn evaluate_rules(
     rules: &[InflectionRule],
@@ -141,8 +153,9 @@ pub fn evaluate_rules(
     stems: &HashMap<String, String>,
     struct_stems: &HashMap<String, HashMap<String, String>>,
     resolver: &dyn DelegateResolver,
+    phon_resolver: &dyn PhonRuleResolver,
 ) -> Result<ExpandedParadigm, Vec<Diagnostic>> {
-    evaluate_rules_with_overrides(rules, &[], cells, stems, struct_stems, resolver)
+    evaluate_rules_with_overrides(rules, &[], cells, stems, struct_stems, resolver, phon_resolver)
 }
 
 /// Evaluate a rule-based paradigm with 2-pass override logic.
@@ -157,6 +170,7 @@ pub fn evaluate_rules_with_overrides(
     stems: &HashMap<String, String>,
     struct_stems: &HashMap<String, HashMap<String, String>>,
     resolver: &dyn DelegateResolver,
+    phon_resolver: &dyn PhonRuleResolver,
 ) -> Result<ExpandedParadigm, Vec<Diagnostic>> {
     let mut forms = Vec::new();
     let mut errors = Vec::new();
@@ -165,7 +179,7 @@ pub fn evaluate_rules_with_overrides(
         // Tier 1: try overrides
         match find_best_match(overrides, cell) {
             Ok(Some(rule)) => {
-                match apply_rule(rule, cell, stems, struct_stems, resolver) {
+                match apply_rule(rule, cell, stems, struct_stems, resolver, phon_resolver) {
                     Ok(result) => forms.push((cell.clone(), result)),
                     Err(e) => errors.push(e),
                 }
@@ -181,7 +195,7 @@ pub fn evaluate_rules_with_overrides(
         // Tier 2: class rules
         match find_best_match(rules, cell) {
             Ok(Some(rule)) => {
-                match apply_rule(rule, cell, stems, struct_stems, resolver) {
+                match apply_rule(rule, cell, stems, struct_stems, resolver, phon_resolver) {
                     Ok(result) => forms.push((cell.clone(), result)),
                     Err(e) => errors.push(e),
                 }
@@ -216,14 +230,46 @@ fn apply_rule(
     stems: &HashMap<String, String>,
     struct_stems: &HashMap<String, HashMap<String, String>>,
     resolver: &dyn DelegateResolver,
+    phon_resolver: &dyn PhonRuleResolver,
 ) -> Result<CellResult, Diagnostic> {
-    match &rule.rhs.node {
+    let result = apply_rule_rhs(&rule.rhs.node, cell, stems, struct_stems, resolver, phon_resolver)?;
+    // Strip boundary markers from final output
+    Ok(match result {
+        CellResult::Form(s) => CellResult::Form(strip_boundaries(&s)),
+        other => other,
+    })
+}
+
+/// Evaluate a rule RHS, potentially producing boundary-marked strings.
+fn apply_rule_rhs(
+    rhs: &RuleRhs,
+    cell: &Cell,
+    stems: &HashMap<String, String>,
+    struct_stems: &HashMap<String, HashMap<String, String>>,
+    resolver: &dyn DelegateResolver,
+    phon_resolver: &dyn PhonRuleResolver,
+) -> Result<CellResult, Diagnostic> {
+    match rhs {
         RuleRhs::Template(tmpl) => {
             render_template(tmpl, stems, struct_stems).map(CellResult::Form)
         }
         RuleRhs::Null => Ok(CellResult::Null),
         RuleRhs::Delegate(deleg) => {
-            resolve_delegate(deleg, cell, stems, struct_stems, resolver)
+            resolve_delegate(deleg, cell, stems, struct_stems, resolver, phon_resolver)
+        }
+        RuleRhs::PhonApply { rule, inner } => {
+            let pr = phon_resolver.resolve(&rule.node).ok_or_else(|| {
+                Diagnostic::error(format!("phonrule '{}' not found", rule.node))
+                    .with_label(rule.span, "not found")
+            })?;
+            let inner_result = apply_rule_rhs(&inner.node, cell, stems, struct_stems, resolver, phon_resolver)?;
+            match inner_result {
+                CellResult::Form(s) => {
+                    let applied = apply_phonrule(&s, pr);
+                    Ok(CellResult::Form(applied))
+                }
+                CellResult::Null => Ok(CellResult::Null),
+            }
         }
     }
 }
@@ -235,10 +281,11 @@ fn resolve_delegate(
     stems: &HashMap<String, String>,
     struct_stems: &HashMap<String, HashMap<String, String>>,
     resolver: &dyn DelegateResolver,
+    phon_resolver: &dyn PhonRuleResolver,
 ) -> Result<CellResult, Diagnostic> {
     let target_name = &deleg.target.node;
 
-    let (target_axes, target_body) = resolver.resolve(target_name).ok_or_else(|| {
+    let (_target_axes, target_body) = resolver.resolve(target_name).ok_or_else(|| {
         Diagnostic::error(format!("delegate target '{}' not found", target_name))
             .with_label(deleg.target.span, "not found")
     })?;
@@ -260,9 +307,13 @@ fn resolve_delegate(
 
     // Build delegate stems: map from caller stems
     let mut delegate_stems = HashMap::new();
+    let mut delegate_struct_stems = HashMap::new();
     for mapping in &deleg.stem_mapping {
         if let Some(val) = stems.get(&mapping.source_stem.node) {
             delegate_stems.insert(mapping.target_stem.node.clone(), val.clone());
+        }
+        if let Some(slot_map) = struct_stems.get(&mapping.source_stem.node) {
+            delegate_struct_stems.insert(mapping.target_stem.node.clone(), slot_map.clone());
         }
     }
 
@@ -270,10 +321,10 @@ fn resolve_delegate(
     let cells = vec![delegate_cell];
     let result = match &target_body {
         InflectionBody::Rules(rules) => {
-            evaluate_rules(rules, &cells, &delegate_stems, struct_stems, resolver)
+            evaluate_rules(rules, &cells, &delegate_stems, &delegate_struct_stems, resolver, phon_resolver)
         }
         InflectionBody::Compose(comp) => {
-            evaluate_compose(comp, &[], &cells, &delegate_stems, struct_stems)
+            evaluate_compose(comp, &[], &cells, &delegate_stems, &delegate_struct_stems, phon_resolver)
         }
     };
 
@@ -306,6 +357,7 @@ pub fn evaluate_compose(
     cells: &[Cell],
     stems: &HashMap<String, String>,
     struct_stems: &HashMap<String, HashMap<String, String>>,
+    phon_resolver: &dyn PhonRuleResolver,
 ) -> Result<ExpandedParadigm, Vec<Diagnostic>> {
     let mut forms = Vec::new();
     let mut errors = Vec::new();
@@ -361,70 +413,16 @@ pub fn evaluate_compose(
             }
         }
 
-        // Compose the chain
-        let mut composed = String::new();
-        let mut all_resolved = true;
-
-        for slot_ref in &compose.chain {
-            let slot_name = &slot_ref.node;
-
-            // Check if it's a stem
-            if let Some(stem_val) = stems.get(slot_name) {
-                composed.push_str(stem_val);
-                continue;
+        // Evaluate compose expression tree
+        match eval_compose_expr(&compose.chain, &compose.slots, cell, stems, struct_stems, phon_resolver) {
+            Ok(Some(s)) => {
+                forms.push((cell.clone(), CellResult::Form(strip_boundaries(&s))));
             }
-
-            // Find the slot definition
-            if let Some(slot_def) = compose.slots.iter().find(|s| s.name.node == *slot_name) {
-                match find_best_match(&slot_def.rules, cell) {
-                    Ok(Some(rule)) => match &rule.rhs.node {
-                        RuleRhs::Template(tmpl) => {
-                            match render_template(tmpl, stems, struct_stems) {
-                                Ok(s) => composed.push_str(&s),
-                                Err(e) => {
-                                    errors.push(e);
-                                    all_resolved = false;
-                                }
-                            }
-                        }
-                        RuleRhs::Null => {
-                            forms.push((cell.clone(), CellResult::Null));
-                            all_resolved = false;
-                            break;
-                        }
-                        _ => {
-                            all_resolved = false;
-                        }
-                    },
-                    Ok(None) => {
-                        let tag_desc = cell
-                            .tags
-                            .iter()
-                            .map(|(k, v)| format!("{}={}", k, v))
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        errors.push(Diagnostic::error(format!(
-                            "no rule matches slot '{}' for cell [{}]",
-                            slot_name, tag_desc
-                        )));
-                        all_resolved = false;
-                    }
-                    Err(e) => {
-                        errors.push(e);
-                        all_resolved = false;
-                    }
-                }
-            } else {
-                errors.push(Diagnostic::error(format!(
-                    "slot '{}' not defined",
-                    slot_name
-                )));
-                all_resolved = false;
+            Ok(None) => {
+                // Null result from a slot
+                forms.push((cell.clone(), CellResult::Null));
             }
-        }
-
-        if all_resolved && !forms.iter().any(|(c, _)| c == cell) {
-            forms.push((cell.clone(), CellResult::Form(composed)));
+            Err(e) => errors.push(e),
         }
     }
 
@@ -432,6 +430,91 @@ pub fn evaluate_compose(
         Ok(ExpandedParadigm { forms })
     } else {
         Err(errors)
+    }
+}
+
+/// Evaluate a compose expression tree recursively.
+/// Returns Ok(Some(string_with_boundaries)) or Ok(None) for null.
+fn eval_compose_expr(
+    expr: &ComposeExpr,
+    slots: &[SlotDef],
+    cell: &Cell,
+    stems: &HashMap<String, String>,
+    struct_stems: &HashMap<String, HashMap<String, String>>,
+    phon_resolver: &dyn PhonRuleResolver,
+) -> Result<Option<String>, Diagnostic> {
+    match expr {
+        ComposeExpr::Slot(slot_ref) => {
+            let slot_name = &slot_ref.node;
+
+            // Check if it's a stem
+            if let Some(stem_val) = stems.get(slot_name) {
+                return Ok(Some(stem_val.clone()));
+            }
+
+            // Find the slot definition
+            if let Some(slot_def) = slots.iter().find(|s| s.name.node == *slot_name) {
+                match find_best_match(&slot_def.rules, cell)? {
+                    Some(rule) => match &rule.rhs.node {
+                        RuleRhs::Template(tmpl) => {
+                            render_template(tmpl, stems, struct_stems).map(Some)
+                        }
+                        RuleRhs::Null => Ok(None),
+                        _ => Err(Diagnostic::error(format!(
+                            "unexpected RHS in slot '{}'",
+                            slot_name
+                        ))),
+                    },
+                    None => {
+                        let tag_desc = cell
+                            .tags
+                            .iter()
+                            .map(|(k, v)| format!("{}={}", k, v))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        Err(Diagnostic::error(format!(
+                            "no rule matches slot '{}' for cell [{}]",
+                            slot_name, tag_desc
+                        )))
+                    }
+                }
+            } else {
+                Err(Diagnostic::error(format!(
+                    "slot '{}' not defined",
+                    slot_name
+                )))
+            }
+        }
+        ComposeExpr::Concat(terms) => {
+            let mut composed = String::new();
+            for (i, term) in terms.iter().enumerate() {
+                match eval_compose_expr(term, slots, cell, stems, struct_stems, phon_resolver)? {
+                    Some(s) => {
+                        if !s.is_empty() {
+                            if !composed.is_empty() && i > 0 {
+                                composed.push(BOUNDARY);
+                            }
+                            composed.push_str(&s);
+                        }
+                    }
+                    None => return Ok(None),
+                }
+            }
+            Ok(Some(composed))
+        }
+        ComposeExpr::PhonApply { rule, inner } => {
+            let pr = phon_resolver.resolve(&rule.node).ok_or_else(|| {
+                Diagnostic::error(format!("phonrule '{}' not found", rule.node))
+                    .with_label(rule.span, "not found")
+            })?;
+            match eval_compose_expr(inner, slots, cell, stems, struct_stems, phon_resolver)? {
+                Some(s) => {
+                    let applied = apply_phonrule(&s, pr);
+                    Ok(Some(applied))
+                }
+                None => Ok(None),
+            }
+        }
     }
 }
 
@@ -549,7 +632,7 @@ mod tests {
         let stems: HashMap<String, String> = [("root".to_string(), "walk".to_string())].into();
         let struct_stems = HashMap::new();
 
-        let result = evaluate_rules(&rules, &cells, &stems, &struct_stems, &NullResolver).unwrap();
+        let result = evaluate_rules(&rules, &cells, &stems, &struct_stems, &NullResolver, &NullPhonResolver).unwrap();
         assert_eq!(result.forms.len(), 2);
         assert!(matches!(&result.forms[0].1, CellResult::Form(s) if s == "walks"));
         assert!(matches!(&result.forms[1].1, CellResult::Null));
@@ -599,7 +682,7 @@ mod tests {
         let struct_stems = HashMap::new();
 
         let result = evaluate_rules_with_overrides(
-            &class_rules, &overrides, &cells, &stems, &struct_stems, &NullResolver,
+            &class_rules, &overrides, &cells, &stems, &struct_stems, &NullResolver, &NullPhonResolver,
         ).unwrap();
         assert_eq!(result.forms.len(), 1);
         assert!(matches!(&result.forms[0].1, CellResult::Form(s) if s == "override_form"));
@@ -625,7 +708,7 @@ mod tests {
         let struct_stems = HashMap::new();
 
         let result = evaluate_rules_with_overrides(
-            &class_rules, &overrides, &cells, &stems, &struct_stems, &NullResolver,
+            &class_rules, &overrides, &cells, &stems, &struct_stems, &NullResolver, &NullPhonResolver,
         ).unwrap();
         assert_eq!(result.forms.len(), 1);
         assert!(matches!(&result.forms[0].1, CellResult::Form(s) if s == "override_form"));
@@ -645,7 +728,7 @@ mod tests {
         let struct_stems = HashMap::new();
 
         let result = evaluate_rules_with_overrides(
-            &class_rules, &[], &cells, &stems, &struct_stems, &NullResolver,
+            &class_rules, &[], &cells, &stems, &struct_stems, &NullResolver, &NullPhonResolver,
         );
         assert!(result.is_err());
     }
@@ -667,7 +750,7 @@ mod tests {
         let struct_stems = HashMap::new();
 
         let result = evaluate_rules_with_overrides(
-            &class_rules, &overrides, &cells, &stems, &struct_stems, &NullResolver,
+            &class_rules, &overrides, &cells, &stems, &struct_stems, &NullResolver, &NullPhonResolver,
         );
         assert!(result.is_err());
     }

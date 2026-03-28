@@ -17,6 +17,7 @@ pub enum SymbolKind {
     Extend,
     Inflection,
     Entry,
+    PhonRule,
 }
 
 /// A registered symbol.

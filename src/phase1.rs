@@ -135,6 +135,7 @@ impl Phase1Ctx {
                 Item::Extend(ext) => (ext.name.node.clone(), SymbolKind::Extend),
                 Item::Inflection(infl) => (infl.name.node.clone(), SymbolKind::Inflection),
                 Item::Entry(entry) => (entry.name.node.clone(), SymbolKind::Entry),
+                Item::PhonRule(pr) => (pr.name.node.clone(), SymbolKind::PhonRule),
                 Item::Use(_) | Item::Reference(_) => continue,
             };
             if let Err(diag) = self.symbol_table.register_local(
