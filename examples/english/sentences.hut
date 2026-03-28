@@ -1,0 +1,20 @@
+# The cat walks.
+"The" cat walk[tense=present, person=3, number=sg] "."
+
+# The children walked.
+"The" child[number=pl] walk[tense=past, person=3, number=pl] "."
+
+# I am tall.
+"I" be[tense=present, person=1, number=sg] tall "."
+
+# She is good.
+"She" be[tense=present, person=3, number=sg] good "."
+
+# The cats were taller.
+"The" cat[number=pl] be[tense=past, person=3, number=pl] tall[degree=comparative] "."
+
+# He goes.
+"He" go[tense=present, person=3, number=sg] "."
+
+# We went.
+"We" go[tense=past, person=1, number=pl] "."

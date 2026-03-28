@@ -1,0 +1,17 @@
+# kataba (he wrote)
+kataba[tense=perfect, person=3, number=sg, gender=masc]
+
+# katabat (she wrote)
+kataba[tense=perfect, person=3, number=sg, gender=fem]
+
+# yaktubu (he writes)
+kataba[tense=imperfect, person=3, number=sg, gender=masc]
+
+# darasa (he studied)
+darasa[tense=perfect, person=3, number=sg, gender=masc]
+
+# yadrusu (he studies)
+darasa[tense=imperfect, person=3, number=sg, gender=masc]
+
+# fatahat (she opened)
+fataha[tense=perfect, person=3, number=sg, gender=fem]

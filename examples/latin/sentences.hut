@@ -1,0 +1,14 @@
+# Puella servum amat. (The girl loves the slave.)
+puella[case=nom, number=sg] servus[case=acc, number=sg] amare[tense=present, person=3, number=sg, voice=active] "."
+
+# Servus puellam amat. (The slave loves the girl.)
+servus[case=nom, number=sg] puella[case=acc, number=sg] amare[tense=present, person=3, number=sg, voice=active] "."
+
+# Puellae bonae sunt. (The girls are good.)
+puella[case=nom, number=pl] bonus[case=nom, number=pl, gender=fem]
+
+# Bellum bonum amamus. (We love the good war.)
+bellum[case=acc, number=sg] bonus[case=acc, number=sg, gender=neut] amare[tense=present, person=1, number=pl, voice=active] "."
+
+# Servos amabat. (He/she used to love the slaves.)
+servus[case=acc, number=pl] amare[tense=imperfect, person=3, number=sg, voice=active] "."

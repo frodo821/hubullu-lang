@@ -1363,6 +1363,7 @@ impl Parser {
     fn parse_token_list(&mut self) -> Result<Vec<crate::ast::Token>, Diagnostic> {
         let mut tokens = Vec::new();
         // tokens: entry_ref[form_spec] "literal" entry_ref2[] "."
+        // Use ~ between tokens to suppress separator (glue).
         // Ends at the next field keyword (translation) or }
         loop {
             match self.peek() {
@@ -1377,6 +1378,10 @@ impl Parser {
                     }
                     let entry_ref = self.parse_entry_ref()?;
                     tokens.push(crate::ast::Token::Ref(entry_ref));
+                }
+                TokenKind::Tilde => {
+                    self.advance();
+                    tokens.push(crate::ast::Token::Glue);
                 }
                 _ => break,
             }
@@ -1401,6 +1406,10 @@ impl Parser {
                             self.advance();
                         }
                     }
+                }
+                TokenKind::Tilde => {
+                    self.advance();
+                    tokens.push(crate::ast::Token::Glue);
                 }
                 _ => {
                     self.errors.push(self.error(format!(
@@ -1746,6 +1755,36 @@ mod tests {
                 assert_eq!(e.examples.len(), 1);
                 assert_eq!(e.examples[0].tokens.len(), 2);
                 assert_eq!(e.examples[0].translation.node, "I go.");
+            }
+            other => panic!("expected Entry, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_token_list_with_glue() {
+        let (file, errors) = parse_str(
+            r#"
+            entry malbona {
+                headword: "malbona"
+                tags: [pos=adj]
+                stems {}
+                meaning: "bad"
+                examples {
+                    example {
+                        tokens: "mal"~"bona" "hundo"
+                        translation: "bad dog"
+                    }
+                }
+            }
+            "#,
+        );
+        assert!(errors.is_empty(), "errors: {:?}", errors);
+        match &file.items[0].node {
+            Item::Entry(e) => {
+                assert_eq!(e.examples.len(), 1);
+                // "mal", Glue, "bona", "hundo" = 4 tokens
+                assert_eq!(e.examples[0].tokens.len(), 4);
+                assert!(matches!(e.examples[0].tokens[1], crate::ast::Token::Glue));
             }
             other => panic!("expected Entry, got {:?}", other),
         }

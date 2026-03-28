@@ -1,0 +1,14 @@
+# Eve geliyorum. (I am coming to the house.)
+ev[case=dat, number=sg] gelmek[tense=present_cont, person=1, number=sg, negation=pos] "."
+
+# Yolda yazıyorsun. (You are writing on the road.)
+yol[case=loc, number=sg] yazmak[tense=present_cont, person=2, number=sg, negation=pos] "."
+
+# Evden gelmedi. (He/she did not come from the house.)
+ev[case=abl, number=sg] gelmek[tense=past, person=3, number=sg, negation=neg] "."
+
+# Yolu yazdık. (We wrote the road.)
+yol[case=acc, number=sg] yazmak[tense=past, person=1, number=pl, negation=pos] "."
+
+# Evlere geliyorlar. (They are coming to the houses.)
+ev[case=dat, number=pl] gelmek[tense=present_cont, person=3, number=pl, negation=pos] "."

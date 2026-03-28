@@ -471,6 +471,8 @@ pub enum Token {
     Ref(EntryRef),
     /// Plain string: `"."`, `"die Tür"`
     Lit(StringLit),
+    /// `~` — glue marker: suppresses separator between adjacent tokens.
+    Glue,
 }
 
 // ---------------------------------------------------------------------------

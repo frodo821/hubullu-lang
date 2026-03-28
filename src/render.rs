@@ -29,13 +29,23 @@ pub fn parse_hut(source: &str, filename: &str) -> Result<Vec<ast::Token>, String
     Ok(ast_tokens)
 }
 
-/// Resolve a list of AST tokens into string parts using the database.
-pub fn resolve(tokens: &[ast::Token], db: &Connection) -> Result<Vec<String>, String> {
+/// A resolved piece: either a string part or a glue marker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolvedPart {
+    Text(String),
+    Glue,
+}
+
+/// Resolve a list of AST tokens into resolved parts using the database.
+pub fn resolve(tokens: &[ast::Token], db: &Connection) -> Result<Vec<ResolvedPart>, String> {
     let mut parts = Vec::new();
     for token in tokens {
         match token {
+            ast::Token::Glue => {
+                parts.push(ResolvedPart::Glue);
+            }
             ast::Token::Lit(s) => {
-                parts.push(s.node.clone());
+                parts.push(ResolvedPart::Text(s.node.clone()));
             }
             ast::Token::Ref(entry_ref) => {
                 let entry_id = &entry_ref.entry_id.node;
@@ -49,7 +59,7 @@ pub fn resolve(tokens: &[ast::Token], db: &Connection) -> Result<Vec<String>, St
                                 |row| row.get(0),
                             )
                             .map_err(|e| format!("entry '{}' not found: {}", entry_id, e))?;
-                        parts.push(headword);
+                        parts.push(ResolvedPart::Text(headword));
                     }
                     Some(form_spec) => {
                         // Build requested tags as a set for matching
@@ -101,7 +111,7 @@ pub fn resolve(tokens: &[ast::Token], db: &Connection) -> Result<Vec<String>, St
                                 .join(", ");
                             format!("form '{}[{}]' not found", entry_id, tags_display)
                         })?;
-                        parts.push(form_str);
+                        parts.push(ResolvedPart::Text(form_str));
                     }
                 }
             }
@@ -110,20 +120,30 @@ pub fn resolve(tokens: &[ast::Token], db: &Connection) -> Result<Vec<String>, St
     Ok(parts)
 }
 
-/// Join string parts using separator, suppressing it before certain characters.
-pub fn smart_join(parts: &[String], separator: &str, no_sep_before: &str) -> String {
+/// Join resolved parts using separator, suppressing it before certain characters
+/// and around `Glue` markers.
+pub fn smart_join(parts: &[ResolvedPart], separator: &str, no_sep_before: &str) -> String {
     let mut result = String::new();
-    for (i, part) in parts.iter().enumerate() {
-        if i > 0 && !separator.is_empty() {
-            let first_char = part.chars().next();
-            let suppress = first_char
-                .map(|c| no_sep_before.contains(c))
-                .unwrap_or(false);
-            if !suppress {
-                result.push_str(separator);
+    let mut glue_next = false;
+    for part in parts {
+        match part {
+            ResolvedPart::Glue => {
+                glue_next = true;
+            }
+            ResolvedPart::Text(text) => {
+                if !result.is_empty() && !separator.is_empty() && !glue_next {
+                    let first_char = text.chars().next();
+                    let suppress = first_char
+                        .map(|c| no_sep_before.contains(c))
+                        .unwrap_or(false);
+                    if !suppress {
+                        result.push_str(separator);
+                    }
+                }
+                glue_next = false;
+                result.push_str(text);
             }
         }
-        result.push_str(part);
     }
     result
 }
@@ -147,4 +167,56 @@ pub fn read_render_config(db: &Connection) -> (String, String) {
         .unwrap_or_else(|_| ".,;:!?".to_string());
 
     (separator, no_separator_before)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn text(s: &str) -> ResolvedPart {
+        ResolvedPart::Text(s.to_string())
+    }
+
+    #[test]
+    fn test_smart_join_basic() {
+        let parts = vec![text("La"), text("hundo"), text("dormas"), text(".")];
+        assert_eq!(smart_join(&parts, " ", ".,;:!?"), "La hundo dormas.");
+    }
+
+    #[test]
+    fn test_smart_join_glue() {
+        // mal~bon~a hundo → "malbona hundo"
+        let parts = vec![
+            text("mal"),
+            ResolvedPart::Glue,
+            text("bon"),
+            ResolvedPart::Glue,
+            text("a"),
+            text("hundo"),
+        ];
+        assert_eq!(smart_join(&parts, " ", ".,;:!?"), "malbona hundo");
+    }
+
+    #[test]
+    fn test_smart_join_glue_with_punctuation() {
+        // mal~bon~a hundo "."
+        let parts = vec![
+            text("mal"),
+            ResolvedPart::Glue,
+            text("bona"),
+            text("hundo"),
+            text("."),
+        ];
+        assert_eq!(smart_join(&parts, " ", ".,;:!?"), "malbona hundo.");
+    }
+
+    #[test]
+    fn test_parse_hut_glue() {
+        let tokens = parse_hut(r#""mal"~"bona" "hundo""#, "test.hut").unwrap();
+        assert_eq!(tokens.len(), 4);
+        assert!(matches!(tokens[0], ast::Token::Lit(_)));
+        assert!(matches!(tokens[1], ast::Token::Glue));
+        assert!(matches!(tokens[2], ast::Token::Lit(_)));
+        assert!(matches!(tokens[3], ast::Token::Lit(_)));
+    }
 }

@@ -1,0 +1,17 @@
+# Ik werk. (I work.)
+"Ik" werken[tense=present, person=1, number=sg] "."
+
+# De kat rijdt. (The cat rides.)
+"De" kat werken[tense=present, person=3, number=sg] "."
+
+# Wij reden. (We rode.)
+"Wij" rijden[tense=past, person=1, number=pl] "."
+
+# De katten zijn. (The cats are.)
+"De" kat[number=pl] zijn[tense=present, person=3, number=pl] "."
+
+# Hij was. (He was.)
+"Hij" zijn[tense=past, person=3, number=sg] "."
+
+# De huizen zijn groot. (The houses are big.)
+"De" huis[number=pl] zijn[tense=present, person=3, number=pl] "groot."

@@ -30,6 +30,7 @@ pub enum TokenKind {
     Slash,     // /
     Bang,      // !
     Pipe,      // |
+    Tilde,     // ~
 
     // @-prefixed directives
     AtUse,       // @use
