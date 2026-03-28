@@ -1,3 +1,5 @@
+# @source main.hu
+
 # Eve geliyorum. (I am coming to the house.)
 ev[case=dat, number=sg] gelmek[tense=present_cont, person=1, number=sg, negation=pos] "."
 

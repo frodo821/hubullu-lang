@@ -11,6 +11,7 @@ mod document;
 mod document_link;
 mod folding;
 mod formatting;
+mod hut_source;
 mod inlay_hints;
 mod hover;
 mod references;
@@ -30,6 +31,7 @@ use lsp_types::{
 use crate::phase1::Phase1Result;
 use crate::phase2::Phase2Result;
 use crate::span::FileId;
+use crate::token::Token;
 
 use document::DocumentStore;
 
@@ -38,6 +40,8 @@ struct ProjectState {
     phase1: Phase1Result,
     /// Phase2 result (available when phase1 has no errors).
     phase2: Option<Phase2Result>,
+    /// Per-file token cache (lexed once during project analysis).
+    token_cache: std::collections::HashMap<FileId, Vec<Token>>,
     /// Map from URI string to FileId in the phase1 source map.
     url_to_file_id: std::collections::HashMap<String, FileId>,
 }
@@ -97,13 +101,111 @@ fn server_capabilities() -> ServerCapabilities {
     }
 }
 
+/// Server-wide state.
+struct ServerState {
+    documents: DocumentStore,
+    /// Main project (from workspace root).
+    project: Option<ProjectState>,
+    /// Per-.hu file projects (keyed by the entry file's URI string).
+    /// Used when a .hu file is opened outside the main project.
+    file_projects: std::collections::HashMap<String, ProjectState>,
+    /// Per-.hut file projects (keyed by .hut URI string, from @source directive).
+    hut_projects: std::collections::HashMap<String, ProjectState>,
+    init_params: InitializeParams,
+}
+
+impl ServerState {
+    /// Get the project state relevant for a given URI.
+    ///
+    /// Search order:
+    /// 1. hut_projects (for .hut files with @source)
+    /// 2. main project (if it covers this file)
+    /// 3. file_projects (incremental per-file projects)
+    fn project_for(&self, uri: &Uri) -> Option<&ProjectState> {
+        // .hut-specific project
+        if let Some(proj) = self.hut_projects.get(uri.as_str()) {
+            return Some(proj);
+        }
+        // Main project (if it knows about this file)
+        if let Some(ref proj) = self.project {
+            if proj.url_to_file_id.contains_key(uri.as_str()) {
+                return Some(proj);
+            }
+        }
+        // Per-file incremental project (check if any covers this URI)
+        for proj in self.file_projects.values() {
+            if proj.url_to_file_id.contains_key(uri.as_str()) {
+                return Some(proj);
+            }
+        }
+        // Fallback: main project even if it doesn't cover this file
+        // (still useful for workspace symbols, etc.)
+        self.project.as_ref()
+    }
+
+    /// Ensure a project exists that covers the given .hu file.
+    /// If none exists, run phase1 from this file as entry point.
+    fn ensure_project_for_hu(&mut self, uri: &Uri) {
+        if is_hut_uri(uri) {
+            return;
+        }
+        // Already covered by main project?
+        if let Some(ref proj) = self.project {
+            if proj.url_to_file_id.contains_key(uri.as_str()) {
+                return;
+            }
+        }
+        // Already covered by a file project?
+        for proj in self.file_projects.values() {
+            if proj.url_to_file_id.contains_key(uri.as_str()) {
+                return;
+            }
+        }
+        // Build a new project from this file.
+        if let Some(path) = convert::uri_to_path(uri) {
+            if path.exists() {
+                if let Some(proj) = build_project_state(&path) {
+                    self.file_projects.insert(uri.as_str().to_string(), proj);
+                }
+            }
+        }
+    }
+
+    /// Re-analyze the file project that covers this URI.
+    fn refresh_file_project(&mut self, uri: &Uri) {
+        if is_hut_uri(uri) {
+            return;
+        }
+        // Find which file_project entry covers this URI.
+        let entry_key = self
+            .file_projects
+            .iter()
+            .find(|(_, proj)| proj.url_to_file_id.contains_key(uri.as_str()))
+            .map(|(k, _)| k.clone());
+        if let Some(key) = entry_key {
+            if let Some(entry_uri) = key.parse::<Uri>().ok() {
+                if let Some(path) = convert::uri_to_path(&entry_uri) {
+                    if let Some(new_proj) = build_project_state(&path) {
+                        self.file_projects.insert(key, new_proj);
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn main_loop(connection: &Connection, init_params: InitializeParams) {
-    let mut documents = DocumentStore::default();
-    let mut project: Option<ProjectState> = None;
+    let mut state = ServerState {
+        documents: DocumentStore::default(),
+        project: None,
+        file_projects: std::collections::HashMap::new(),
+        hut_projects: std::collections::HashMap::new(),
+        init_params,
+    };
 
     // Try to discover and analyze the project on startup.
-    if let Some(root) = workspace_root(&init_params) {
-        project = try_analyze_project(&root);
+    if let Some(root) = workspace_root(&state.init_params) {
+        state.project = try_analyze_project(&root);
     }
 
     for msg in &connection.receiver {
@@ -112,12 +214,11 @@ fn main_loop(connection: &Connection, init_params: InitializeParams) {
                 if connection.handle_shutdown(&req).unwrap() {
                     return;
                 }
-                let resp = handle_request(req, &documents, project.as_ref());
+                let resp = handle_request(req, &state);
                 connection.sender.send(Message::Response(resp)).unwrap();
             }
             Message::Notification(notif) => {
-                let notifications =
-                    handle_notification(notif, &mut documents, &mut project, &init_params);
+                let notifications = handle_notification(notif, &mut state);
                 for n in notifications {
                     connection.sender.send(Message::Notification(n)).unwrap();
                 }
@@ -127,38 +228,29 @@ fn main_loop(connection: &Connection, init_params: InitializeParams) {
     }
 }
 
-fn handle_request(
-    req: Request,
-    documents: &DocumentStore,
-    project: Option<&ProjectState>,
-) -> Response {
+fn handle_request(req: Request, state: &ServerState) -> Response {
     let id = req.id.clone();
 
     match req.method.as_str() {
-        "textDocument/definition" => handle_definition(id, req, documents, project),
-        "textDocument/hover" => handle_hover(id, req, documents, project),
-        "textDocument/completion" => handle_completion(id, req, documents, project),
-        "textDocument/semanticTokens/full" => handle_semantic_tokens(id, req, documents),
-        "textDocument/documentSymbol" => handle_document_symbol(id, req, documents),
-        "workspace/symbol" => handle_workspace_symbol(id, req, project),
-        "textDocument/references" => handle_references(id, req, documents, project),
-        "textDocument/documentLink" => handle_document_link(id, req, documents, project),
-        "textDocument/foldingRange" => handle_folding_range(id, req, documents),
-        "textDocument/documentHighlight" => handle_document_highlight(id, req, documents, project),
-        "textDocument/inlayHint" => handle_inlay_hint(id, req, documents, project),
-        "textDocument/formatting" => handle_formatting(id, req, documents),
-        "textDocument/prepareRename" => handle_prepare_rename(id, req, documents),
-        "textDocument/rename" => handle_rename(id, req, documents, project),
+        "textDocument/definition" => handle_definition(id, req, state),
+        "textDocument/hover" => handle_hover(id, req, state),
+        "textDocument/completion" => handle_completion(id, req, state),
+        "textDocument/semanticTokens/full" => handle_semantic_tokens(id, req, state),
+        "textDocument/documentSymbol" => handle_document_symbol(id, req, state),
+        "workspace/symbol" => handle_workspace_symbol(id, req, state),
+        "textDocument/references" => handle_references(id, req, state),
+        "textDocument/documentLink" => handle_document_link(id, req, state),
+        "textDocument/foldingRange" => handle_folding_range(id, req, state),
+        "textDocument/documentHighlight" => handle_document_highlight(id, req, state),
+        "textDocument/inlayHint" => handle_inlay_hint(id, req, state),
+        "textDocument/formatting" => handle_formatting(id, req, state),
+        "textDocument/prepareRename" => handle_prepare_rename(id, req, state),
+        "textDocument/rename" => handle_rename(id, req, state),
         _ => Response::new_err(id, -32601, "method not found".into()),
     }
 }
 
-fn handle_notification(
-    notif: Notification,
-    documents: &mut DocumentStore,
-    project: &mut Option<ProjectState>,
-    init_params: &InitializeParams,
-) -> Vec<Notification> {
+fn handle_notification(notif: Notification, state: &mut ServerState) -> Vec<Notification> {
     let mut out = Vec::new();
 
     match notif.method.as_str() {
@@ -166,38 +258,67 @@ fn handle_notification(
             let params: lsp_types::DidOpenTextDocumentParams =
                 serde_json::from_value(notif.params).unwrap();
             let uri = params.text_document.uri.clone();
-            documents.open(
+            let text = params.text_document.text.clone();
+            state.documents.open(
                 &params.text_document.uri,
                 params.text_document.text,
                 params.text_document.version,
             );
-            out.push(publish_doc_diagnostics(&uri, documents, project.as_ref()));
+            if is_hut_uri(&uri) {
+                try_load_hut_project(&uri, &text, &mut state.hut_projects);
+            } else {
+                // Incremental: if no project covers this .hu file, run phase1 from it.
+                state.ensure_project_for_hu(&uri);
+            }
+            let project = state.project_for(&uri);
+            out.push(publish_doc_diagnostics(&uri, &state.documents, project));
         }
         "textDocument/didChange" => {
             let params: lsp_types::DidChangeTextDocumentParams =
                 serde_json::from_value(notif.params).unwrap();
             let uri = params.text_document.uri.clone();
             if let Some(change) = params.content_changes.into_iter().last() {
-                documents.change(&uri, change.text, params.text_document.version);
+                // For .hut files, re-check @source on change.
+                if is_hut_uri(&uri) {
+                    try_load_hut_project(&uri, &change.text, &mut state.hut_projects);
+                }
+                state.documents.change(&uri, change.text, params.text_document.version);
             }
-            out.push(publish_doc_diagnostics(&uri, documents, project.as_ref()));
+            let project = state.project_for(&uri);
+            out.push(publish_doc_diagnostics(&uri, &state.documents, project));
         }
         "textDocument/didSave" => {
-            if let Some(root) = workspace_root(init_params) {
-                *project = try_analyze_project(&root);
-            }
             let params: lsp_types::DidSaveTextDocumentParams =
                 serde_json::from_value(notif.params).unwrap();
-            out.push(publish_doc_diagnostics(
-                &params.text_document.uri,
-                documents,
-                project.as_ref(),
-            ));
+            let uri = params.text_document.uri.clone();
+
+            // Re-run main project analysis on save.
+            if let Some(root) = workspace_root(&state.init_params) {
+                state.project = try_analyze_project(&root);
+            }
+
+            if is_hut_uri(&uri) {
+                if let Some(doc) = state.documents.get(&uri) {
+                    let text = doc.text.clone();
+                    try_load_hut_project(&uri, &text, &mut state.hut_projects);
+                }
+            } else {
+                // Refresh file-level project on save.
+                state.refresh_file_project(&uri);
+                // If still not covered, create one.
+                state.ensure_project_for_hu(&uri);
+            }
+
+            let project = state.project_for(&uri);
+            out.push(publish_doc_diagnostics(&uri, &state.documents, project));
         }
         "textDocument/didClose" => {
             let params: lsp_types::DidCloseTextDocumentParams =
                 serde_json::from_value(notif.params).unwrap();
-            documents.close(&params.text_document.uri);
+            let uri_str = params.text_document.uri.as_str();
+            state.documents.close(&params.text_document.uri);
+            state.hut_projects.remove(uri_str);
+            state.file_projects.remove(uri_str);
             out.push(diagnostics::clear_notification(&params.text_document.uri));
         }
         _ => {}
@@ -210,229 +331,131 @@ fn handle_notification(
 // Request handlers
 // ---------------------------------------------------------------------------
 
-fn handle_definition(
-    id: RequestId,
-    req: Request,
-    documents: &DocumentStore,
-    project: Option<&ProjectState>,
-) -> Response {
-    let params: lsp_types::GotoDefinitionParams =
-        serde_json::from_value(req.params).unwrap();
+fn handle_definition(id: RequestId, req: Request, s: &ServerState) -> Response {
+    let params: lsp_types::GotoDefinitionParams = serde_json::from_value(req.params).unwrap();
     let uri = &params.text_document_position_params.text_document.uri;
-
+    let project = s.project_for(uri);
     let result = (|| {
         let p1 = &project?.phase1;
-        let doc = documents.get(uri)?;
+        let doc = s.documents.get(uri)?;
         let file_id = find_file_id(uri, project?)?;
         let offset = convert::position_to_offset(
-            &params.text_document_position_params.position,
-            file_id,
-            &p1.source_map,
+            &params.text_document_position_params.position, file_id, &p1.source_map,
         )?;
         definition::goto_definition(file_id, offset, &doc.parse_result.tokens, p1)
     })();
-
     Response::new_ok(id, serde_json::to_value(result).unwrap())
 }
 
-fn handle_hover(
-    id: RequestId,
-    req: Request,
-    documents: &DocumentStore,
-    project: Option<&ProjectState>,
-) -> Response {
-    let params: lsp_types::HoverParams =
-        serde_json::from_value(req.params).unwrap();
+fn handle_hover(id: RequestId, req: Request, s: &ServerState) -> Response {
+    let params: lsp_types::HoverParams = serde_json::from_value(req.params).unwrap();
     let uri = &params.text_document_position_params.text_document.uri;
-
+    let project = s.project_for(uri);
     let result = (|| {
         let p1 = &project?.phase1;
-        let doc = documents.get(uri)?;
+        let doc = s.documents.get(uri)?;
         let file_id = find_file_id(uri, project?)?;
         let offset = convert::position_to_offset(
-            &params.text_document_position_params.position,
-            file_id,
-            &p1.source_map,
+            &params.text_document_position_params.position, file_id, &p1.source_map,
         )?;
         hover::hover(file_id, offset, &doc.parse_result.tokens, p1)
     })();
-
     Response::new_ok(id, serde_json::to_value(result).unwrap())
 }
 
-fn handle_completion(
-    id: RequestId,
-    req: Request,
-    documents: &DocumentStore,
-    project: Option<&ProjectState>,
-) -> Response {
-    let params: lsp_types::CompletionParams =
-        serde_json::from_value(req.params).unwrap();
+fn handle_completion(id: RequestId, req: Request, s: &ServerState) -> Response {
+    let params: lsp_types::CompletionParams = serde_json::from_value(req.params).unwrap();
     let uri = &params.text_document_position.text_document.uri;
-
+    let project = s.project_for(uri);
     let result = (|| {
-        let doc = documents.get(uri)?;
+        let doc = s.documents.get(uri)?;
         let file_id = project.and_then(|p| find_file_id(uri, p));
         let offset = convert::position_to_offset(
-            &params.text_document_position.position,
-            doc.parse_result.file_id,
-            &doc.parse_result.source_map,
+            &params.text_document_position.position, doc.parse_result.file_id, &doc.parse_result.source_map,
         )?;
         Some(completion::complete(
-            file_id.unwrap_or(doc.parse_result.file_id),
-            offset,
-            &doc.parse_result.tokens,
+            file_id.unwrap_or(doc.parse_result.file_id), offset, &doc.parse_result.tokens,
             project.map(|p| &p.phase1),
         ))
     })();
-
     Response::new_ok(id, serde_json::to_value(result).unwrap())
 }
 
-fn handle_semantic_tokens(
-    id: RequestId,
-    req: Request,
-    documents: &DocumentStore,
-) -> Response {
-    let params: lsp_types::SemanticTokensParams =
-        serde_json::from_value(req.params).unwrap();
+fn handle_semantic_tokens(id: RequestId, req: Request, s: &ServerState) -> Response {
+    let params: lsp_types::SemanticTokensParams = serde_json::from_value(req.params).unwrap();
     let uri = &params.text_document.uri;
-
-    let result = documents.get(uri).map(|doc| {
+    let result = s.documents.get(uri).map(|doc| {
         semantic_tokens::generate(
-            &doc.parse_result.tokens,
-            &[], // TODO: comment spans from lexer
-            doc.parse_result.file_id,
-            &doc.parse_result.source_map,
+            &doc.parse_result.tokens, &[],
+            doc.parse_result.file_id, &doc.parse_result.source_map,
         )
     });
-
     Response::new_ok(id, serde_json::to_value(result).unwrap())
 }
 
-fn handle_document_symbol(
-    id: RequestId,
-    req: Request,
-    documents: &DocumentStore,
-) -> Response {
-    let params: lsp_types::DocumentSymbolParams =
-        serde_json::from_value(req.params).unwrap();
+fn handle_document_symbol(id: RequestId, req: Request, s: &ServerState) -> Response {
+    let params: lsp_types::DocumentSymbolParams = serde_json::from_value(req.params).unwrap();
     let uri = &params.text_document.uri;
-
-    let result = documents.get(uri).map(|doc| {
-        lsp_types::DocumentSymbolResponse::Nested(
-            symbols::document_symbols(&doc.parse_result),
-        )
+    let result = s.documents.get(uri).map(|doc| {
+        lsp_types::DocumentSymbolResponse::Nested(symbols::document_symbols(&doc.parse_result))
     });
-
     Response::new_ok(id, serde_json::to_value(result).unwrap())
 }
 
-fn handle_workspace_symbol(
-    id: RequestId,
-    req: Request,
-    project: Option<&ProjectState>,
-) -> Response {
-    let params: lsp_types::WorkspaceSymbolParams =
-        serde_json::from_value(req.params).unwrap();
-
-    let result = project.map(|proj| {
+fn handle_workspace_symbol(id: RequestId, req: Request, s: &ServerState) -> Response {
+    let params: lsp_types::WorkspaceSymbolParams = serde_json::from_value(req.params).unwrap();
+    let result = s.project.as_ref().map(|proj| {
         symbols::workspace_symbols(&params.query, &proj.phase1)
     });
-
     Response::new_ok(id, serde_json::to_value(result).unwrap())
 }
 
-fn handle_references(
-    id: RequestId,
-    req: Request,
-    documents: &DocumentStore,
-    project: Option<&ProjectState>,
-) -> Response {
-    let params: lsp_types::ReferenceParams =
-        serde_json::from_value(req.params).unwrap();
+fn handle_references(id: RequestId, req: Request, s: &ServerState) -> Response {
+    let params: lsp_types::ReferenceParams = serde_json::from_value(req.params).unwrap();
     let uri = &params.text_document_position.text_document.uri;
-
+    let project = s.project_for(uri);
     let result: Option<Vec<lsp_types::Location>> = (|| {
-        let p1 = &project?.phase1;
-        let doc = documents.get(uri)?;
-        let file_id = find_file_id(uri, project?)?;
+        let proj = project?;
+        let doc = s.documents.get(uri)?;
+        let file_id = find_file_id(uri, proj)?;
         let offset = convert::position_to_offset(
-            &params.text_document_position.position,
-            file_id,
-            &p1.source_map,
+            &params.text_document_position.position, file_id, &proj.phase1.source_map,
         )?;
-        let locs = references::find_references(
-            file_id,
-            offset,
-            &doc.parse_result.tokens,
-            p1,
-            params.context.include_declaration,
-        );
-        Some(locs)
+        Some(references::find_references(
+            file_id, offset, &doc.parse_result.tokens, &proj.phase1,
+            &proj.token_cache, params.context.include_declaration,
+        ))
     })();
-
     Response::new_ok(id, serde_json::to_value(result).unwrap())
 }
 
-fn handle_document_link(
-    id: RequestId,
-    req: Request,
-    documents: &DocumentStore,
-    project: Option<&ProjectState>,
-) -> Response {
-    let params: lsp_types::DocumentLinkParams =
-        serde_json::from_value(req.params).unwrap();
+fn handle_document_link(id: RequestId, req: Request, s: &ServerState) -> Response {
+    let params: lsp_types::DocumentLinkParams = serde_json::from_value(req.params).unwrap();
     let uri = &params.text_document.uri;
-
-    let result = documents.get(uri).map(|doc| {
-        document_link::document_links(
-            &doc.parse_result,
-            project.map(|p| &p.phase1),
-        )
+    let project = s.project_for(uri);
+    let result = s.documents.get(uri).map(|doc| {
+        document_link::document_links(&doc.parse_result, project.map(|p| &p.phase1))
     });
-
     Response::new_ok(id, serde_json::to_value(result).unwrap())
 }
 
-fn handle_folding_range(
-    id: RequestId,
-    req: Request,
-    documents: &DocumentStore,
-) -> Response {
-    let params: lsp_types::FoldingRangeParams =
-        serde_json::from_value(req.params).unwrap();
+fn handle_folding_range(id: RequestId, req: Request, s: &ServerState) -> Response {
+    let params: lsp_types::FoldingRangeParams = serde_json::from_value(req.params).unwrap();
     let uri = &params.text_document.uri;
-
-    let result = documents.get(uri).map(|doc| {
-        folding::folding_ranges(&doc.parse_result)
-    });
-
+    let result = s.documents.get(uri).map(|doc| folding::folding_ranges(&doc.parse_result));
     Response::new_ok(id, serde_json::to_value(result).unwrap())
 }
 
-fn handle_document_highlight(
-    id: RequestId,
-    req: Request,
-    documents: &DocumentStore,
-    _project: Option<&ProjectState>,
-) -> Response {
-    let params: lsp_types::DocumentHighlightParams =
-        serde_json::from_value(req.params).unwrap();
+fn handle_document_highlight(id: RequestId, req: Request, s: &ServerState) -> Response {
+    let params: lsp_types::DocumentHighlightParams = serde_json::from_value(req.params).unwrap();
     let uri = &params.text_document_position_params.text_document.uri;
-
     let result: Option<Vec<lsp_types::DocumentHighlight>> = (|| {
-        let doc = documents.get(uri)?;
+        let doc = s.documents.get(uri)?;
         let file_id = doc.parse_result.file_id;
         let source_map = &doc.parse_result.source_map;
-
         let offset = convert::position_to_offset(
-            &params.text_document_position_params.position,
-            file_id,
-            source_map,
+            &params.text_document_position_params.position, file_id, source_map,
         )?;
-
-        // Find the ident at cursor.
         let target_name = doc.parse_result.tokens.iter().find_map(|t| {
             if t.span.file_id == file_id && t.span.start <= offset && offset < t.span.end {
                 if let crate::token::TokenKind::Ident(name) = &t.node {
@@ -441,124 +464,76 @@ fn handle_document_highlight(
             }
             None
         })?;
-
-        // Highlight all same-name idents in this file.
-        let highlights: Vec<_> = doc
-            .parse_result
-            .tokens
-            .iter()
-            .filter_map(|t| {
-                if t.span.file_id == file_id {
-                    if let crate::token::TokenKind::Ident(name) = &t.node {
-                        if name == &target_name {
-                            return Some(lsp_types::DocumentHighlight {
-                                range: convert::span_to_range(&t.span, source_map),
-                                kind: Some(lsp_types::DocumentHighlightKind::TEXT),
-                            });
-                        }
+        let highlights: Vec<_> = doc.parse_result.tokens.iter().filter_map(|t| {
+            if t.span.file_id == file_id {
+                if let crate::token::TokenKind::Ident(name) = &t.node {
+                    if name == &target_name {
+                        return Some(lsp_types::DocumentHighlight {
+                            range: convert::span_to_range(&t.span, source_map),
+                            kind: Some(lsp_types::DocumentHighlightKind::TEXT),
+                        });
                     }
                 }
-                None
-            })
-            .collect();
-
+            }
+            None
+        }).collect();
         Some(highlights)
     })();
-
     Response::new_ok(id, serde_json::to_value(result).unwrap())
 }
 
-fn handle_inlay_hint(
-    id: RequestId,
-    req: Request,
-    _documents: &DocumentStore,
-    project: Option<&ProjectState>,
-) -> Response {
-    let params: lsp_types::InlayHintParams =
-        serde_json::from_value(req.params).unwrap();
+fn handle_inlay_hint(id: RequestId, req: Request, s: &ServerState) -> Response {
+    let params: lsp_types::InlayHintParams = serde_json::from_value(req.params).unwrap();
     let uri = &params.text_document.uri;
-
+    let project = s.project_for(uri);
     let result: Option<Vec<lsp_types::InlayHint>> = (|| {
         let proj = project?;
         let p2 = proj.phase2.as_ref()?;
         let file_id = find_file_id(uri, proj)?;
         let file_ast = proj.phase1.files.get(&file_id)?;
-        Some(inlay_hints::inlay_hints(
-            file_id,
-            file_ast,
-            p2,
-            &proj.phase1.source_map,
-        ))
+        Some(inlay_hints::inlay_hints(file_id, file_ast, p2, &proj.phase1.source_map))
     })();
-
     Response::new_ok(id, serde_json::to_value(result).unwrap())
 }
 
-fn handle_formatting(
-    id: RequestId,
-    req: Request,
-    documents: &DocumentStore,
-) -> Response {
-    let params: lsp_types::DocumentFormattingParams =
-        serde_json::from_value(req.params).unwrap();
+fn handle_formatting(id: RequestId, req: Request, s: &ServerState) -> Response {
+    let params: lsp_types::DocumentFormattingParams = serde_json::from_value(req.params).unwrap();
     let uri = &params.text_document.uri;
-
-    let result = documents.get(uri).map(|doc| {
-        formatting::format_document(&doc.text)
-    });
-
+    let result = s.documents.get(uri).map(|doc| formatting::format_document(&doc.text));
     Response::new_ok(id, serde_json::to_value(result).unwrap())
 }
 
-fn handle_prepare_rename(
-    id: RequestId,
-    req: Request,
-    documents: &DocumentStore,
-) -> Response {
-    let params: lsp_types::TextDocumentPositionParams =
-        serde_json::from_value(req.params).unwrap();
+fn handle_prepare_rename(id: RequestId, req: Request, s: &ServerState) -> Response {
+    let params: lsp_types::TextDocumentPositionParams = serde_json::from_value(req.params).unwrap();
     let uri = &params.text_document.uri;
-
     let result = (|| {
-        let doc = documents.get(uri)?;
+        let doc = s.documents.get(uri)?;
         let offset = convert::position_to_offset(
-            &params.position,
-            doc.parse_result.file_id,
-            &doc.parse_result.source_map,
+            &params.position, doc.parse_result.file_id, &doc.parse_result.source_map,
         )?;
         rename::prepare_rename(
-            doc.parse_result.file_id,
-            offset,
-            &doc.parse_result.tokens,
-            &doc.parse_result.source_map,
+            doc.parse_result.file_id, offset, &doc.parse_result.tokens, &doc.parse_result.source_map,
         )
     })();
-
     Response::new_ok(id, serde_json::to_value(result).unwrap())
 }
 
-fn handle_rename(
-    id: RequestId,
-    req: Request,
-    documents: &DocumentStore,
-    project: Option<&ProjectState>,
-) -> Response {
-    let params: lsp_types::RenameParams =
-        serde_json::from_value(req.params).unwrap();
+fn handle_rename(id: RequestId, req: Request, s: &ServerState) -> Response {
+    let params: lsp_types::RenameParams = serde_json::from_value(req.params).unwrap();
     let uri = &params.text_document_position.text_document.uri;
-
+    let project = s.project_for(uri);
     let result = (|| {
-        let p1 = &project?.phase1;
-        let doc = documents.get(uri)?;
-        let file_id = find_file_id(uri, project?)?;
+        let proj = project?;
+        let doc = s.documents.get(uri)?;
+        let file_id = find_file_id(uri, proj)?;
         let offset = convert::position_to_offset(
-            &params.text_document_position.position,
-            file_id,
-            &p1.source_map,
+            &params.text_document_position.position, file_id, &proj.phase1.source_map,
         )?;
-        rename::rename(file_id, offset, &params.new_name, &doc.parse_result.tokens, p1)
+        rename::rename(
+            file_id, offset, &params.new_name, &doc.parse_result.tokens,
+            &proj.phase1, &proj.token_cache,
+        )
     })();
-
     Response::new_ok(id, serde_json::to_value(result).unwrap())
 }
 
@@ -613,19 +588,28 @@ fn workspace_root(init_params: &InitializeParams) -> Option<PathBuf> {
 
 fn try_analyze_project(root: &PathBuf) -> Option<ProjectState> {
     let entry_path = find_entry_file(root)?;
-    let phase1 = crate::phase1::run_phase1(&entry_path);
+    build_project_state(&entry_path)
+}
 
-    // Run phase2 if phase1 succeeded (needed for inlay hints with resolved forms).
+/// Build a complete ProjectState from an entry file path.
+/// Runs phase1 (+ phase2 if no errors), caches tokens, builds URI map.
+fn build_project_state(entry_path: &std::path::Path) -> Option<ProjectState> {
+    let phase1 = crate::phase1::run_phase1(entry_path);
+
     let phase2 = if !phase1.diagnostics.has_errors() {
         let p2 = crate::phase2::run_phase2(&phase1);
-        if !p2.diagnostics.has_errors() {
-            Some(p2)
-        } else {
-            None
-        }
+        if !p2.diagnostics.has_errors() { Some(p2) } else { None }
     } else {
         None
     };
+
+    let mut token_cache = std::collections::HashMap::new();
+    for fid in phase1.source_map.file_ids() {
+        let source = phase1.source_map.source(fid);
+        let lexer = crate::lexer::Lexer::new(source, fid);
+        let (tokens, _) = lexer.tokenize();
+        token_cache.insert(fid, tokens);
+    }
 
     let mut url_to_file_id = std::collections::HashMap::new();
     for fid in phase1.source_map.file_ids() {
@@ -635,11 +619,7 @@ fn try_analyze_project(root: &PathBuf) -> Option<ProjectState> {
         }
     }
 
-    Some(ProjectState {
-        phase1,
-        phase2,
-        url_to_file_id,
-    })
+    Some(ProjectState { phase1, phase2, token_cache, url_to_file_id })
 }
 
 fn find_entry_file(root: &PathBuf) -> Option<PathBuf> {
@@ -663,4 +643,31 @@ fn find_entry_file(root: &PathBuf) -> Option<PathBuf> {
 
 fn find_file_id(uri: &Uri, project: &ProjectState) -> Option<FileId> {
     project.url_to_file_id.get(uri.as_str()).copied()
+}
+
+fn is_hut_uri(uri: &Uri) -> bool {
+    uri.as_str().ends_with(".hut")
+}
+
+/// Load a project for a `.hut` file based on its `# @source` directive.
+fn try_load_hut_project(
+    hut_uri: &Uri,
+    hut_text: &str,
+    hut_projects: &mut std::collections::HashMap<String, ProjectState>,
+) {
+    let source_path = match hut_source::parse_source_directive(hut_text) {
+        Some(p) => p,
+        None => return,
+    };
+    let hut_file_path = match convert::uri_to_path(hut_uri) {
+        Some(p) => p,
+        None => return,
+    };
+    let entry_path = hut_source::resolve_source_path(&hut_file_path, &source_path);
+    if !entry_path.exists() {
+        return;
+    }
+    if let Some(proj) = build_project_state(&entry_path) {
+        hut_projects.insert(hut_uri.as_str().to_string(), proj);
+    }
 }
