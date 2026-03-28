@@ -24,17 +24,19 @@ pub fn document_links(
 
         let range = convert::span_to_range(&import.path.span, source_map);
 
-        // Try to resolve the path to an actual file URI.
+        // Only emit a link when the target file can be resolved.
         let target = phase1.and_then(|p1| {
             resolve_import_target(&import.path.node, p1)
         });
 
-        links.push(DocumentLink {
-            range,
-            target,
-            tooltip: Some(format!("Open {}", import.path.node)),
-            data: None,
-        });
+        if let Some(uri) = target {
+            links.push(DocumentLink {
+                range,
+                target: Some(uri),
+                tooltip: Some(format!("Open {}", import.path.node)),
+                data: None,
+            });
+        }
     }
 
     links
