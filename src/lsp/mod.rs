@@ -8,8 +8,15 @@ mod convert;
 mod definition;
 mod diagnostics;
 mod document;
+mod document_link;
+mod folding;
+mod formatting;
+mod inlay_hints;
 mod hover;
+mod references;
+mod rename;
 mod semantic_tokens;
+mod symbols;
 
 use std::path::PathBuf;
 
@@ -17,10 +24,11 @@ use lsp_server::{Connection, Message, Notification, Request, RequestId, Response
 use lsp_types::{
     CompletionOptions, InitializeParams, OneOf, SemanticTokensFullOptions,
     SemanticTokensOptions, SemanticTokensServerCapabilities, ServerCapabilities,
-    TextDocumentSyncCapability, TextDocumentSyncKind, Uri,
+    TextDocumentSyncCapability, TextDocumentSyncKind, Uri, WorkDoneProgressOptions,
 };
 
 use crate::phase1::Phase1Result;
+use crate::phase2::Phase2Result;
 use crate::span::FileId;
 
 use document::DocumentStore;
@@ -28,6 +36,8 @@ use document::DocumentStore;
 /// Cached project-level analysis (populated on save).
 struct ProjectState {
     phase1: Phase1Result,
+    /// Phase2 result (available when phase1 has no errors).
+    phase2: Option<Phase2Result>,
     /// Map from URI string to FileId in the phase1 source map.
     url_to_file_id: std::collections::HashMap<String, FileId>,
 }
@@ -68,6 +78,21 @@ fn server_capabilities() -> ServerCapabilities {
                 ..Default::default()
             },
         )),
+        document_symbol_provider: Some(OneOf::Left(true)),
+        workspace_symbol_provider: Some(OneOf::Left(true)),
+        references_provider: Some(OneOf::Left(true)),
+        document_link_provider: Some(lsp_types::DocumentLinkOptions {
+            resolve_provider: Some(false),
+            work_done_progress_options: WorkDoneProgressOptions::default(),
+        }),
+        folding_range_provider: Some(lsp_types::FoldingRangeProviderCapability::Simple(true)),
+        document_highlight_provider: Some(OneOf::Left(true)),
+        inlay_hint_provider: Some(OneOf::Left(true)),
+        document_formatting_provider: Some(OneOf::Left(true)),
+        rename_provider: Some(OneOf::Right(lsp_types::RenameOptions {
+            prepare_provider: Some(true),
+            work_done_progress_options: WorkDoneProgressOptions::default(),
+        })),
         ..Default::default()
     }
 }
@@ -114,6 +139,16 @@ fn handle_request(
         "textDocument/hover" => handle_hover(id, req, documents, project),
         "textDocument/completion" => handle_completion(id, req, documents, project),
         "textDocument/semanticTokens/full" => handle_semantic_tokens(id, req, documents),
+        "textDocument/documentSymbol" => handle_document_symbol(id, req, documents),
+        "workspace/symbol" => handle_workspace_symbol(id, req, project),
+        "textDocument/references" => handle_references(id, req, documents, project),
+        "textDocument/documentLink" => handle_document_link(id, req, documents, project),
+        "textDocument/foldingRange" => handle_folding_range(id, req, documents),
+        "textDocument/documentHighlight" => handle_document_highlight(id, req, documents, project),
+        "textDocument/inlayHint" => handle_inlay_hint(id, req, documents, project),
+        "textDocument/formatting" => handle_formatting(id, req, documents),
+        "textDocument/prepareRename" => handle_prepare_rename(id, req, documents),
+        "textDocument/rename" => handle_rename(id, req, documents, project),
         _ => Response::new_err(id, -32601, "method not found".into()),
     }
 }
@@ -275,6 +310,258 @@ fn handle_semantic_tokens(
     Response::new_ok(id, serde_json::to_value(result).unwrap())
 }
 
+fn handle_document_symbol(
+    id: RequestId,
+    req: Request,
+    documents: &DocumentStore,
+) -> Response {
+    let params: lsp_types::DocumentSymbolParams =
+        serde_json::from_value(req.params).unwrap();
+    let uri = &params.text_document.uri;
+
+    let result = documents.get(uri).map(|doc| {
+        lsp_types::DocumentSymbolResponse::Nested(
+            symbols::document_symbols(&doc.parse_result),
+        )
+    });
+
+    Response::new_ok(id, serde_json::to_value(result).unwrap())
+}
+
+fn handle_workspace_symbol(
+    id: RequestId,
+    req: Request,
+    project: Option<&ProjectState>,
+) -> Response {
+    let params: lsp_types::WorkspaceSymbolParams =
+        serde_json::from_value(req.params).unwrap();
+
+    let result = project.map(|proj| {
+        symbols::workspace_symbols(&params.query, &proj.phase1)
+    });
+
+    Response::new_ok(id, serde_json::to_value(result).unwrap())
+}
+
+fn handle_references(
+    id: RequestId,
+    req: Request,
+    documents: &DocumentStore,
+    project: Option<&ProjectState>,
+) -> Response {
+    let params: lsp_types::ReferenceParams =
+        serde_json::from_value(req.params).unwrap();
+    let uri = &params.text_document_position.text_document.uri;
+
+    let result: Option<Vec<lsp_types::Location>> = (|| {
+        let p1 = &project?.phase1;
+        let doc = documents.get(uri)?;
+        let file_id = find_file_id(uri, project?)?;
+        let offset = convert::position_to_offset(
+            &params.text_document_position.position,
+            file_id,
+            &p1.source_map,
+        )?;
+        let locs = references::find_references(
+            file_id,
+            offset,
+            &doc.parse_result.tokens,
+            p1,
+            params.context.include_declaration,
+        );
+        Some(locs)
+    })();
+
+    Response::new_ok(id, serde_json::to_value(result).unwrap())
+}
+
+fn handle_document_link(
+    id: RequestId,
+    req: Request,
+    documents: &DocumentStore,
+    project: Option<&ProjectState>,
+) -> Response {
+    let params: lsp_types::DocumentLinkParams =
+        serde_json::from_value(req.params).unwrap();
+    let uri = &params.text_document.uri;
+
+    let result = documents.get(uri).map(|doc| {
+        document_link::document_links(
+            &doc.parse_result,
+            project.map(|p| &p.phase1),
+        )
+    });
+
+    Response::new_ok(id, serde_json::to_value(result).unwrap())
+}
+
+fn handle_folding_range(
+    id: RequestId,
+    req: Request,
+    documents: &DocumentStore,
+) -> Response {
+    let params: lsp_types::FoldingRangeParams =
+        serde_json::from_value(req.params).unwrap();
+    let uri = &params.text_document.uri;
+
+    let result = documents.get(uri).map(|doc| {
+        folding::folding_ranges(&doc.parse_result)
+    });
+
+    Response::new_ok(id, serde_json::to_value(result).unwrap())
+}
+
+fn handle_document_highlight(
+    id: RequestId,
+    req: Request,
+    documents: &DocumentStore,
+    _project: Option<&ProjectState>,
+) -> Response {
+    let params: lsp_types::DocumentHighlightParams =
+        serde_json::from_value(req.params).unwrap();
+    let uri = &params.text_document_position_params.text_document.uri;
+
+    let result: Option<Vec<lsp_types::DocumentHighlight>> = (|| {
+        let doc = documents.get(uri)?;
+        let file_id = doc.parse_result.file_id;
+        let source_map = &doc.parse_result.source_map;
+
+        let offset = convert::position_to_offset(
+            &params.text_document_position_params.position,
+            file_id,
+            source_map,
+        )?;
+
+        // Find the ident at cursor.
+        let target_name = doc.parse_result.tokens.iter().find_map(|t| {
+            if t.span.file_id == file_id && t.span.start <= offset && offset < t.span.end {
+                if let crate::token::TokenKind::Ident(name) = &t.node {
+                    return Some(name.clone());
+                }
+            }
+            None
+        })?;
+
+        // Highlight all same-name idents in this file.
+        let highlights: Vec<_> = doc
+            .parse_result
+            .tokens
+            .iter()
+            .filter_map(|t| {
+                if t.span.file_id == file_id {
+                    if let crate::token::TokenKind::Ident(name) = &t.node {
+                        if name == &target_name {
+                            return Some(lsp_types::DocumentHighlight {
+                                range: convert::span_to_range(&t.span, source_map),
+                                kind: Some(lsp_types::DocumentHighlightKind::TEXT),
+                            });
+                        }
+                    }
+                }
+                None
+            })
+            .collect();
+
+        Some(highlights)
+    })();
+
+    Response::new_ok(id, serde_json::to_value(result).unwrap())
+}
+
+fn handle_inlay_hint(
+    id: RequestId,
+    req: Request,
+    _documents: &DocumentStore,
+    project: Option<&ProjectState>,
+) -> Response {
+    let params: lsp_types::InlayHintParams =
+        serde_json::from_value(req.params).unwrap();
+    let uri = &params.text_document.uri;
+
+    let result: Option<Vec<lsp_types::InlayHint>> = (|| {
+        let proj = project?;
+        let p2 = proj.phase2.as_ref()?;
+        let file_id = find_file_id(uri, proj)?;
+        let file_ast = proj.phase1.files.get(&file_id)?;
+        Some(inlay_hints::inlay_hints(
+            file_id,
+            file_ast,
+            p2,
+            &proj.phase1.source_map,
+        ))
+    })();
+
+    Response::new_ok(id, serde_json::to_value(result).unwrap())
+}
+
+fn handle_formatting(
+    id: RequestId,
+    req: Request,
+    documents: &DocumentStore,
+) -> Response {
+    let params: lsp_types::DocumentFormattingParams =
+        serde_json::from_value(req.params).unwrap();
+    let uri = &params.text_document.uri;
+
+    let result = documents.get(uri).map(|doc| {
+        formatting::format_document(&doc.text)
+    });
+
+    Response::new_ok(id, serde_json::to_value(result).unwrap())
+}
+
+fn handle_prepare_rename(
+    id: RequestId,
+    req: Request,
+    documents: &DocumentStore,
+) -> Response {
+    let params: lsp_types::TextDocumentPositionParams =
+        serde_json::from_value(req.params).unwrap();
+    let uri = &params.text_document.uri;
+
+    let result = (|| {
+        let doc = documents.get(uri)?;
+        let offset = convert::position_to_offset(
+            &params.position,
+            doc.parse_result.file_id,
+            &doc.parse_result.source_map,
+        )?;
+        rename::prepare_rename(
+            doc.parse_result.file_id,
+            offset,
+            &doc.parse_result.tokens,
+            &doc.parse_result.source_map,
+        )
+    })();
+
+    Response::new_ok(id, serde_json::to_value(result).unwrap())
+}
+
+fn handle_rename(
+    id: RequestId,
+    req: Request,
+    documents: &DocumentStore,
+    project: Option<&ProjectState>,
+) -> Response {
+    let params: lsp_types::RenameParams =
+        serde_json::from_value(req.params).unwrap();
+    let uri = &params.text_document_position.text_document.uri;
+
+    let result = (|| {
+        let p1 = &project?.phase1;
+        let doc = documents.get(uri)?;
+        let file_id = find_file_id(uri, project?)?;
+        let offset = convert::position_to_offset(
+            &params.text_document_position.position,
+            file_id,
+            &p1.source_map,
+        )?;
+        rename::rename(file_id, offset, &params.new_name, &doc.parse_result.tokens, p1)
+    })();
+
+    Response::new_ok(id, serde_json::to_value(result).unwrap())
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -328,6 +615,18 @@ fn try_analyze_project(root: &PathBuf) -> Option<ProjectState> {
     let entry_path = find_entry_file(root)?;
     let phase1 = crate::phase1::run_phase1(&entry_path);
 
+    // Run phase2 if phase1 succeeded (needed for inlay hints with resolved forms).
+    let phase2 = if !phase1.diagnostics.has_errors() {
+        let p2 = crate::phase2::run_phase2(&phase1);
+        if !p2.diagnostics.has_errors() {
+            Some(p2)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     let mut url_to_file_id = std::collections::HashMap::new();
     for fid in phase1.source_map.file_ids() {
         let path = phase1.source_map.path(fid);
@@ -338,6 +637,7 @@ fn try_analyze_project(root: &PathBuf) -> Option<ProjectState> {
 
     Some(ProjectState {
         phase1,
+        phase2,
         url_to_file_id,
     })
 }
