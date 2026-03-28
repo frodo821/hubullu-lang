@@ -137,7 +137,7 @@ impl Parser {
         loop {
             match self.peek() {
                 TokenKind::Eof => break,
-                TokenKind::AtUse | TokenKind::AtReference | TokenKind::AtExtend => break,
+                TokenKind::AtUse | TokenKind::AtReference | TokenKind::AtExtend | TokenKind::AtRender => break,
                 TokenKind::Ident(s) if matches!(s.as_str(), "tagaxis" | "inflection" | "entry" | "phonrule") => {
                     break
                 }
@@ -166,6 +166,10 @@ impl Parser {
             TokenKind::AtExtend => {
                 self.advance();
                 Item::Extend(self.parse_extend()?)
+            }
+            TokenKind::AtRender => {
+                self.advance();
+                Item::Render(self.parse_render_config()?)
             }
             TokenKind::Ident(s) if s == "tagaxis" => {
                 self.advance();
@@ -1378,6 +1382,63 @@ impl Parser {
             }
         }
         Ok(tokens)
+    }
+
+    /// Parse a token list until EOF (for `.hut` files).
+    pub fn parse_token_list_to_eof(mut self) -> (Vec<crate::ast::Token>, Vec<Diagnostic>) {
+        let mut tokens = Vec::new();
+        while !self.at_eof() {
+            match self.peek() {
+                TokenKind::StringLit(_) => {
+                    let s = self.expect_string().unwrap();
+                    tokens.push(crate::ast::Token::Lit(s));
+                }
+                TokenKind::Ident(_) => {
+                    match self.parse_entry_ref() {
+                        Ok(entry_ref) => tokens.push(crate::ast::Token::Ref(entry_ref)),
+                        Err(diag) => {
+                            self.errors.push(diag);
+                            self.advance();
+                        }
+                    }
+                }
+                _ => {
+                    self.errors.push(self.error(format!(
+                        "unexpected token in .hut file: {:?}",
+                        self.peek()
+                    )));
+                    self.advance();
+                }
+            }
+        }
+        (tokens, self.errors)
+    }
+
+    fn parse_render_config(&mut self) -> Result<RenderConfig, Diagnostic> {
+        self.expect(&TokenKind::LBrace)?;
+        let mut separator = None;
+        let mut no_separator_before = None;
+        while !matches!(self.peek(), TokenKind::RBrace | TokenKind::Eof) {
+            if self.at_ident("separator") {
+                self.advance();
+                self.expect(&TokenKind::Colon)?;
+                separator = Some(self.expect_string()?);
+            } else if self.at_ident("no_separator_before") {
+                self.advance();
+                self.expect(&TokenKind::Colon)?;
+                no_separator_before = Some(self.expect_string()?);
+            } else {
+                return Err(self.error(format!(
+                    "unexpected field in @render: {:?}",
+                    self.peek()
+                )));
+            }
+        }
+        self.expect(&TokenKind::RBrace)?;
+        Ok(RenderConfig {
+            separator,
+            no_separator_before,
+        })
     }
 
     // -----------------------------------------------------------------------

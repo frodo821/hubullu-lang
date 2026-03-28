@@ -414,6 +414,7 @@ impl<'a> Lexer<'a> {
             "use" => TokenKind::AtUse,
             "reference" => TokenKind::AtReference,
             "extend" => TokenKind::AtExtend,
+            "render" => TokenKind::AtRender,
             _ => {
                 self.errors.push(
                     Diagnostic::error(format!("unknown directive '@{}'", directive))

@@ -29,6 +29,9 @@ pub mod dag;
 /// SQLite emitter — writes compiled dictionary data to a SQLite database.
 #[cfg(feature = "sqlite")]
 pub mod emit_sqlite;
+/// `.hut` file rendering — resolves token lists against a compiled SQLite database.
+#[cfg(feature = "sqlite")]
+pub mod render;
 /// Diagnostic types for error/warning reporting with source locations.
 pub mod error;
 /// Inflection paradigm evaluator — cartesian expansion, rule matching, compose, delegation.

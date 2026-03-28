@@ -18,6 +18,7 @@ pub fn emit(output_path: &Path, p2: &Phase2Result) -> Result<(), Diagnostic> {
 
     create_schema(&conn)?;
     insert_data(&conn, p2)?;
+    insert_render_config(&conn, p2)?;
     create_indexes(&conn, p2)?;
     create_fts(&conn)?;
 
@@ -76,6 +77,11 @@ fn create_schema(conn: &Connection) -> Result<(), Diagnostic> {
             value_name TEXT NOT NULL,
             display_lang TEXT NOT NULL,
             display_text TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS render_config (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
         );
         ",
     )
@@ -162,6 +168,22 @@ fn insert_data(conn: &Connection, p2: &Phase2Result) -> Result<(), Diagnostic> {
             .map_err(|e| Diagnostic::error(format!("insert links failed: {}", e)))?;
         }
     }
+
+    Ok(())
+}
+
+fn insert_render_config(conn: &Connection, p2: &Phase2Result) -> Result<(), Diagnostic> {
+    conn.execute(
+        "INSERT INTO render_config (key, value) VALUES (?1, ?2)",
+        params!["separator", p2.render_config.separator],
+    )
+    .map_err(|e| Diagnostic::error(format!("insert render_config failed: {}", e)))?;
+
+    conn.execute(
+        "INSERT INTO render_config (key, value) VALUES (?1, ?2)",
+        params!["no_separator_before", p2.render_config.no_separator_before],
+    )
+    .map_err(|e| Diagnostic::error(format!("insert render_config failed: {}", e)))?;
 
     Ok(())
 }

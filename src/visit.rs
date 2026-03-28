@@ -100,8 +100,8 @@ pub fn walk_item<V: Visitor>(visitor: &mut V, item: &Spanned<Item>) {
         Item::Entry(entry) => {
             visitor.visit_entry(entry);
         }
-        Item::PhonRule(_) => {
-            // PhonRule has no visitor method yet; skip.
+        Item::PhonRule(_) | Item::Render(_) => {
+            // PhonRule/Render have no visitor methods yet; skip.
         }
     }
 }

@@ -35,6 +35,7 @@ pub enum TokenKind {
     AtUse,       // @use
     AtReference, // @reference
     AtExtend,    // @extend
+    AtRender,    // @render
 
     // End of file
     Eof,

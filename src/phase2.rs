@@ -26,12 +26,30 @@ pub struct ResolvedAxis {
     pub slots: HashMap<String, Vec<String>>,
 }
 
+/// Resolved render configuration.
+#[derive(Debug, Clone)]
+pub struct ResolvedRenderConfig {
+    pub separator: String,
+    pub no_separator_before: String,
+}
+
+impl Default for ResolvedRenderConfig {
+    fn default() -> Self {
+        Self {
+            separator: " ".to_string(),
+            no_separator_before: ".,;:!?".to_string(),
+        }
+    }
+}
+
 /// Result of phase 2.
 pub struct Phase2Result {
     /// All resolved axis values.
     pub axes: HashMap<String, ResolvedAxis>,
     /// All expanded entry data ready for SQLite emission.
     pub entries: Vec<ResolvedEntry>,
+    /// Render configuration from `@render` directive.
+    pub render_config: ResolvedRenderConfig,
     pub diagnostics: Diagnostics,
 }
 
@@ -74,9 +92,12 @@ pub fn run_phase2(p1: &Phase1Result) -> Phase2Result {
     ctx.resolve_entries();
     ctx.check_dag();
 
+    let render_config = ctx.collect_render_config();
+
     Phase2Result {
         axes: ctx.axes,
         entries: ctx.entries,
+        render_config,
         diagnostics: ctx.diagnostics,
     }
 }
@@ -625,6 +646,27 @@ impl<'a> Phase2Ctx<'a> {
         }
 
         None
+    }
+
+    // -----------------------------------------------------------------------
+    // @render config collection
+    // -----------------------------------------------------------------------
+
+    fn collect_render_config(&self) -> ResolvedRenderConfig {
+        let mut config = ResolvedRenderConfig::default();
+        for (_file_id, file) in &self.p1.files {
+            for item in &file.items {
+                if let Item::Render(rc) = &item.node {
+                    if let Some(sep) = &rc.separator {
+                        config.separator = sep.node.clone();
+                    }
+                    if let Some(nsb) = &rc.no_separator_before {
+                        config.no_separator_before = nsb.node.clone();
+                    }
+                }
+            }
+        }
+        config
     }
 
     // -----------------------------------------------------------------------

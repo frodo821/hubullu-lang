@@ -72,6 +72,14 @@ pub enum Item {
     Inflection(Inflection),
     Entry(Entry),
     PhonRule(PhonRule),
+    Render(RenderConfig),
+}
+
+/// Configuration for `.hut` token rendering.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderConfig {
+    pub separator: Option<StringLit>,
+    pub no_separator_before: Option<StringLit>,
 }
 
 // ---------------------------------------------------------------------------
