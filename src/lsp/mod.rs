@@ -337,13 +337,13 @@ fn handle_definition(id: RequestId, req: Request, s: &ServerState) -> Response {
     let uri = &params.text_document_position_params.text_document.uri;
     let project = s.project_for(uri);
     let result = (|| {
-        let p1 = &project?.phase1;
-        let doc = s.documents.get(uri)?;
-        let file_id = find_file_id(uri, project?)?;
+        let proj = project?;
+        let file_id = find_file_id(uri, proj)?;
         let offset = convert::position_to_offset(
-            &params.text_document_position_params.position, file_id, &p1.source_map,
+            &params.text_document_position_params.position, file_id, &proj.phase1.source_map,
         )?;
-        definition::goto_definition(file_id, offset, &doc.parse_result.tokens, p1)
+        let tokens = proj.token_cache.get(&file_id)?;
+        definition::goto_definition(file_id, offset, tokens, &proj.phase1)
     })();
     Response::new_ok(id, serde_json::to_value(result).unwrap())
 }
@@ -353,13 +353,13 @@ fn handle_hover(id: RequestId, req: Request, s: &ServerState) -> Response {
     let uri = &params.text_document_position_params.text_document.uri;
     let project = s.project_for(uri);
     let result = (|| {
-        let p1 = &project?.phase1;
-        let doc = s.documents.get(uri)?;
-        let file_id = find_file_id(uri, project?)?;
+        let proj = project?;
+        let file_id = find_file_id(uri, proj)?;
         let offset = convert::position_to_offset(
-            &params.text_document_position_params.position, file_id, &p1.source_map,
+            &params.text_document_position_params.position, file_id, &proj.phase1.source_map,
         )?;
-        hover::hover(file_id, offset, &doc.parse_result.tokens, p1)
+        let tokens = proj.token_cache.get(&file_id)?;
+        hover::hover(file_id, offset, tokens, &proj.phase1)
     })();
     Response::new_ok(id, serde_json::to_value(result).unwrap())
 }
@@ -417,13 +417,13 @@ fn handle_references(id: RequestId, req: Request, s: &ServerState) -> Response {
     let project = s.project_for(uri);
     let result: Option<Vec<lsp_types::Location>> = (|| {
         let proj = project?;
-        let doc = s.documents.get(uri)?;
         let file_id = find_file_id(uri, proj)?;
         let offset = convert::position_to_offset(
             &params.text_document_position.position, file_id, &proj.phase1.source_map,
         )?;
+        let tokens = proj.token_cache.get(&file_id)?;
         Some(references::find_references(
-            file_id, offset, &doc.parse_result.tokens, &proj.phase1,
+            file_id, offset, tokens, &proj.phase1,
             &proj.token_cache, params.context.include_declaration,
         ))
     })();
@@ -491,8 +491,16 @@ fn handle_inlay_hint(id: RequestId, req: Request, s: &ServerState) -> Response {
         let proj = project?;
         let p2 = proj.phase2.as_ref()?;
         let file_id = find_file_id(uri, proj)?;
-        let file_ast = proj.phase1.files.get(&file_id)?;
-        Some(inlay_hints::inlay_hints(file_id, file_ast, p2, &proj.phase1.source_map))
+        if is_hut_uri(uri) {
+            // .hut files: extract entry refs from the token stream.
+            let tokens = proj.token_cache.get(&file_id)?;
+            Some(inlay_hints::inlay_hints_from_tokens(
+                file_id, tokens, p2, &proj.phase1.source_map,
+            ))
+        } else {
+            let file_ast = proj.phase1.files.get(&file_id)?;
+            Some(inlay_hints::inlay_hints(file_id, file_ast, p2, &proj.phase1.source_map))
+        }
     })();
     Response::new_ok(id, serde_json::to_value(result).unwrap())
 }
@@ -525,13 +533,13 @@ fn handle_rename(id: RequestId, req: Request, s: &ServerState) -> Response {
     let project = s.project_for(uri);
     let result = (|| {
         let proj = project?;
-        let doc = s.documents.get(uri)?;
         let file_id = find_file_id(uri, proj)?;
         let offset = convert::position_to_offset(
             &params.text_document_position.position, file_id, &proj.phase1.source_map,
         )?;
+        let tokens = proj.token_cache.get(&file_id)?;
         rename::rename(
-            file_id, offset, &params.new_name, &doc.parse_result.tokens,
+            file_id, offset, &params.new_name, tokens,
             &proj.phase1, &proj.token_cache,
         )
     })();
@@ -670,6 +678,11 @@ pub(super) fn is_hut_uri(uri: &Uri) -> bool {
 }
 
 /// Load a project for a `.hut` file based on its `# @source` directive.
+///
+/// After building the project from the `.hu` entry, the `.hut` file itself is
+/// injected into the project's source map, token cache, symbol table, and file
+/// map so that LSP features (hover, go-to-definition, references, inlay hints)
+/// work seamlessly.
 fn try_load_hut_project(
     hut_uri: &Uri,
     hut_text: &str,
@@ -687,7 +700,53 @@ fn try_load_hut_project(
     if !entry_path.exists() {
         return;
     }
-    if let Some(proj) = build_project_state(&entry_path) {
+    if let Some(mut proj) = build_project_state(&entry_path) {
+        // Add the .hut file to the project so LSP features work.
+        let hut_filename = convert::uri_to_filename(hut_uri);
+        let hut_file_id = proj.phase1.source_map.add_file(
+            hut_filename.into(),
+            hut_text.to_string(),
+        );
+        proj.url_to_file_id
+            .insert(hut_uri.as_str().to_string(), hut_file_id);
+
+        // Tokenize the .hut file and add to token cache.
+        let lexer = crate::lexer::Lexer::new(
+            proj.phase1.source_map.source(hut_file_id),
+            hut_file_id,
+        );
+        let (tokens, _) = lexer.tokenize();
+        proj.token_cache.insert(hut_file_id, tokens);
+
+        // Create a scope for the .hut file by mirroring the entry file's scope
+        // so that symbol resolution works.
+        if let Some(&entry_fid) = proj.phase1.path_to_id.get(&entry_path) {
+            if let Some(entry_scope) = proj.phase1.symbol_table.scope(entry_fid).cloned() {
+                let mut hut_scope = crate::symbol_table::Scope::new();
+                // Import the entry file's locals as imports for the .hut scope.
+                for sym in entry_scope.locals.values() {
+                    hut_scope.imports.push(crate::symbol_table::ImportedSymbol {
+                        original_name: sym.name.clone(),
+                        local_name: sym.name.clone(),
+                        namespace: None,
+                        kind: sym.kind,
+                        source_file: sym.file_id,
+                        span: sym.span,
+                        item_index: sym.item_index,
+                    });
+                }
+                // Carry over the entry file's imports.
+                hut_scope.imports.extend(entry_scope.imports);
+                proj.phase1.symbol_table.scopes.insert(hut_file_id, hut_scope);
+            }
+        }
+
+        // Register an empty AST for the .hut file_id.
+        proj.phase1.files.insert(
+            hut_file_id,
+            crate::ast::File { items: Vec::new() },
+        );
+
         hut_projects.insert(hut_uri.as_str().to_string(), proj);
     }
 }

@@ -23,15 +23,19 @@ pub struct DocumentStore {
 }
 
 /// Build a parse result for a document.
-/// `.hut` files are not parsed as `.hu` source — they get an empty result.
+/// `.hut` files are not fully parsed as `.hu` source — they get an empty AST
+/// but are still lexed so that token-based features (hover, definition, etc.)
+/// can work on the document level.
 fn build_parse_result(uri: &Uri, text: &str) -> ParseResult {
     if super::is_hut_uri(uri) {
         let filename = convert::uri_to_filename(uri);
         let mut source_map = crate::span::SourceMap::new();
         let file_id = source_map.add_file(filename.into(), text.to_string());
+        let lexer = crate::lexer::Lexer::new(source_map.source(file_id), file_id);
+        let (tokens, _) = lexer.tokenize();
         ParseResult {
             file: crate::ast::File { items: Vec::new() },
-            tokens: Vec::new(),
+            tokens,
             diagnostics: Vec::new(),
             source_map,
             file_id,

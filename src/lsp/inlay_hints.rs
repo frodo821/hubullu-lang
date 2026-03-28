@@ -133,3 +133,120 @@ fn find_matching_form(
     }
     None
 }
+
+// ---------------------------------------------------------------------------
+// .hut token-stream inlay hints
+// ---------------------------------------------------------------------------
+
+use crate::token::{Token, TokenKind};
+
+/// Generate inlay hints for a `.hut` file by scanning the token stream for
+/// entry-ref patterns like `entry_id[axis=value, ...]`.
+pub fn inlay_hints_from_tokens(
+    file_id: FileId,
+    tokens: &[Token],
+    phase2: &Phase2Result,
+    source_map: &SourceMap,
+) -> Vec<InlayHint> {
+    let mut hints = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        // Look for pattern: Ident LBracket ... RBracket
+        if let TokenKind::Ident(entry_id) = &tokens[i].node {
+            if tokens[i].span.file_id == file_id {
+                if let Some((conditions, end_pos, rbracket_end)) =
+                    parse_bracket_conditions(tokens, i + 1, file_id)
+                {
+                    if !conditions.is_empty() {
+                        if let Some(hint) =
+                            resolve_token_hint(entry_id, &conditions, rbracket_end, phase2, source_map, file_id)
+                        {
+                            hints.push(hint);
+                        }
+                    }
+                    i = end_pos;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+    hints
+}
+
+/// Parse `[axis=value, axis=value, ...]` from the token stream starting at `start`.
+/// Returns (conditions, next_index_after_rbracket, rbracket_end_offset).
+fn parse_bracket_conditions(
+    tokens: &[Token],
+    start: usize,
+    file_id: FileId,
+) -> Option<(Vec<(String, String)>, usize, usize)> {
+    if start >= tokens.len() {
+        return None;
+    }
+    if !matches!(tokens[start].node, TokenKind::LBracket) {
+        return None;
+    }
+    let mut i = start + 1;
+    let mut conditions = Vec::new();
+    loop {
+        if i >= tokens.len() {
+            return None;
+        }
+        // RBracket ends the list.
+        if matches!(tokens[i].node, TokenKind::RBracket) {
+            let rbracket_end = tokens[i].span.end;
+            return Some((conditions, i + 1, rbracket_end));
+        }
+        // Expect: Ident Eq Ident
+        let axis = match &tokens[i].node {
+            TokenKind::Ident(a) if tokens[i].span.file_id == file_id => a.clone(),
+            _ => return None,
+        };
+        i += 1;
+        if i >= tokens.len() || !matches!(tokens[i].node, TokenKind::Eq) {
+            return None;
+        }
+        i += 1;
+        let value = match tokens.get(i).map(|t| &t.node) {
+            Some(TokenKind::Ident(v)) => v.clone(),
+            _ => return None,
+        };
+        i += 1;
+        conditions.push((axis, value));
+        // Optional comma.
+        if i < tokens.len() && matches!(tokens[i].node, TokenKind::Comma) {
+            i += 1;
+        }
+    }
+}
+
+fn resolve_token_hint(
+    entry_id: &str,
+    conditions: &[(String, String)],
+    rbracket_end: usize,
+    phase2: &Phase2Result,
+    source_map: &SourceMap,
+    file_id: FileId,
+) -> Option<InlayHint> {
+    let resolved = phase2.entries.iter().find(|e| e.entry_id == entry_id)?;
+    // Find the form matching all conditions.
+    let form_str = resolved.forms.iter().find_map(|form| {
+        let all_match = conditions.iter().all(|(axis, val)| {
+            form.tags.iter().any(|(a, v)| a == axis && v == val)
+        });
+        if all_match { Some(form.form_str.clone()) } else { None }
+    })?;
+
+    let position = convert::offset_to_position(file_id, rbracket_end, source_map);
+    Some(InlayHint {
+        position,
+        label: InlayHintLabel::String(format!(" → {}", form_str)),
+        kind: Some(InlayHintKind::TYPE),
+        text_edits: None,
+        tooltip: None,
+        padding_left: Some(false),
+        padding_right: Some(false),
+        data: None,
+    })
+}
