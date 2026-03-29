@@ -14,6 +14,7 @@ mod folding;
 mod formatting;
 mod inlay_hints;
 mod hover;
+mod surface_forms;
 mod references;
 mod rename;
 mod semantic_tokens;
@@ -34,6 +35,14 @@ use crate::span::FileId;
 use crate::token::Token;
 
 use document::DocumentStore;
+
+/// Display mode for entry references (inlay hints vs overlay vs off).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EntryRefDisplayMode {
+    InlayHint,
+    Overlay,
+    Off,
+}
 
 /// Cached project-level analysis (populated on save).
 struct ProjectState {
@@ -106,6 +115,10 @@ fn server_capabilities() -> ServerCapabilities {
             prepare_provider: Some(true),
             work_done_progress_options: WorkDoneProgressOptions::default(),
         })),
+        experimental: Some(serde_json::json!({
+            "surfaceFormsProvider": true,
+            "entryRefDisplayMode": true
+        })),
         ..Default::default()
     }
 }
@@ -121,6 +134,7 @@ struct ServerState {
     /// Per-.hut file projects (keyed by .hut URI string, from @source directive).
     hut_projects: std::collections::HashMap<String, ProjectState>,
     init_params: InitializeParams,
+    entry_ref_display_mode: EntryRefDisplayMode,
 }
 
 impl ServerState {
@@ -210,6 +224,7 @@ fn main_loop(connection: &Connection, init_params: InitializeParams) {
         file_projects: std::collections::HashMap::new(),
         hut_projects: std::collections::HashMap::new(),
         init_params,
+        entry_ref_display_mode: EntryRefDisplayMode::InlayHint,
     };
 
     // Try to discover and analyze the project on startup.
@@ -223,8 +238,17 @@ fn main_loop(connection: &Connection, init_params: InitializeParams) {
                 if connection.handle_shutdown(&req).unwrap() {
                     return;
                 }
-                let resp = handle_request(req, &state);
-                connection.sender.send(Message::Response(resp)).unwrap();
+                if req.method == "hubullu/setEntryRefDisplayMode" {
+                    let (resp, notifications) =
+                        handle_set_display_mode(req.id.clone(), req, &mut state);
+                    connection.sender.send(Message::Response(resp)).unwrap();
+                    for n in notifications {
+                        connection.sender.send(Message::Notification(n)).unwrap();
+                    }
+                } else {
+                    let resp = handle_request(req, &state);
+                    connection.sender.send(Message::Response(resp)).unwrap();
+                }
             }
             Message::Notification(notif) => {
                 let notifications = handle_notification(notif, &mut state);
@@ -255,6 +279,8 @@ fn handle_request(req: Request, state: &ServerState) -> Response {
         "textDocument/formatting" => handle_formatting(id, req, state),
         "textDocument/prepareRename" => handle_prepare_rename(id, req, state),
         "textDocument/rename" => handle_rename(id, req, state),
+        "hubullu/surfaceForms" => handle_surface_forms(id, req, state),
+        "hubullu/getEntryRefDisplayMode" => handle_get_display_mode(id, state),
         _ => Response::new_err(id, -32601, "method not found".into()),
     }
 }
@@ -512,6 +538,9 @@ fn handle_document_highlight(id: RequestId, req: Request, s: &ServerState) -> Re
 }
 
 fn handle_inlay_hint(id: RequestId, req: Request, s: &ServerState) -> Response {
+    if s.entry_ref_display_mode != EntryRefDisplayMode::InlayHint {
+        return Response::new_ok(id, serde_json::to_value(Option::<Vec<lsp_types::InlayHint>>::None).unwrap());
+    }
     let params: lsp_types::InlayHintParams = serde_json::from_value(req.params).unwrap();
     let uri = &params.text_document.uri;
     let project = s.project_for(uri);
@@ -572,6 +601,83 @@ fn handle_rename(id: RequestId, req: Request, s: &ServerState) -> Response {
         )
     })();
     Response::new_ok(id, serde_json::to_value(result).unwrap())
+}
+
+fn handle_surface_forms(id: RequestId, req: Request, s: &ServerState) -> Response {
+    if s.entry_ref_display_mode != EntryRefDisplayMode::Overlay {
+        return Response::new_ok(
+            id,
+            serde_json::to_value(surface_forms::SurfaceFormsResult { items: vec![] }).unwrap(),
+        );
+    }
+    let params: serde_json::Value = serde_json::from_value(req.params).unwrap();
+    let uri_str = params["textDocument"]["uri"].as_str().unwrap_or("");
+    let uri: Uri = match uri_str.parse() {
+        Ok(u) => u,
+        Err(_) => {
+            return Response::new_ok(
+                id,
+                serde_json::to_value(surface_forms::SurfaceFormsResult { items: vec![] }).unwrap(),
+            );
+        }
+    };
+    let project = s.project_for(&uri);
+    let items = (|| {
+        let proj = project?;
+        let p2 = proj.phase2.as_ref()?;
+        let file_id = find_file_id(&uri, proj)?;
+        if is_hut_uri(&uri) {
+            let tokens = proj.token_cache.get(&file_id)?;
+            Some(surface_forms::surface_forms_from_tokens(
+                file_id, tokens, p2, &proj.phase1.source_map,
+            ))
+        } else {
+            let file_ast = proj.phase1.files.get(&file_id)?;
+            Some(surface_forms::surface_forms(file_id, file_ast, p2, &proj.phase1.source_map))
+        }
+    })()
+    .unwrap_or_default();
+    Response::new_ok(
+        id,
+        serde_json::to_value(surface_forms::SurfaceFormsResult { items }).unwrap(),
+    )
+}
+
+fn handle_set_display_mode(
+    id: RequestId,
+    req: Request,
+    state: &mut ServerState,
+) -> (Response, Vec<Notification>) {
+    let params: serde_json::Value = serde_json::from_value(req.params).unwrap();
+    let mode_str = params["mode"].as_str().unwrap_or("inlayHint");
+    state.entry_ref_display_mode = match mode_str {
+        "overlay" => EntryRefDisplayMode::Overlay,
+        "off" => EntryRefDisplayMode::Off,
+        _ => EntryRefDisplayMode::InlayHint,
+    };
+
+    let mut notifications = Vec::new();
+    // Send workspace/inlayHint/refresh notification.
+    notifications.push(Notification::new(
+        "workspace/inlayHint/refresh".into(),
+        serde_json::Value::Null,
+    ));
+    // Send hubullu/surfaceFormsRefresh notification.
+    notifications.push(Notification::new(
+        "hubullu/surfaceFormsRefresh".into(),
+        serde_json::Value::Null,
+    ));
+
+    (Response::new_ok(id, serde_json::Value::Null), notifications)
+}
+
+fn handle_get_display_mode(id: RequestId, state: &ServerState) -> Response {
+    let mode = match state.entry_ref_display_mode {
+        EntryRefDisplayMode::InlayHint => "inlayHint",
+        EntryRefDisplayMode::Overlay => "overlay",
+        EntryRefDisplayMode::Off => "off",
+    };
+    Response::new_ok(id, serde_json::json!({ "mode": mode }))
 }
 
 // ---------------------------------------------------------------------------

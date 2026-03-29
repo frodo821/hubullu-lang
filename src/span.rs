@@ -96,6 +96,12 @@ impl SourceMap {
         }
     }
 
+    /// Get a slice of source text for a file by byte offsets.
+    pub fn source_slice(&self, id: FileId, start: usize, end: usize) -> Option<&str> {
+        let source = &self.files[id.0 as usize].source;
+        source.get(start..end)
+    }
+
     /// Number of files in this source map.
     pub fn file_count(&self) -> usize {
         self.files.len()

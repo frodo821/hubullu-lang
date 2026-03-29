@@ -44,6 +44,14 @@ pub fn position_to_offset(
     source_map.offset_at(file_id, line_1based, byte_col + 1)
 }
 
+/// Build an LSP `Range` from two byte offsets (start inclusive, end exclusive).
+pub fn offsets_to_range(file_id: FileId, start: usize, end: usize, source_map: &SourceMap) -> Range {
+    Range {
+        start: offset_to_position(file_id, start, source_map),
+        end: offset_to_position(file_id, end, source_map),
+    }
+}
+
 /// Convert hubullu severity to LSP severity.
 pub fn severity_to_lsp(severity: Severity) -> DiagnosticSeverity {
     match severity {

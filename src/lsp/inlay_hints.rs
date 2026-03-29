@@ -162,14 +162,14 @@ fn collect_ref_hint_at(
     });
 }
 
-fn find_resolved_entry<'a>(
+pub fn find_resolved_entry<'a>(
     entry_id: &str,
     phase2: &'a Phase2Result,
 ) -> Option<&'a ResolvedEntry> {
     phase2.entries.iter().find(|e| e.name == entry_id)
 }
 
-fn find_matching_form(
+pub fn find_matching_form(
     entry: &ResolvedEntry,
     form_spec: &TagConditionList,
 ) -> Option<String> {
@@ -244,7 +244,7 @@ pub fn inlay_hints_from_tokens(
 
 /// Walk past a `~ token (~ token)*` chain and return the span-end of the last
 /// token in the chain plus the next index to resume scanning from.
-fn find_tilde_chain_end(
+pub fn find_tilde_chain_end(
     tokens: &[Token],
     start: usize,
     file_id: FileId,
@@ -280,7 +280,7 @@ fn find_tilde_chain_end(
 
 /// Parse `[axis=value, axis=value, ...]` from the token stream starting at `start`.
 /// Returns (conditions, next_index_after_rbracket, rbracket_end_offset).
-fn parse_bracket_conditions(
+pub fn parse_bracket_conditions(
     tokens: &[Token],
     start: usize,
     file_id: FileId,
