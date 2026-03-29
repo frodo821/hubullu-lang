@@ -297,6 +297,7 @@ pub enum PhonContextElem {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Inflection {
     pub name: Ident,
+    pub display: DisplayMap,
     /// `for {tense, person, number}`
     pub axes: Vec<Ident>,
     /// `requires stems: pres, past`

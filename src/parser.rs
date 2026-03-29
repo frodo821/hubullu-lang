@@ -415,6 +415,14 @@ impl Parser {
 
     fn parse_inflection(&mut self) -> Result<Inflection, Diagnostic> {
         let name = self.expect_ident()?;
+
+        let display = if self.at_ident("display") {
+            self.advance();
+            self.parse_display_map()?
+        } else {
+            Vec::new()
+        };
+
         self.expect_keyword("for")?;
         let axes = self.parse_axis_list()?;
         self.expect(&TokenKind::LBrace)?;
@@ -430,6 +438,7 @@ impl Parser {
 
         Ok(Inflection {
             name,
+            display,
             axes,
             required_stems,
             body,

@@ -33,7 +33,7 @@ fn test_simple_compile() {
     // Check faren entry
     let headword: String = conn
         .query_row(
-            "SELECT headword FROM entries WHERE entry_id = 'faren'",
+            "SELECT headword FROM entries WHERE name = 'faren'",
             [],
             |r| r.get(0),
         )
@@ -43,7 +43,7 @@ fn test_simple_compile() {
     // Check forms for faren
     let form_count: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM forms WHERE entry_id = 'faren'",
+            "SELECT COUNT(*) FROM forms WHERE entry_id = (SELECT id FROM entries WHERE name = 'faren')",
             [],
             |r| r.get(0),
         )
@@ -53,7 +53,7 @@ fn test_simple_compile() {
     // Check specific form
     let form: String = conn
         .query_row(
-            "SELECT form_str FROM forms WHERE entry_id = 'faren' AND tags LIKE '%tense=present%' AND tags LIKE '%number=sg%'",
+            "SELECT form_str FROM forms WHERE entry_id = (SELECT id FROM entries WHERE name = 'faren') AND tags LIKE '%tense=present%' AND tags LIKE '%number=sg%'",
             [],
             |r| r.get(0),
         )
@@ -63,7 +63,7 @@ fn test_simple_compile() {
     // Check no forms for hus (no inflection)
     let hus_forms: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM forms WHERE entry_id = 'hus'",
+            "SELECT COUNT(*) FROM forms WHERE entry_id = (SELECT id FROM entries WHERE name = 'hus')",
             [],
             |r| r.get(0),
         )
@@ -73,7 +73,7 @@ fn test_simple_compile() {
     // Check tags
     let tag_value: String = conn
         .query_row(
-            "SELECT value FROM entry_tags WHERE entry_id = 'faren' AND axis = 'parts_of_speech'",
+            "SELECT value FROM entry_tags WHERE entry_id = (SELECT id FROM entries WHERE name = 'faren') AND axis = 'parts_of_speech'",
             [],
             |r| r.get(0),
         )
@@ -89,6 +89,16 @@ fn test_simple_compile() {
         )
         .unwrap();
     assert_eq!(fts_count, 1, "FTS should find 'faren' by meaning 'to go'");
+
+    // Check that entries have integer IDs
+    let entry_id: i64 = conn
+        .query_row(
+            "SELECT id FROM entries WHERE name = 'faren'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(entry_id > 0, "entry should have a positive integer ID");
 
     // Clean up
     let _ = std::fs::remove_file(&output);
@@ -136,7 +146,7 @@ entry sein {
     let conn = Connection::open(&output).unwrap();
     let form_count: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM forms WHERE entry_id = 'sein'",
+            "SELECT COUNT(*) FROM forms WHERE entry_id = (SELECT id FROM entries WHERE name = 'sein')",
             [],
             |r| r.get(0),
         )

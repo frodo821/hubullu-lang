@@ -113,7 +113,7 @@ fn find_resolved_entry<'a>(
     entry_id: &str,
     phase2: &'a Phase2Result,
 ) -> Option<&'a ResolvedEntry> {
-    phase2.entries.iter().find(|e| e.entry_id == entry_id)
+    phase2.entries.iter().find(|e| e.name == entry_id)
 }
 
 fn find_matching_form(
@@ -229,7 +229,7 @@ fn resolve_token_hint(
     source_map: &SourceMap,
     file_id: FileId,
 ) -> Option<InlayHint> {
-    let resolved = phase2.entries.iter().find(|e| e.entry_id == entry_id)?;
+    let resolved = phase2.entries.iter().find(|e| e.name == entry_id)?;
     // Find the form matching all conditions.
     let form_str = resolved.forms.iter().find_map(|form| {
         let all_match = conditions.iter().all(|(axis, val)| {

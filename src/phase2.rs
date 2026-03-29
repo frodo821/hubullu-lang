@@ -50,6 +50,8 @@ impl Default for ResolvedRenderConfig {
 pub struct Phase2Result {
     /// All resolved axis values.
     pub axes: HashMap<String, ResolvedAxis>,
+    /// All resolved inflection class metadata.
+    pub inflections: Vec<ResolvedInflection>,
     /// All expanded entry data ready for SQLite emission.
     pub entries: Vec<ResolvedEntry>,
     /// Render configuration from `@render` directive.
@@ -60,10 +62,11 @@ pub struct Phase2Result {
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone)]
 pub struct ResolvedEntry {
-    pub entry_id: String,
+    pub name: String,
     pub headword: String,
     pub headword_scripts: HashMap<String, String>,
     pub tags: Vec<(String, String)>,
+    pub inflection_class: Option<String>,
     pub meaning: String,
     pub meanings: Vec<(String, String)>,
     pub forms: Vec<ResolvedForm>,
@@ -84,11 +87,21 @@ pub struct ResolvedLink {
     pub link_type: String,
 }
 
+/// Resolved inflection class metadata for emission.
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone)]
+pub struct ResolvedInflection {
+    pub name: String,
+    pub display: Vec<(String, String)>,
+    pub axes: Vec<String>,
+}
+
 /// Run phase 2: resolve extends, validate inflections, expand entries, check DAG.
 pub fn run_phase2(p1: &Phase1Result) -> Phase2Result {
     let mut ctx = Phase2Ctx {
         p1,
         axes: HashMap::new(),
+        inflections: Vec::new(),
         entries: Vec::new(),
         diagnostics: Diagnostics::new(),
     };
@@ -96,6 +109,7 @@ pub fn run_phase2(p1: &Phase1Result) -> Phase2Result {
     ctx.resolve_extends();
     ctx.validate_phonrules();
     ctx.validate_inflections();
+    ctx.collect_inflections();
     ctx.resolve_entries();
     ctx.check_dag();
 
@@ -103,6 +117,7 @@ pub fn run_phase2(p1: &Phase1Result) -> Phase2Result {
 
     Phase2Result {
         axes: ctx.axes,
+        inflections: ctx.inflections,
         entries: ctx.entries,
         render_config,
         diagnostics: ctx.diagnostics,
@@ -112,6 +127,7 @@ pub fn run_phase2(p1: &Phase1Result) -> Phase2Result {
 struct Phase2Ctx<'a> {
     p1: &'a Phase1Result,
     axes: HashMap<String, ResolvedAxis>,
+    inflections: Vec<ResolvedInflection>,
     entries: Vec<ResolvedEntry>,
     diagnostics: Diagnostics,
 }
@@ -260,6 +276,28 @@ impl<'a> Phase2Ctx<'a> {
                     ))
                     .with_label(cond.axis.span, "undeclared axis"),
                 );
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // inflection collection
+    // -----------------------------------------------------------------------
+
+    fn collect_inflections(&mut self) {
+        for (_file_id, file) in &self.p1.files {
+            for item in &file.items {
+                if let Item::Inflection(infl) = &item.node {
+                    self.inflections.push(ResolvedInflection {
+                        name: infl.name.node.clone(),
+                        display: infl
+                            .display
+                            .iter()
+                            .map(|(k, v)| (k.node.clone(), v.node.clone()))
+                            .collect(),
+                        axes: infl.axes.iter().map(|a| a.node.clone()).collect(),
+                    });
+                }
             }
         }
     }
@@ -585,6 +623,12 @@ impl<'a> Phase2Ctx<'a> {
             }
         }
 
+        // Track inflection class name
+        let inflection_class = match &entry.inflection {
+            Some(EntryInflection::Class(class_name)) => Some(class_name.node.clone()),
+            _ => None,
+        };
+
         // Collect links
         let mut links = Vec::new();
         if let Some(ety) = &entry.etymology {
@@ -613,10 +657,11 @@ impl<'a> Phase2Ctx<'a> {
         }
 
         self.entries.push(ResolvedEntry {
-            entry_id: entry.name.node.clone(),
+            name: entry.name.node.clone(),
             headword,
             headword_scripts,
             tags,
+            inflection_class,
             meaning,
             meanings,
             forms,
@@ -688,7 +733,7 @@ impl<'a> Phase2Ctx<'a> {
                 e.links
                     .iter()
                     .filter(|l| l.link_type == "derived_from")
-                    .map(|l| (e.entry_id.clone(), l.dst_entry_id.clone()))
+                    .map(|l| (e.name.clone(), l.dst_entry_id.clone()))
             })
             .collect();
 
