@@ -58,10 +58,50 @@ fn collect_example_hints(
     source_map: &SourceMap,
     hints: &mut Vec<InlayHint>,
 ) {
-    for tok in tokens {
-        if let ast::Token::Ref(entry_ref) = tok {
-            collect_ref_hint(entry_ref, file_id, phase2, source_map, hints);
+    // Walk tokens, grouping glue-connected chains.
+    // For each chain, collect resolved labels and place them at the chain's last token end.
+    let mut i = 0;
+    while i < tokens.len() {
+        // Collect a chain of tokens connected by Glue.
+        let chain_start = i;
+        i += 1;
+        while i + 1 < tokens.len() {
+            if let ast::Token::Glue = &tokens[i] {
+                i += 2; // skip Glue and the next token
+            } else {
+                break;
+            }
         }
+        let chain_end = i; // exclusive
+
+        // Find the span end of the last non-Glue token in this chain.
+        let last_span_end = (chain_start..chain_end)
+            .rev()
+            .find_map(|j| token_span_end(&tokens[j], file_id));
+
+        // If the chain has only one token and no glue, use normal behavior.
+        let is_glued = chain_end - chain_start > 1;
+
+        for j in chain_start..chain_end {
+            if let ast::Token::Ref(entry_ref) = &tokens[j] {
+                if is_glued {
+                    if let Some(end) = last_span_end {
+                        collect_ref_hint_at(entry_ref, file_id, end, phase2, source_map, hints);
+                    }
+                } else {
+                    collect_ref_hint(entry_ref, file_id, phase2, source_map, hints);
+                }
+            }
+        }
+    }
+}
+
+/// Get the span end offset of a token if it belongs to the given file.
+fn token_span_end(tok: &ast::Token, file_id: FileId) -> Option<usize> {
+    match tok {
+        ast::Token::Ref(r) if r.span.file_id == file_id => Some(r.span.end),
+        ast::Token::Lit(lit) if lit.span.file_id == file_id => Some(lit.span.end),
+        _ => None,
     }
 }
 
@@ -72,30 +112,43 @@ fn collect_ref_hint(
     source_map: &SourceMap,
     hints: &mut Vec<InlayHint>,
 ) {
-    // Only show hint if there's a form spec.
-    let form_spec = match &entry_ref.form_spec {
-        Some(spec) if !spec.conditions.is_empty() => spec,
-        _ => return,
-    };
+    if entry_ref.span.file_id != file_id {
+        return;
+    }
+    collect_ref_hint_at(entry_ref, file_id, entry_ref.span.end, phase2, source_map, hints);
+}
 
-    // Find the resolved entry.
+fn collect_ref_hint_at(
+    entry_ref: &EntryRef,
+    file_id: FileId,
+    hint_offset: usize,
+    phase2: &Phase2Result,
+    source_map: &SourceMap,
+    hints: &mut Vec<InlayHint>,
+) {
     let entry_id = &entry_ref.entry_id.node;
     let resolved = match find_resolved_entry(entry_id, phase2) {
         Some(e) => e,
         None => return,
     };
 
-    // Find the matching form.
-    let form_str = match find_matching_form(resolved, form_spec) {
-        Some(f) => f,
-        None => return,
+    let form_str = match &entry_ref.form_spec {
+        Some(spec) if !spec.conditions.is_empty() => {
+            match find_matching_form(resolved, spec) {
+                Some(f) => f,
+                None => return,
+            }
+        }
+        _ => {
+            // No form spec — show headword if it differs from the entry name.
+            if resolved.headword == *entry_id {
+                return;
+            }
+            resolved.headword.clone()
+        }
     };
 
-    // Place the hint right after the entry ref span.
-    if entry_ref.span.file_id != file_id {
-        return;
-    }
-    let position = convert::offset_to_position(file_id, entry_ref.span.end, source_map);
+    let position = convert::offset_to_position(file_id, hint_offset, source_map);
 
     hints.push(InlayHint {
         position,
@@ -151,27 +204,78 @@ pub fn inlay_hints_from_tokens(
     let mut hints = Vec::new();
     let mut i = 0;
     while i < tokens.len() {
-        // Look for pattern: Ident LBracket ... RBracket
         if let TokenKind::Ident(entry_id) = &tokens[i].node {
             if tokens[i].span.file_id == file_id {
                 if let Some((conditions, end_pos, rbracket_end)) =
                     parse_bracket_conditions(tokens, i + 1, file_id)
                 {
                     if !conditions.is_empty() {
+                        // If followed by Tilde chain, defer the hint to the end of the chain.
+                        let (hint_offset, skip_to) =
+                            find_tilde_chain_end(tokens, end_pos, file_id, rbracket_end);
                         if let Some(hint) =
-                            resolve_token_hint(entry_id, &conditions, rbracket_end, phase2, source_map, file_id)
+                            resolve_token_hint(entry_id, &conditions, hint_offset, phase2, source_map, file_id)
                         {
                             hints.push(hint);
                         }
+                        i = skip_to;
+                        continue;
                     }
                     i = end_pos;
                     continue;
                 }
+                // No bracket — show headword hint if it differs from the entry name.
+                let ident_end = tokens[i].span.end;
+                let (hint_offset, skip_to) =
+                    find_tilde_chain_end(tokens, i + 1, file_id, ident_end);
+                if let Some(hint) =
+                    resolve_headword_hint(entry_id, hint_offset, phase2, source_map, file_id)
+                {
+                    hints.push(hint);
+                }
+                i = skip_to;
+                continue;
             }
         }
         i += 1;
     }
     hints
+}
+
+/// Walk past a `~ token (~ token)*` chain and return the span-end of the last
+/// token in the chain plus the next index to resume scanning from.
+fn find_tilde_chain_end(
+    tokens: &[Token],
+    start: usize,
+    file_id: FileId,
+    default_end: usize,
+) -> (usize, usize) {
+    let mut pos = start;
+    let mut end_offset = default_end;
+    while pos + 1 < tokens.len() {
+        if matches!(tokens[pos].node, TokenKind::Tilde) {
+            let next = pos + 1;
+            // Advance past `~ token`, possibly including `Ident [ ... ]` patterns.
+            let after_next = if let TokenKind::Ident(_) = &tokens[next].node {
+                if let Some((_, ep, rb)) = parse_bracket_conditions(tokens, next + 1, file_id) {
+                    // The next token is an entry_id with brackets — skip them too.
+                    // (We don't generate a separate hint for this ref; it's part of the glue chain.)
+                    end_offset = rb;
+                    ep
+                } else {
+                    end_offset = tokens[next].span.end;
+                    next + 1
+                }
+            } else {
+                end_offset = tokens[next].span.end;
+                next + 1
+            };
+            pos = after_next;
+        } else {
+            break;
+        }
+    }
+    (end_offset, pos)
 }
 
 /// Parse `[axis=value, axis=value, ...]` from the token stream starting at `start`.
@@ -224,13 +328,12 @@ fn parse_bracket_conditions(
 fn resolve_token_hint(
     entry_id: &str,
     conditions: &[(String, String)],
-    rbracket_end: usize,
+    hint_offset: usize,
     phase2: &Phase2Result,
     source_map: &SourceMap,
     file_id: FileId,
 ) -> Option<InlayHint> {
     let resolved = phase2.entries.iter().find(|e| e.name == entry_id)?;
-    // Find the form matching all conditions.
     let form_str = resolved.forms.iter().find_map(|form| {
         let all_match = conditions.iter().all(|(axis, val)| {
             form.tags.iter().any(|(a, v)| a == axis && v == val)
@@ -238,7 +341,30 @@ fn resolve_token_hint(
         if all_match { Some(form.form_str.clone()) } else { None }
     })?;
 
-    let position = convert::offset_to_position(file_id, rbracket_end, source_map);
+    make_hint(file_id, hint_offset, &form_str, source_map)
+}
+
+fn resolve_headword_hint(
+    entry_id: &str,
+    hint_offset: usize,
+    phase2: &Phase2Result,
+    source_map: &SourceMap,
+    file_id: FileId,
+) -> Option<InlayHint> {
+    let resolved = phase2.entries.iter().find(|e| e.name == entry_id)?;
+    if resolved.headword == entry_id {
+        return None;
+    }
+    make_hint(file_id, hint_offset, &resolved.headword, source_map)
+}
+
+fn make_hint(
+    file_id: FileId,
+    hint_offset: usize,
+    form_str: &str,
+    source_map: &SourceMap,
+) -> Option<InlayHint> {
+    let position = convert::offset_to_position(file_id, hint_offset, source_map);
     Some(InlayHint {
         position,
         label: InlayHintLabel::String(format!(" → {}", form_str)),
