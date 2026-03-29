@@ -274,6 +274,12 @@ A token list is a sequence of:
    "."      # punctuation
    ```
 
+3. **Glue marker `~`** — suppresses the separator between adjacent tokens:
+   ```
+   tokens: faren[tense=present, person=1, number=sg] ~ "."
+   ```
+   Without `~`, tokens are joined by the configured separator (default: space). With `~`, the adjacent tokens are concatenated directly. This is useful for attaching punctuation or affixes without a space.
+
 Entry references with empty brackets `[]` select the headword form.
 
 If a `[form_spec]` matches multiple forms, it's a compile error — the reference must be unambiguous.

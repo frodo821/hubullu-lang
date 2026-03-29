@@ -193,3 +193,25 @@ Any text outside `{ }` in a template is literal:
 `werde {root}en`   # "werde " and "en" are literal
 `un{root}lich`     # prefix and suffix are literal
 ```
+
+## Phonological Rule Application
+
+Templates (and compose chains) can be wrapped in a `phonrule` to apply phonological transformations to the generated form.
+
+### In Inflection Rules
+
+```
+[tense=present, person=1, number=sg] -> harmony(`{root}ler`)
+```
+
+The template is evaluated first, then the phonological rule `harmony` is applied to the result.
+
+### In Compose Chains
+
+```
+compose harmony(root + tense_sfx + pn_sfx)
+```
+
+The phonrule wraps the entire compose chain. Morpheme boundaries (`+`) are preserved as internal markers during phonrule evaluation, allowing context-sensitive rules to reference morpheme edges.
+
+See [Phonological Rules](08-phonrules.md) for the full `phonrule` syntax and semantics.

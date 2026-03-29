@@ -18,6 +18,7 @@ LexDSL projects typically span multiple files. The import system has two directi
 - `tagaxis` declarations
 - `@extend` declarations
 - `inflection` declarations
+- `phonrule` declarations
 
 Entries in the imported file are **silently ignored** by glob imports (`@use *`). Named imports that target an entry produce a compile error:
 
@@ -196,7 +197,7 @@ inflection verb_class for {verbal_tense, number} { ... }
 
 | Aspect | `@use` | `@reference` |
 | ------ | ------ | ------------ |
-| **Imports** | tagaxis, @extend, inflection | entry |
+| **Imports** | tagaxis, @extend, inflection, phonrule | entry |
 | **Glob skips** | entries (silent) | declarations (silent) |
 | **Named wrong kind** | Compile error | Compile error |
 | **Cycles** | Compile error | Allowed |

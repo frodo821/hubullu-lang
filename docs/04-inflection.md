@@ -5,7 +5,7 @@ Inflection definitions are the heart of LexDSL. They describe how words change f
 ## Basic Structure
 
 ```
-inflection <name> for {<axis>, <axis>, ...} {
+inflection <name> display { <lang>: "<text>", ... } for {<axis>, <axis>, ...} {
   requires stems: <stem>, <stem>, ...
 
   [<conditions>] -> <result>
@@ -15,6 +15,7 @@ inflection <name> for {<axis>, <axis>, ...} {
 ```
 
 - **`<name>`**: unique identifier for this paradigm
+- **`display { }`**: optional multilingual display names for the inflection class (stored in `inflection_display` table)
 - **`for { }`**: declares which inflectional axes define the paradigm space
 - **`requires stems`**: stems that entries must provide to use this class
 - **Rules**: map tag conditions to word forms
@@ -68,6 +69,11 @@ A rule's right-hand side can be:
    ```
 
 3. **A delegation** — delegates to another inflection class (see [Delegation](#delegation) below)
+
+4. **A phonrule application** — applies a phonological rule to a template (see [Phonological Rules](08-phonrules.md)):
+   ```
+   [tense=present, person=1, number=sg] -> harmony(`{root}ler`)
+   ```
 
 ### Specificity and Matching
 
@@ -222,6 +228,30 @@ inflection regular_verb for {tense, person_number} {
    - Check `override` rules first — if one matches, use it directly
    - Otherwise, concatenate: evaluate each slot's rules for the current cell and join the results
    - If any slot evaluates to `null`, the entire form is `null`
+
+### Compose with Phonological Rules
+
+The compose chain can be wrapped in a phonological rule to apply sound changes across morpheme boundaries:
+
+```
+inflection turkish_verb for {tense, person, number} {
+  requires stems: root
+
+  compose harmony(root + tense_sfx + pn_sfx)
+
+  slot tense_sfx {
+    [tense=present] -> `iyor`
+    [tense=past]    -> `di`
+  }
+
+  slot pn_sfx {
+    [person=1, number=sg] -> `um`
+    [person=3, number=sg] -> ``
+  }
+}
+```
+
+Here `harmony` is a `phonrule` that applies vowel harmony across the concatenated result. The phonrule is applied after all slots are concatenated, with morpheme boundaries (`+`) marking where sound changes can propagate. See [Phonological Rules](08-phonrules.md) for details.
 
 ### Example: Turkish-style Agglutination
 

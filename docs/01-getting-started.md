@@ -142,5 +142,6 @@ You'll see:
 | Entry structure | [Entries](05-entries.md) |
 | Multi-file projects | [Imports](06-imports.md) |
 | Template system | [Templates](07-templates.md) |
-| Complete worked examples | [Real-World Examples](08-real-world-examples.md) |
-| Full syntax & error catalog | [Reference](09-reference.md) |
+| Phonological rules | [Phonological Rules](08-phonrules.md) |
+| Complete worked examples | [Real-World Examples](09-real-world-examples.md) |
+| Full syntax & error catalog | [Reference](10-reference.md) |

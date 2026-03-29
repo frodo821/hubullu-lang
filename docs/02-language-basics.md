@@ -2,15 +2,17 @@
 
 ## File Structure
 
-A LexDSL file consists of top-level items in any order (with the exception that `@use` and `@reference` must precede other items). The six top-level items are:
+A LexDSL file consists of top-level items in any order (with the exception that `@use` and `@reference` must precede other items). The eight top-level items are:
 
 | Item | Purpose |
 | ---- | ------- |
-| `@use` | Import declarations (tag axes, extends, inflections) from another file |
+| `@use` | Import declarations (tag axes, extends, inflections, phonrules) from another file |
 | `@reference` | Import entries from another file |
 | `tagaxis` | Declare a grammatical or classificatory dimension |
 | `@extend` | Add enumerated values to an existing tag axis |
 | `inflection` | Define a paradigm (inflection/declension pattern) |
+| `phonrule` | Define phonological rewrite rules (e.g. vowel harmony) |
+| `@render` | Configure token rendering (separator, punctuation handling) |
 | `entry` | Define a dictionary entry |
 
 A minimal file might contain just a single entry, or just tag axis definitions — there is no required structure beyond the rule that imports come first.
@@ -102,6 +104,7 @@ Declarations within the same file can reference each other regardless of definit
 | `tagaxis` | Yes |
 | `@extend` | Yes |
 | `inflection` | Yes |
+| `phonrule` | Yes |
 | `entry` | No |
 | `@use` / `@reference` | No (must appear at file top) |
 
@@ -154,3 +157,7 @@ A bare `-` is not valid and produces a compile error.
 | `+` | Compose concatenation |
 | `_` | Wildcard in tag conditions |
 | `*` | Glob import |
+| `~` | Glue marker (suppresses separator between tokens in examples) |
+| `\|` | Union operator (in `phonrule` character class definitions) |
+| `!` | Negation (in `phonrule` context patterns) |
+| `/` | Context separator (in `phonrule` rewrite rules) |
