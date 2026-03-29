@@ -386,6 +386,7 @@ fn handle_completion(id: RequestId, req: Request, s: &ServerState) -> Response {
         Some(completion::complete(
             file_id.unwrap_or(doc.parse_result.file_id), offset, &doc.parse_result.tokens,
             project.map(|p| &p.phase1),
+            is_hut_uri(uri),
         ))
     })();
     Response::new_ok(id, serde_json::to_value(result).unwrap())
