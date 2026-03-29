@@ -168,6 +168,141 @@ pub fn generate(
     })
 }
 
+/// Generate semantic tokens for a `.hut` file using token-context heuristics.
+///
+/// Since `.hut` files have no AST, we infer token roles from surrounding context:
+/// - Ident followed by `[` or at line start without `=` context → entry ref (TYPE)
+/// - Ident before `=` inside `[…]` → tag axis (TYPE)
+/// - Ident after `=` inside `[…]` → tag value (ENUM_MEMBER)
+/// - Comma-separated idents inside `[…]` without `=` → tag axis (TYPE)
+///
+/// Comments are extracted directly from the source text since the lexer skips them.
+pub fn generate_hut(
+    tokens: &[Token],
+    file_id: FileId,
+    source_map: &SourceMap,
+) -> SemanticTokensResult {
+    let mut result: Vec<(u32, u32, u32, u32)> = Vec::new();
+
+    // Classify tokens using context heuristics.
+    let file_tokens: Vec<&Token> = tokens
+        .iter()
+        .filter(|t| t.span.file_id == file_id)
+        .collect();
+
+    let mut bracket_depth: usize = 0;
+
+    // Track whether we are still in the @reference header region.
+    let mut in_header = true;
+
+    for (i, tok) in file_tokens.iter().enumerate() {
+        let token_type = match &tok.node {
+            // @reference directive tokens
+            TokenKind::AtReference if in_header => KEYWORD,
+            TokenKind::Star if in_header => OPERATOR,
+            TokenKind::Ident(name) if in_header && (name == "from" || name == "as") => KEYWORD,
+            TokenKind::Ident(_) if in_header && bracket_depth == 0 => {
+                // Check if this is a namespace alias or named import entry.
+                // If followed by @reference or StringLit → still in header.
+                NAMESPACE
+            }
+            TokenKind::StringLit(_) if in_header => STRING,
+
+            TokenKind::LBracket => {
+                in_header = false;
+                bracket_depth += 1;
+                continue;
+            }
+            TokenKind::RBracket => {
+                bracket_depth = bracket_depth.saturating_sub(1);
+                continue;
+            }
+            TokenKind::Ident(name) if bracket_depth > 0 => {
+                in_header = false;
+                // Inside brackets: check if this is axis (before =) or value (after =).
+                let next = file_tokens.get(i + 1).map(|t| &t.node);
+                let prev = if i > 0 {
+                    file_tokens.get(i - 1).map(|t| &t.node)
+                } else {
+                    None
+                };
+                if matches!(next, Some(TokenKind::Eq)) {
+                    TYPE // axis name
+                } else if matches!(prev, Some(TokenKind::Eq)) {
+                    ENUM_MEMBER // tag value
+                } else if KEYWORDS.contains(&name.as_str()) {
+                    KEYWORD
+                } else {
+                    VARIABLE
+                }
+            }
+            TokenKind::Ident(name) if KEYWORDS.contains(&name.as_str()) => {
+                in_header = false;
+                KEYWORD
+            }
+            TokenKind::Ident(_) => {
+                in_header = false;
+                // Outside brackets: entry reference.
+                TYPE
+            }
+            TokenKind::StringLit(_) | TokenKind::TemplateLit(_) => {
+                in_header = false;
+                STRING
+            }
+            TokenKind::Arrow | TokenKind::Plus | TokenKind::Star | TokenKind::Pipe
+            | TokenKind::Tilde | TokenKind::Eq | TokenKind::Bang | TokenKind::Slash => OPERATOR,
+            TokenKind::Eof => continue,
+            _ => continue,
+        };
+        let (line, col, len) = span_to_line_col_len(&tok.span, source_map);
+        result.push((line, col, len, token_type));
+    }
+
+    // Extract comment spans from source text (lexer skips them).
+    let source = source_map.source(file_id);
+    for (line_idx, line) in source.lines().enumerate() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('#') {
+            let leading = line.len() - trimmed.len();
+            let utf16_col = line[..leading].encode_utf16().count();
+            let utf16_len = trimmed.encode_utf16().count();
+            result.push((line_idx as u32, utf16_col as u32, utf16_len as u32, COMMENT));
+        }
+    }
+
+    // Sort by position.
+    result.sort_by_key(|&(line, col, _, _)| (line, col));
+
+    // Delta-encode.
+    let mut prev_line = 0u32;
+    let mut prev_start = 0u32;
+    let data: Vec<SemanticToken> = result
+        .iter()
+        .map(|&(line, col, len, token_type)| {
+            let delta_line = line - prev_line;
+            let delta_start = if delta_line == 0 {
+                col - prev_start
+            } else {
+                col
+            };
+            prev_line = line;
+            prev_start = col;
+            SemanticToken {
+                delta_line,
+                delta_start,
+                length: len,
+                token_type,
+                token_modifiers_bitset: 0,
+            }
+        })
+        .collect();
+
+    SemanticTokensResult::Tokens(SemanticTokens {
+        result_id: None,
+        data,
+    })
+}
+
 fn span_to_line_col_len(span: &Span, source_map: &SourceMap) -> (u32, u32, u32) {
     let (line_1, col_1) = source_map.line_col(span.file_id, span.start);
     let line_text = source_map.line_text(span.file_id, line_1);

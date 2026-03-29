@@ -26,6 +26,55 @@ pub struct Phase1Result {
     pub path_to_id: HashMap<PathBuf, FileId>,
 }
 
+/// Run phase 1 from a set of import directives (used by `.hut` rendering).
+///
+/// Creates a virtual entry file that contains only the given imports, then
+/// recursively loads all referenced `.hu` files exactly as [`run_phase1`] does.
+/// The virtual entry has no local declarations; its scope only contains the
+/// imported symbols.
+///
+/// `base_dir` is used to resolve relative paths in the import directives.
+pub fn run_phase1_virtual(
+    imports: &[crate::ast::Import],
+    base_dir: &Path,
+) -> Phase1Result {
+    let mut ctx = Phase1Ctx {
+        files: HashMap::new(),
+        source_map: SourceMap::new(),
+        symbol_table: SymbolTable::new(),
+        diagnostics: Diagnostics::new(),
+        path_to_id: HashMap::new(),
+        use_stack: Vec::new(),
+        reference_visited: HashSet::new(),
+    };
+
+    // Create a virtual entry file with an empty source.
+    let virtual_path = base_dir.join("<hut-virtual>");
+    let file_id = ctx.source_map.add_file(virtual_path.clone(), String::new());
+    ctx.path_to_id.insert(virtual_path, file_id);
+    ctx.files.insert(file_id, File { items: Vec::new() });
+
+    // Process each import as a @reference from the virtual file.
+    for import in imports {
+        let import_path = base_dir.join(&import.path.node);
+        if !ctx.reference_visited.contains(&import_path) {
+            ctx.reference_visited.insert(import_path.clone());
+            let dep_id = ctx.load_file_recursive(&import_path, false);
+            if let Some(dep_id) = dep_id {
+                ctx.register_imports(file_id, dep_id, &import.target, false);
+            }
+        }
+    }
+
+    Phase1Result {
+        files: ctx.files,
+        source_map: ctx.source_map,
+        symbol_table: ctx.symbol_table,
+        diagnostics: ctx.diagnostics,
+        path_to_id: ctx.path_to_id,
+    }
+}
+
 /// Run phase 1: load files, parse, hoist declarations, register symbols.
 pub fn run_phase1(entry_path: &Path) -> Phase1Result {
     let mut ctx = Phase1Ctx {

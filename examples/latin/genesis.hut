@@ -1,0 +1,131 @@
+@reference * from "genesis_words.hu"
+
+# Biblia Sacra Vulgata — Genesis 1
+
+# 1 In principio creavit Deus caelum et terram.
+in principium[case=abl, number=sg] creare[tense=perfect, person=3, number=sg] Deus caelum[case=acc, number=sg] et terra[case=acc, number=sg] "."
+
+# 2 Terra autem erat inanis et vacua, et tenebrae super faciem abyssi;
+#   et spiritus Dei ferebatur super aquas.
+terra autem esse[tense=imperfect, person=3, number=sg, mood=ind] inanis et vacuus[case=nom, number=sg, gender=fem] "," et tenebrae super facies[case=acc, number=sg] abyssus[case=gen, number=sg] ";" et spiritus Deus[case=gen, number=sg] ferre[tense=imperfect, person=3, number=sg, voice=passive] super aqua[case=acc, number=pl] "."
+
+# 3 Dixitque Deus: «Fiat lux.» Et facta est lux.
+dicere[tense=perfect, person=3, number=sg]~que Deus ":" "«" fieri[tense=present, person=3, number=sg, mood=subj] lux[case=nom, number=sg] "." "»" et factus[case=nom, number=sg, gender=fem] esse[tense=present, person=3, number=sg, mood=ind] lux[case=nom, number=sg] "."
+
+# 4 Et vidit Deus lucem quod esset bona, et divisit lucem a tenebris.
+et videre[tense=perfect, person=3, number=sg] Deus lux[case=acc, number=sg] qui[case=nom, number=sg, gender=neut] esse[tense=imperfect, person=3, number=sg, mood=subj] bonus[case=nom, number=sg, gender=fem] "," et dividere[tense=perfect, person=3, number=sg, mood=ind] lux[case=acc, number=sg] a tenebrae[case=abl, number=pl] "."
+
+# 5 Appellavitque lucem Diem et tenebras Noctem.
+#   Factumque est vespere et mane, dies primus.
+appellare[tense=perfect, person=3, number=sg]~que lux[case=acc, number=sg] dies[case=acc, number=sg] et tenebrae[case=acc, number=pl] nox[case=acc, number=sg] "." factus[case=nom, number=sg, gender=neut]~que esse[tense=present, person=3, number=sg, mood=ind] vespere et mane "," dies[case=nom, number=sg] primus[case=nom, number=sg, gender=masc] "."
+
+# 6 Dixit quoque Deus: «Fiat firmamentum in medio aquarum,
+#   et dividat aquas ab aquis.»
+dicere[tense=perfect, person=3, number=sg] quoque Deus ":" "«" fieri[tense=present, person=3, number=sg, mood=subj] firmamentum in medium[case=abl, number=sg] aqua[case=gen, number=pl] "," et dividere[tense=present, person=3, number=sg, mood=subj] aqua[case=acc, number=pl] ab aqua[case=abl, number=pl] "." "»"
+
+# 7 Et fecit Deus firmamentum divisitque aquas, quae erant sub firmamento,
+#   ab his quae erant super firmamentum. Et factum est ita.
+et facere[tense=perfect, person=3, number=sg, mood=ind] Deus firmamentum dividere[tense=perfect, person=3, number=sg, mood=ind]~que aqua[case=acc, number=pl] "," qui[case=nom, number=pl, gender=fem] esse[tense=imperfect, person=3, number=pl, mood=ind] sub firmamentum[case=abl, number=sg] "," ab hic[case=abl, number=pl, gender=fem] qui[case=nom, number=pl, gender=fem] esse[tense=imperfect, person=3, number=pl, mood=ind] super firmamentum "." et factus[case=nom, number=sg, gender=neut] esse[tense=present, person=3, number=sg, mood=ind] ita "."
+
+# 8 Vocavitque Deus firmamentum Caelum.
+#   Et factum est vespere et mane, dies secundus.
+vocare[tense=perfect, person=3, number=sg]~que Deus firmamentum caelum[case=acc, number=sg] "." et factus[case=nom, number=sg, gender=neut] esse[tense=present, person=3, number=sg, mood=ind] vespere et mane "," dies[case=nom, number=sg] secundus[case=nom, number=sg, gender=masc] "."
+
+# 9 Dixit vero Deus: «Congregentur aquae, quae sub caelo sunt, in locum unum,
+#   et appareat arida.» Et factum est ita.
+dicere[tense=perfect, person=3, number=sg] vero Deus ":" "«" congregare[tense=present, person=3, number=pl, voice=passive, mood=subj] aqua[case=nom, number=pl] "," qui[case=nom, number=pl, gender=fem] sub caelum[case=abl, number=sg] esse[tense=present, person=3, number=pl, mood=ind] "," in locus[case=acc, number=sg] unus[case=acc, number=sg, gender=masc] "," et apparere[tense=present, person=3, number=sg, mood=subj] aridus[case=nom, number=sg, gender=fem] "." "»" et factus[case=nom, number=sg, gender=neut] esse[tense=present, person=3, number=sg, mood=ind] ita "."
+
+# 10 Et vocavit Deus aridam Terram congregationesque aquarum appellavit Maria.
+#    Et vidit Deus quod esset bonum.
+et vocare[tense=perfect, person=3, number=sg] Deus aridus[case=acc, number=sg, gender=fem] terra[case=acc, number=sg] congregatio[case=acc, number=pl]~que aqua[case=gen, number=pl] appellare[tense=perfect, person=3, number=sg] mare[case=acc, number=pl] "." et videre[tense=perfect, person=3, number=sg] Deus qui[case=nom, number=sg, gender=neut] esse[tense=imperfect, person=3, number=sg, mood=subj] bonus[case=nom, number=sg, gender=neut] "."
+
+# 11 Et ait: «Germinet terra herbam virentem et facientem semen,
+#    et lignum pomiferum faciens fructum iuxta genus suum,
+#    cuius semen in semetipso sit super terram.» Et factum est ita.
+et aiere[tense=present, person=3, number=sg] ":" "«" germinare[tense=present, person=3, number=sg, mood=subj] terra herba[case=acc, number=sg] virens[case=acc, number=sg, gender=fem] et faciens[case=acc, number=sg, gender=fem] semen[case=acc, number=sg] "," et lignum pomifer[case=acc, number=sg, gender=neut] faciens[case=nom, number=sg, gender=neut] fructus[case=acc, number=sg] iuxta genus[case=acc, number=sg] suus[case=acc, number=sg, gender=neut] "," qui[case=gen, number=sg, gender=neut] semen[case=nom, number=sg] in semetipse[case=abl, number=sg] esse[tense=present, person=3, number=sg, mood=subj] super terra[case=acc, number=sg] "." "»" et factus[case=nom, number=sg, gender=neut] esse[tense=present, person=3, number=sg, mood=ind] ita "."
+
+# 12 Et protulit terra herbam virentem et facientem semen iuxta genus suum,
+#    lignumque faciens fructum, et habens unumquodque sementem
+#    secundum speciem suam. Et vidit Deus quod esset bonum.
+et proferre[tense=perfect, person=3, number=sg] terra herba[case=acc, number=sg] virens[case=acc, number=sg, gender=fem] et faciens[case=acc, number=sg, gender=fem] semen[case=acc, number=sg] iuxta genus[case=acc, number=sg] suus[case=acc, number=sg, gender=neut] "," lignum~que faciens[case=nom, number=sg, gender=neut] fructus[case=acc, number=sg] "," et habens_part unumquodque sementis[case=acc, number=sg] secundum species[case=acc, number=sg] suus[case=acc, number=sg, gender=fem] "." et videre[tense=perfect, person=3, number=sg] Deus qui[case=nom, number=sg, gender=neut] esse[tense=imperfect, person=3, number=sg, mood=subj] bonus[case=nom, number=sg, gender=neut] "."
+
+# 13 Et factum est vespere et mane, dies tertius.
+et factus[case=nom, number=sg, gender=neut] esse[tense=present, person=3, number=sg, mood=ind] vespere et mane "," dies[case=nom, number=sg] tertius[case=nom, number=sg, gender=masc] "."
+
+# 14 Dixit autem Deus: «Fiant luminaria in firmamento caeli,
+#    ut dividant diem ac noctem, et sint in signa et tempora et dies et annos.»
+dicere[tense=perfect, person=3, number=sg] autem Deus ":" "«" fieri[tense=present, person=3, number=pl, mood=subj] luminare[case=nom, number=pl] in firmamentum[case=abl, number=sg] caelum[case=gen, number=sg] "," ut dividere[tense=present, person=3, number=pl, mood=subj] dies[case=acc, number=sg] ac nox[case=acc, number=sg] "," et esse[tense=present, person=3, number=pl, mood=subj] in signum[case=acc, number=pl] et tempus[case=acc, number=pl] et dies[case=acc, number=pl] et annus[case=acc, number=pl] "." "»"
+
+# 15 Ut luceant in firmamento caeli et illuminent terram.» Et factum est ita.
+ut lucere[tense=present, person=3, number=pl, mood=subj] in firmamentum[case=abl, number=sg] caelum[case=gen, number=sg] et illuminare[tense=present, person=3, number=pl, mood=subj] terra[case=acc, number=sg] "." et factus[case=nom, number=sg, gender=neut] esse[tense=present, person=3, number=sg, mood=ind] ita "."
+
+# 16 Fecitque Deus duo luminaria magna:
+#    luminare maius, ut praeesset diei, et luminare minus, ut praeesset nocti;
+#    et stellas.
+facere[tense=perfect, person=3, number=sg, mood=ind]~que Deus duo luminare[case=acc, number=pl] magnus[case=acc, number=pl, gender=neut] ":" luminare[case=acc, number=sg] maius "," ut praesse[tense=imperfect, person=3, number=sg, mood=subj] dies[case=dat, number=sg] "," et luminare[case=acc, number=sg] minus "," ut praesse[tense=imperfect, person=3, number=sg, mood=subj] nox[case=dat, number=sg] ";" et stella[case=acc, number=pl] "."
+
+# 17 Et posuit eas in firmamento caeli, ut lucerent super terram,
+et ponere[tense=perfect, person=3, number=sg] is[case=acc, number=pl, gender=fem] in firmamentum[case=abl, number=sg] caelum[case=gen, number=sg] "," ut lucere[tense=imperfect, person=3, number=pl, mood=subj] super terra[case=acc, number=sg] ","
+
+# 18 et praeessent diei ac nocti, et dividerent lucem ac tenebras.
+#    Et vidit Deus quod esset bonum.
+et praesse[tense=imperfect, person=3, number=pl, mood=subj] dies[case=dat, number=sg] ac nox[case=dat, number=sg] "," et dividere[tense=imperfect, person=3, number=pl, mood=subj] lux[case=acc, number=sg] ac tenebrae[case=acc, number=pl] "." et videre[tense=perfect, person=3, number=sg] Deus qui[case=nom, number=sg, gender=neut] esse[tense=imperfect, person=3, number=sg, mood=subj] bonus[case=nom, number=sg, gender=neut] "."
+
+# 19 Et factum est vespere et mane, dies quartus.
+et factus[case=nom, number=sg, gender=neut] esse[tense=present, person=3, number=sg, mood=ind] vespere et mane "," dies[case=nom, number=sg] quartus[case=nom, number=sg, gender=masc] "."
+
+# 20 Dixit etiam Deus: «Producant aquae reptile animae viventis
+#    et volatile super terram sub firmamento caeli.»
+dicere[tense=perfect, person=3, number=sg] etiam Deus ":" "«" producere[tense=present, person=3, number=pl, mood=subj] aqua[case=nom, number=pl] reptile[case=acc, number=sg] anima[case=gen, number=sg] vivens[case=gen, number=sg, gender=fem] et volatile[case=acc, number=sg] super terra[case=acc, number=sg] sub firmamentum[case=abl, number=sg] caelum[case=gen, number=sg] "." "»"
+
+# 21 Creavitque Deus cete grandia et omnem animam viventem atque motabilem,
+#    quam produxerant aquae in species suas,
+#    et omne volatile secundum genus suum.
+#    Et vidit Deus quod esset bonum.
+creare[tense=perfect, person=3, number=sg]~que Deus cete grandis[case=acc, number=pl, gender=neut] et omnis[case=acc, number=sg, gender=fem] anima[case=acc, number=sg] vivens[case=acc, number=sg, gender=fem] atque motabilis[case=acc, number=sg, gender=fem] "," qui[case=acc, number=sg, gender=fem] producere[tense=pluperfect, person=3, number=pl, mood=ind] aqua[case=nom, number=pl] in species[case=acc, number=pl] suus[case=acc, number=pl, gender=fem] "," et omnis[case=acc, number=sg, gender=neut] volatile[case=acc, number=sg] secundum genus[case=acc, number=sg] suus[case=acc, number=sg, gender=neut] "." et videre[tense=perfect, person=3, number=sg] Deus qui[case=nom, number=sg, gender=neut] esse[tense=imperfect, person=3, number=sg, mood=subj] bonus[case=nom, number=sg, gender=neut] "."
+
+# 22 Benedixitque eis dicens: «Crescite et multiplicamini
+#    et replete aquas maris; et aves multiplicentur super terram.»
+benedicere[tense=perfect, person=3, number=sg]~que is[case=dat, number=pl, gender=masc] dicens ":" "«" crescere[tense=present, person=2, number=pl, mood=imp] et multiplicare[tense=present, person=2, number=pl, voice=passive, mood=imp] et replere[tense=present, person=2, number=pl, mood=imp] aqua[case=acc, number=pl] mare[case=gen, number=sg] ";" et avis[case=nom, number=pl] multiplicare[tense=present, person=3, number=pl, voice=passive, mood=subj] super terra[case=acc, number=sg] "." "»"
+
+# 23 Et factum est vespere et mane, dies quintus.
+et factus[case=nom, number=sg, gender=neut] esse[tense=present, person=3, number=sg, mood=ind] vespere et mane "," dies[case=nom, number=sg] quintus[case=nom, number=sg, gender=masc] "."
+
+# 24 Dixit quoque Deus: «Producat terra animam viventem in genere suo:
+#    iumenta et reptilia et bestias terrae secundum species suas.»
+#    Factumque est ita.
+dicere[tense=perfect, person=3, number=sg] quoque Deus ":" "«" producere[tense=present, person=3, number=sg, mood=subj] terra anima[case=acc, number=sg] vivens[case=acc, number=sg, gender=fem] in genus[case=abl, number=sg] suus[case=abl, number=sg, gender=neut] ":" iumentum[case=acc, number=pl] et reptile[case=acc, number=pl] et bestia[case=acc, number=pl] terra[case=gen, number=sg] secundum species[case=acc, number=pl] suus[case=acc, number=pl, gender=fem] "." "»" factus[case=nom, number=sg, gender=neut]~que esse[tense=present, person=3, number=sg, mood=ind] ita "."
+
+# 25 Et fecit Deus bestias terrae iuxta species suas,
+#    et iumenta et omne reptile terrae in genere suo.
+#    Et vidit Deus quod esset bonum.
+et facere[tense=perfect, person=3, number=sg, mood=ind] Deus bestia[case=acc, number=pl] terra[case=gen, number=sg] iuxta species[case=acc, number=pl] suus[case=acc, number=pl, gender=fem] "," et iumentum[case=acc, number=pl] et omnis[case=acc, number=sg, gender=neut] reptile[case=acc, number=sg] terra[case=gen, number=sg] in genus[case=abl, number=sg] suus[case=abl, number=sg, gender=neut] "." et videre[tense=perfect, person=3, number=sg] Deus qui[case=nom, number=sg, gender=neut] esse[tense=imperfect, person=3, number=sg, mood=subj] bonus[case=nom, number=sg, gender=neut] "."
+
+# 26 Et ait: «Faciamus hominem ad imaginem et similitudinem nostram;
+#    et praesit piscibus maris et volatilibus caeli et bestiis
+#    universaeque terrae omnique reptili, quod movetur in terra.»
+et aiere[tense=present, person=3, number=sg] ":" "«" facere[tense=present, person=1, number=pl, mood=subj] homo[case=acc, number=sg] ad imago[case=acc, number=sg] et similitudo[case=acc, number=sg] noster[case=acc, number=sg, gender=fem] ";" et praesse[tense=present, person=3, number=sg, mood=subj] piscis[case=dat, number=pl] mare[case=gen, number=sg] et volatile[case=dat, number=pl] caelum[case=gen, number=sg] et bestia[case=dat, number=pl] universus[case=gen, number=sg, gender=fem]~que terra[case=gen, number=sg] omnis[case=abl, number=sg, gender=neut]~que reptile[case=dat, number=sg] "," qui[case=nom, number=sg, gender=neut] movere[tense=present, person=3, number=sg, voice=passive] in terra "." "»"
+
+# 27 Et creavit Deus hominem ad imaginem suam;
+#    ad imaginem Dei creavit illum, masculum et feminam creavit eos.
+et creare[tense=perfect, person=3, number=sg] Deus homo[case=acc, number=sg] ad imago[case=acc, number=sg] suus[case=acc, number=sg, gender=fem] ";" ad imago[case=acc, number=sg] Deus[case=gen, number=sg] creare[tense=perfect, person=3, number=sg] ille[case=acc, number=sg, gender=masc] "," masculus[case=acc, number=sg] et femina[case=acc, number=sg] creare[tense=perfect, person=3, number=sg] is[case=acc, number=pl, gender=masc] "."
+
+# 28 Benedixitque illis et ait Deus: «Crescite et multiplicamini
+#    et replete terram, et subicite eam;
+#    et dominamini piscibus maris et volatilibus caeli
+#    et universis animantibus quae moventur super terram.»
+benedicere[tense=perfect, person=3, number=sg]~que ille[case=dat, number=pl, gender=masc] et aiere[tense=present, person=3, number=sg] Deus ":" "«" crescere[tense=present, person=2, number=pl, mood=imp] et multiplicare[tense=present, person=2, number=pl, voice=passive, mood=imp] et replere[tense=present, person=2, number=pl, mood=imp] terra[case=acc, number=sg] "," et subicere[tense=present, person=2, number=pl, mood=imp] is[case=acc, number=sg, gender=fem] ";" et dominari[tense=present, person=2, number=pl, voice=passive, mood=imp] piscis[case=dat, number=pl] mare[case=gen, number=sg] et volatile[case=dat, number=pl] caelum[case=gen, number=sg] et universus[case=dat, number=pl, gender=masc] animans[case=dat, number=pl] qui[case=nom, number=pl, gender=fem] movere[tense=present, person=3, number=pl, voice=passive] super terra[case=acc, number=sg] "." "»"
+
+# 29 Dixitque Deus: «Ecce dedi vobis omnem herbam adferentem semen super terram,
+#    et universa ligna quae habent in semetipsis sementem generis sui,
+#    ut sint vobis in escam,
+dicere[tense=perfect, person=3, number=sg]~que Deus ":" "«" ecce dare[tense=perfect, person=1, number=sg] tu[case=dat, number=pl] omnis[case=acc, number=sg, gender=fem] herba[case=acc, number=sg] adferens[case=acc, number=sg, gender=fem] semen[case=acc, number=sg] super terra[case=acc, number=sg] "," et universus[case=acc, number=pl, gender=neut] lignum[case=acc, number=pl] qui[case=nom, number=pl, gender=neut] habere[tense=present, person=3, number=pl, mood=ind] in semetipse[case=abl, number=pl] sementis[case=acc, number=sg] genus[case=gen, number=sg] suus[case=gen, number=sg, gender=masc] "," ut esse[tense=present, person=3, number=pl, mood=subj] tu[case=dat, number=pl] in esca[case=acc, number=sg] ","
+
+# 30 et cunctis animantibus terrae omnique volucri caeli
+#    et universis quae moventur in terra, et in quibus est anima vivens,
+#    ut habeant ad vescendum.» Et factum est ita.
+et cunctus[case=dat, number=pl, gender=masc] animans[case=dat, number=pl] terra[case=gen, number=sg] omnis[case=abl, number=sg, gender=fem]~que volucris[case=dat, number=sg] caelum[case=gen, number=sg] et universus[case=dat, number=pl, gender=masc] qui[case=nom, number=pl, gender=neut] movere[tense=present, person=3, number=pl, voice=passive] in terra "," et in qui[case=abl, number=pl, gender=neut] esse[tense=present, person=3, number=sg, mood=ind] anima vivens "," ut habere[tense=present, person=3, number=pl, mood=subj] ad vescendum "." "»" et factus[case=nom, number=sg, gender=neut] esse[tense=present, person=3, number=sg, mood=ind] ita "."
+
+# 31 Viditque Deus cuncta quae fecerat, et erant valde bona.
+#    Et factum est vespere et mane, dies sextus.
+videre[tense=perfect, person=3, number=sg]~que Deus cunctus[case=acc, number=pl, gender=neut] qui[case=nom, number=pl, gender=neut] facere[tense=pluperfect, person=3, number=sg, mood=ind] "," et esse[tense=imperfect, person=3, number=pl, mood=ind] valde bonus[case=nom, number=pl, gender=neut] "." et factus[case=nom, number=sg, gender=neut] esse[tense=present, person=3, number=sg, mood=ind] vespere et mane "," dies[case=nom, number=sg] sextus[case=nom, number=sg, gender=masc] "."

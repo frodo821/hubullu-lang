@@ -57,6 +57,9 @@ pub mod visit;
 /// Language Server Protocol implementation.
 #[cfg(feature = "lsp")]
 pub mod lsp;
+/// Claude Code skill installer.
+#[cfg(feature = "cli")]
+pub mod skill;
 
 use std::path::Path;
 

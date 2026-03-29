@@ -1,4 +1,4 @@
-# @source main.hu
+@reference * from "main.hu"
 
 # Puella servum amat. (The girl loves the slave.)
 puella[case=nom, number=sg] servus[case=acc, number=sg] amare[tense=present, person=3, number=sg, voice=active] "."

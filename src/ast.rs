@@ -532,6 +532,14 @@ pub enum Token {
 // Entry reference (shared)
 // ---------------------------------------------------------------------------
 
+/// Parsed `.hut` file: `@reference` imports followed by a token list.
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HutFile {
+    pub references: Vec<Import>,
+    pub tokens: Vec<Token>,
+}
+
 /// Fully qualified entry reference:
 /// `(<namespace>.)* <entry_id> (#<meaning>)? ([<form_spec>])?`
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]

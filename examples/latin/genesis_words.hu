@@ -1,0 +1,1143 @@
+@use * from "profile.hu"
+
+# =========================================================================
+# Profile extensions for Genesis vocabulary
+# =========================================================================
+
+tagaxis mood {
+  role: inflectional
+  display: { en: "Mood" }
+}
+
+@extend mood_values for tagaxis mood {
+  ind  { display: { en: "Indicative" } }
+  subj { display: { en: "Subjunctive" } }
+  imp  { display: { en: "Imperative" } }
+}
+
+@extend tense_ext for tagaxis tense {
+  perfect    { display: { en: "Perfect" } }
+  pluperfect { display: { en: "Pluperfect" } }
+}
+
+@extend pos_ext for tagaxis pos {
+  prep   { display: { en: "Preposition" } }
+  conj   { display: { en: "Conjunction" } }
+  adv    { display: { en: "Adverb" } }
+  pron   { display: { en: "Pronoun" } }
+  interj { display: { en: "Interjection" } }
+}
+
+# =========================================================================
+# Indeclinable words
+# =========================================================================
+
+entry in    { headword: "in"    tags: [pos=prep]   meaning: "in, into, on" }
+entry et    { headword: "et"    tags: [pos=conj]   meaning: "and" }
+entry que   { headword: "que"   tags: [pos=conj]   meaning: "and (enclitic)" }
+entry autem { headword: "autem" tags: [pos=conj]   meaning: "however, moreover" }
+entry super { headword: "super" tags: [pos=prep]   meaning: "above, over" }
+entry a     { headword: "a"     tags: [pos=prep]   meaning: "from, by (before consonants)" }
+entry ab    { headword: "ab"    tags: [pos=prep]   meaning: "from, by (before vowels)" }
+entry ita   { headword: "ita"   tags: [pos=adv]    meaning: "so, thus" }
+entry quoque { headword: "quoque" tags: [pos=adv]  meaning: "also, too" }
+entry vero  { headword: "vero"  tags: [pos=adv]    meaning: "truly, indeed" }
+entry sub   { headword: "sub"   tags: [pos=prep]   meaning: "under, beneath" }
+entry iuxta { headword: "iuxta" tags: [pos=prep]   meaning: "next to, according to" }
+entry ut    { headword: "ut"    tags: [pos=conj]   meaning: "so that, in order that" }
+entry ac    { headword: "ac"    tags: [pos=conj]   meaning: "and (before consonants)" }
+entry atque { headword: "atque" tags: [pos=conj]   meaning: "and, as well as" }
+entry etiam { headword: "etiam" tags: [pos=adv]    meaning: "also, even" }
+entry ad    { headword: "ad"    tags: [pos=prep]   meaning: "to, toward" }
+entry ecce  { headword: "ecce"  tags: [pos=interj] meaning: "behold" }
+entry valde { headword: "valde" tags: [pos=adv]    meaning: "very, exceedingly" }
+entry mane    { headword: "mane"    tags: [pos=adv] meaning: "morning" }
+entry vespere { headword: "vespere" tags: [pos=adv] meaning: "evening" }
+entry secundum { headword: "secundum" tags: [pos=prep] meaning: "according to" }
+
+# Indeclinable special forms
+entry duo          { headword: "duo"          tags: [pos=adj]  meaning: "two" }
+entry maius        { headword: "maius"        tags: [pos=adj]  meaning: "greater (comparative)" }
+entry minus        { headword: "minus"        tags: [pos=adj]  meaning: "lesser (comparative)" }
+entry cete         { headword: "cete"         tags: [pos=noun] meaning: "sea monsters" }
+entry vescendum    { headword: "vescendum"    tags: [pos=noun] meaning: "eating (gerund)" }
+entry unumquodque  { headword: "unumquodque"  tags: [pos=pron] meaning: "each one" }
+
+# =========================================================================
+# Nouns — 1st declension (first_decl)
+# =========================================================================
+
+entry terra {
+  headword: "terra"
+  tags: [pos=noun, gender=fem]
+  stems { base: "terr" }
+  inflection_class: first_decl
+  meaning: "earth, land"
+}
+
+entry aqua {
+  headword: "aqua"
+  tags: [pos=noun, gender=fem]
+  stems { base: "aqu" }
+  inflection_class: first_decl
+  meaning: "water"
+}
+
+entry tenebrae {
+  headword: "tenebrae"
+  tags: [pos=noun, gender=fem]
+  stems { base: "tenebr" }
+  inflection_class: first_decl
+  meaning: "darkness"
+}
+
+entry stella {
+  headword: "stella"
+  tags: [pos=noun, gender=fem]
+  stems { base: "stell" }
+  inflection_class: first_decl
+  meaning: "star"
+}
+
+entry herba {
+  headword: "herba"
+  tags: [pos=noun, gender=fem]
+  stems { base: "herb" }
+  inflection_class: first_decl
+  meaning: "plant, herb"
+}
+
+entry bestia {
+  headword: "bestia"
+  tags: [pos=noun, gender=fem]
+  stems { base: "besti" }
+  inflection_class: first_decl
+  meaning: "beast, animal"
+}
+
+entry anima {
+  headword: "anima"
+  tags: [pos=noun, gender=fem]
+  stems { base: "anim" }
+  inflection_class: first_decl
+  meaning: "soul, living creature"
+}
+
+entry femina {
+  headword: "femina"
+  tags: [pos=noun, gender=fem]
+  stems { base: "femin" }
+  inflection_class: first_decl
+  meaning: "woman, female"
+}
+
+entry esca {
+  headword: "esca"
+  tags: [pos=noun, gender=fem]
+  stems { base: "esc" }
+  inflection_class: first_decl
+  meaning: "food"
+}
+
+# =========================================================================
+# Nouns — 2nd declension masculine (second_decl_masc)
+# =========================================================================
+
+entry Deus {
+  headword: "Deus"
+  tags: [pos=noun, gender=masc]
+  stems { base: "De" }
+  inflection_class: second_decl_masc
+  meaning: "God"
+}
+
+entry locus {
+  headword: "locus"
+  tags: [pos=noun, gender=masc]
+  stems { base: "loc" }
+  inflection_class: second_decl_masc
+  meaning: "place"
+}
+
+entry annus {
+  headword: "annus"
+  tags: [pos=noun, gender=masc]
+  stems { base: "ann" }
+  inflection_class: second_decl_masc
+  meaning: "year"
+}
+
+entry masculus {
+  headword: "masculus"
+  tags: [pos=noun, gender=masc]
+  stems { base: "mascul" }
+  inflection_class: second_decl_masc
+  meaning: "male"
+}
+
+entry abyssus {
+  headword: "abyssus"
+  tags: [pos=noun, gender=fem]
+  stems { base: "abyss" }
+  inflection_class: second_decl_masc
+  meaning: "abyss, deep"
+}
+
+# =========================================================================
+# Nouns — 2nd declension neuter (second_decl_neut)
+# =========================================================================
+
+entry principium {
+  headword: "principium"
+  tags: [pos=noun, gender=neut]
+  stems { base: "principi" }
+  inflection_class: second_decl_neut
+  meaning: "beginning"
+}
+
+entry caelum {
+  headword: "caelum"
+  tags: [pos=noun, gender=neut]
+  stems { base: "cael" }
+  inflection_class: second_decl_neut
+  meaning: "sky, heaven"
+}
+
+entry firmamentum {
+  headword: "firmamentum"
+  tags: [pos=noun, gender=neut]
+  stems { base: "firmament" }
+  inflection_class: second_decl_neut
+  meaning: "firmament, expanse"
+}
+
+entry medium {
+  headword: "medium"
+  tags: [pos=noun, gender=neut]
+  stems { base: "medi" }
+  inflection_class: second_decl_neut
+  meaning: "middle"
+}
+
+entry lignum {
+  headword: "lignum"
+  tags: [pos=noun, gender=neut]
+  stems { base: "lign" }
+  inflection_class: second_decl_neut
+  meaning: "wood, tree"
+}
+
+entry signum {
+  headword: "signum"
+  tags: [pos=noun, gender=neut]
+  stems { base: "sign" }
+  inflection_class: second_decl_neut
+  meaning: "sign, mark"
+}
+
+entry iumentum {
+  headword: "iumentum"
+  tags: [pos=noun, gender=neut]
+  stems { base: "iument" }
+  inflection_class: second_decl_neut
+  meaning: "beast of burden, cattle"
+}
+
+# =========================================================================
+# Nouns — 3rd/4th/5th declension (inflect for)
+# =========================================================================
+
+entry lux {
+  headword: "lux"
+  tags: [pos=noun, gender=fem]
+  meaning: "light"
+  inflect for {case, number} {
+    [case=nom, number=sg] -> `lux`
+    [case=acc, number=sg] -> `lucem`
+    [_] -> null
+  }
+}
+
+entry nox {
+  headword: "nox"
+  tags: [pos=noun, gender=fem]
+  meaning: "night"
+  inflect for {case, number} {
+    [case=acc, number=sg] -> `noctem`
+    [case=dat, number=sg] -> `nocti`
+    [_] -> null
+  }
+}
+
+entry dies {
+  headword: "dies"
+  tags: [pos=noun, gender=masc]
+  meaning: "day"
+  inflect for {case, number} {
+    [case=nom, number=sg] -> `dies`
+    [case=acc, number=sg] -> `diem`
+    [case=dat, number=sg] -> `diei`
+    [case=nom, number=pl] -> `dies`
+    [case=acc, number=pl] -> `dies`
+    [_] -> null
+  }
+}
+
+entry facies {
+  headword: "facies"
+  tags: [pos=noun, gender=fem]
+  meaning: "face, surface"
+  inflect for {case, number} {
+    [case=acc, number=sg] -> `faciem`
+    [_] -> null
+  }
+}
+
+entry spiritus {
+  headword: "spiritus"
+  tags: [pos=noun, gender=masc]
+  meaning: "spirit, breath"
+  inflect for {case, number} {
+    [case=nom, number=sg] -> `spiritus`
+    [_] -> null
+  }
+}
+
+entry fructus {
+  headword: "fructus"
+  tags: [pos=noun, gender=masc]
+  meaning: "fruit"
+  inflect for {case, number} {
+    [case=acc, number=sg] -> `fructum`
+    [_] -> null
+  }
+}
+
+entry genus {
+  headword: "genus"
+  tags: [pos=noun, gender=neut]
+  meaning: "kind, type"
+  inflect for {case, number} {
+    [case=nom, number=sg] -> `genus`
+    [case=acc, number=sg] -> `genus`
+    [case=gen, number=sg] -> `generis`
+    [case=abl, number=sg] -> `genere`
+    [_] -> null
+  }
+}
+
+entry semen {
+  headword: "semen"
+  tags: [pos=noun, gender=neut]
+  meaning: "seed"
+  inflect for {case, number} {
+    [case=nom, number=sg] -> `semen`
+    [case=acc, number=sg] -> `semen`
+    [_] -> null
+  }
+}
+
+entry mare {
+  headword: "mare"
+  tags: [pos=noun, gender=neut]
+  meaning: "sea"
+  inflect for {case, number} {
+    [case=gen, number=sg] -> `maris`
+    [case=nom, number=pl] -> `maria`
+    [case=acc, number=pl] -> `maria`
+    [_] -> null
+  }
+}
+
+entry luminare {
+  headword: "luminare"
+  tags: [pos=noun, gender=neut]
+  meaning: "luminary, light"
+  inflect for {case, number} {
+    [case=nom, number=sg] -> `luminare`
+    [case=acc, number=sg] -> `luminare`
+    [case=nom, number=pl] -> `luminaria`
+    [case=acc, number=pl] -> `luminaria`
+    [_] -> null
+  }
+}
+
+entry tempus {
+  headword: "tempus"
+  tags: [pos=noun, gender=neut]
+  meaning: "time, season"
+  inflect for {case, number} {
+    [case=nom, number=pl] -> `tempora`
+    [case=acc, number=pl] -> `tempora`
+    [_] -> null
+  }
+}
+
+entry congregatio {
+  headword: "congregatio"
+  tags: [pos=noun, gender=fem]
+  meaning: "gathering, collection"
+  inflect for {case, number} {
+    [case=acc, number=pl] -> `congregationes`
+    [_] -> null
+  }
+}
+
+entry homo {
+  headword: "homo"
+  tags: [pos=noun, gender=masc]
+  meaning: "human, man"
+  inflect for {case, number} {
+    [case=acc, number=sg] -> `hominem`
+    [_] -> null
+  }
+}
+
+entry imago {
+  headword: "imago"
+  tags: [pos=noun, gender=fem]
+  meaning: "image, likeness"
+  inflect for {case, number} {
+    [case=acc, number=sg] -> `imaginem`
+    [_] -> null
+  }
+}
+
+entry similitudo {
+  headword: "similitudo"
+  tags: [pos=noun, gender=fem]
+  meaning: "likeness, resemblance"
+  inflect for {case, number} {
+    [case=acc, number=sg] -> `similitudinem`
+    [_] -> null
+  }
+}
+
+entry piscis {
+  headword: "piscis"
+  tags: [pos=noun, gender=masc]
+  meaning: "fish"
+  inflect for {case, number} {
+    [case=dat, number=pl] -> `piscibus`
+    [case=abl, number=pl] -> `piscibus`
+    [_] -> null
+  }
+}
+
+entry species {
+  headword: "species"
+  tags: [pos=noun, gender=fem]
+  meaning: "kind, appearance"
+  inflect for {case, number} {
+    [case=acc, number=sg] -> `speciem`
+    [case=acc, number=pl] -> `species`
+    [_] -> null
+  }
+}
+
+entry sementis {
+  headword: "sementis"
+  tags: [pos=noun, gender=fem]
+  meaning: "seed, sowing"
+  inflect for {case, number} {
+    [case=acc, number=sg] -> `sementem`
+    [_] -> null
+  }
+}
+
+entry avis {
+  headword: "avis"
+  tags: [pos=noun, gender=fem]
+  meaning: "bird"
+  inflect for {case, number} {
+    [case=nom, number=pl] -> `aves`
+    [case=acc, number=pl] -> `aves`
+    [_] -> null
+  }
+}
+
+entry volucris {
+  headword: "volucris"
+  tags: [pos=noun, gender=fem]
+  meaning: "bird, winged creature"
+  inflect for {case, number} {
+    [case=dat, number=sg] -> `volucri`
+    [case=abl, number=sg] -> `volucri`
+    [_] -> null
+  }
+}
+
+# =========================================================================
+# Adjectives — 1st/2nd declension (adj_12)
+# =========================================================================
+
+entry bonus {
+  headword: "bonus"
+  tags: [pos=adj]
+  stems { base: "bon" }
+  inflection_class: adj_12
+  meaning: "good"
+}
+
+entry vacuus {
+  headword: "vacuus"
+  tags: [pos=adj]
+  stems { base: "vacu" }
+  inflection_class: adj_12
+  meaning: "empty, void"
+}
+
+entry aridus {
+  headword: "aridus"
+  tags: [pos=adj]
+  stems { base: "arid" }
+  inflection_class: adj_12
+  meaning: "dry"
+}
+
+entry magnus {
+  headword: "magnus"
+  tags: [pos=adj]
+  stems { base: "magn" }
+  inflection_class: adj_12
+  meaning: "great, large"
+}
+
+entry suus {
+  headword: "suus"
+  tags: [pos=adj]
+  stems { base: "su" }
+  inflection_class: adj_12
+  meaning: "his, her, its, their (own)"
+}
+
+entry universus {
+  headword: "universus"
+  tags: [pos=adj]
+  stems { base: "univers" }
+  inflection_class: adj_12
+  meaning: "all, entire, universal"
+}
+
+entry cunctus {
+  headword: "cunctus"
+  tags: [pos=adj]
+  stems { base: "cunct" }
+  inflection_class: adj_12
+  meaning: "all, the whole"
+}
+
+entry pomifer {
+  headword: "pomifer"
+  tags: [pos=adj]
+  stems { base: "pomifer" }
+  inflection_class: adj_12
+  meaning: "fruit-bearing"
+}
+
+# Ordinal numbers
+entry primus    { headword: "primus"    tags: [pos=adj] stems { base: "prim" }    inflection_class: adj_12 meaning: "first" }
+entry secundus  { headword: "secundus"  tags: [pos=adj] stems { base: "secund" }  inflection_class: adj_12 meaning: "second" }
+entry tertius   { headword: "tertius"   tags: [pos=adj] stems { base: "terti" }   inflection_class: adj_12 meaning: "third" }
+entry quartus   { headword: "quartus"   tags: [pos=adj] stems { base: "quart" }   inflection_class: adj_12 meaning: "fourth" }
+entry quintus   { headword: "quintus"   tags: [pos=adj] stems { base: "quint" }   inflection_class: adj_12 meaning: "fifth" }
+entry sextus    { headword: "sextus"    tags: [pos=adj] stems { base: "sext" }    inflection_class: adj_12 meaning: "sixth" }
+
+# =========================================================================
+# Adjectives — 3rd declension (inflect for)
+# =========================================================================
+
+entry inanis {
+  headword: "inanis"
+  tags: [pos=adj]
+  meaning: "empty, formless"
+}
+
+entry omnis {
+  headword: "omnis"
+  tags: [pos=adj]
+  meaning: "every, all"
+  inflect for {case, number, gender} {
+    [case=acc, number=sg, gender=masc] -> `omnem`
+    [case=acc, number=sg, gender=fem]  -> `omnem`
+    [case=nom, number=sg, gender=neut] -> `omne`
+    [case=acc, number=sg, gender=neut] -> `omne`
+    [case=dat, number=sg, gender=masc] -> `omni`
+    [case=dat, number=sg, gender=fem]  -> `omni`
+    [case=dat, number=sg, gender=neut] -> `omni`
+    [case=abl, number=sg, gender=masc] -> `omni`
+    [case=abl, number=sg, gender=fem]  -> `omni`
+    [case=abl, number=sg, gender=neut] -> `omni`
+    [case=dat, number=pl, gender=masc] -> `omnibus`
+    [case=dat, number=pl, gender=fem]  -> `omnibus`
+    [case=dat, number=pl, gender=neut] -> `omnibus`
+    [case=abl, number=pl, gender=masc] -> `omnibus`
+    [case=abl, number=pl, gender=fem]  -> `omnibus`
+    [case=abl, number=pl, gender=neut] -> `omnibus`
+    [_] -> null
+  }
+}
+
+entry grandis {
+  headword: "grandis"
+  tags: [pos=adj]
+  meaning: "great, large"
+  inflect for {case, number, gender} {
+    [case=nom, number=pl, gender=neut] -> `grandia`
+    [case=acc, number=pl, gender=neut] -> `grandia`
+    [_] -> null
+  }
+}
+
+entry motabilis {
+  headword: "motabilis"
+  tags: [pos=adj]
+  meaning: "moveable"
+  inflect for {case, number, gender} {
+    [case=acc, number=sg, gender=fem] -> `motabilem`
+    [_] -> null
+  }
+}
+
+entry noster {
+  headword: "noster"
+  tags: [pos=adj]
+  meaning: "our"
+  inflect for {case, number, gender} {
+    [case=acc, number=sg, gender=fem] -> `nostram`
+    [_] -> null
+  }
+}
+
+entry unus {
+  headword: "unus"
+  tags: [pos=adj]
+  meaning: "one"
+  inflect for {case, number, gender} {
+    [case=acc, number=sg, gender=masc] -> `unum`
+    [case=acc, number=sg, gender=neut] -> `unum`
+    [_] -> null
+  }
+}
+
+# reptile/volatile used as nouns
+entry reptile {
+  headword: "reptile"
+  tags: [pos=noun, gender=neut]
+  meaning: "creeping thing, reptile"
+  inflect for {case, number} {
+    [case=nom, number=sg] -> `reptile`
+    [case=acc, number=sg] -> `reptile`
+    [case=dat, number=sg] -> `reptili`
+    [case=abl, number=sg] -> `reptili`
+    [case=nom, number=pl] -> `reptilia`
+    [case=acc, number=pl] -> `reptilia`
+    [_] -> null
+  }
+}
+
+entry volatile {
+  headword: "volatile"
+  tags: [pos=noun, gender=neut]
+  meaning: "flying thing, bird"
+  inflect for {case, number} {
+    [case=nom, number=sg] -> `volatile`
+    [case=acc, number=sg] -> `volatile`
+    [case=dat, number=pl] -> `volatilibus`
+    [case=abl, number=pl] -> `volatilibus`
+    [_] -> null
+  }
+}
+
+# =========================================================================
+# Pronouns
+# =========================================================================
+
+entry qui {
+  headword: "qui"
+  tags: [pos=pron]
+  meaning: "who, which, that"
+  inflect for {case, number, gender} {
+    [case=nom, number=sg, gender=neut] -> `quod`
+    [case=acc, number=sg, gender=neut] -> `quod`
+    [case=acc, number=sg, gender=fem]  -> `quam`
+    [case=gen, number=sg, gender=masc] -> `cuius`
+    [case=gen, number=sg, gender=fem]  -> `cuius`
+    [case=gen, number=sg, gender=neut] -> `cuius`
+    [case=nom, number=pl, gender=fem]  -> `quae`
+    [case=nom, number=pl, gender=neut] -> `quae`
+    [case=dat, number=pl, gender=masc] -> `quibus`
+    [case=dat, number=pl, gender=fem]  -> `quibus`
+    [case=dat, number=pl, gender=neut] -> `quibus`
+    [case=abl, number=pl, gender=masc] -> `quibus`
+    [case=abl, number=pl, gender=fem]  -> `quibus`
+    [case=abl, number=pl, gender=neut] -> `quibus`
+    [_] -> null
+  }
+}
+
+entry is {
+  headword: "is"
+  tags: [pos=pron]
+  meaning: "he, she, it"
+  inflect for {case, number, gender} {
+    [case=acc, number=sg, gender=fem]  -> `eam`
+    [case=acc, number=sg, gender=masc] -> `eum`
+    [case=dat, number=pl, gender=masc] -> `eis`
+    [case=dat, number=pl, gender=fem]  -> `eis`
+    [case=dat, number=pl, gender=neut] -> `eis`
+    [case=acc, number=pl, gender=fem]  -> `eas`
+    [case=acc, number=pl, gender=masc] -> `eos`
+    [_] -> null
+  }
+}
+
+entry hic {
+  headword: "hic"
+  tags: [pos=pron]
+  meaning: "this"
+  inflect for {case, number, gender} {
+    [case=abl, number=pl, gender=masc] -> `his`
+    [case=abl, number=pl, gender=fem]  -> `his`
+    [case=abl, number=pl, gender=neut] -> `his`
+    [_] -> null
+  }
+}
+
+entry ille {
+  headword: "ille"
+  tags: [pos=pron]
+  meaning: "that, he"
+  inflect for {case, number, gender} {
+    [case=acc, number=sg, gender=masc] -> `illum`
+    [case=dat, number=pl, gender=masc] -> `illis`
+    [case=dat, number=pl, gender=fem]  -> `illis`
+    [_] -> null
+  }
+}
+
+entry tu {
+  headword: "tu"
+  tags: [pos=pron]
+  meaning: "you"
+  inflect for {case, number} {
+    [case=dat, number=pl] -> `vobis`
+    [_] -> null
+  }
+}
+
+entry semetipse {
+  headword: "semetipse"
+  tags: [pos=pron]
+  meaning: "oneself (emphatic)"
+  inflect for {case, number} {
+    [case=abl, number=sg] -> `semetipso`
+    [case=abl, number=pl] -> `semetipsis`
+    [_] -> null
+  }
+}
+
+# =========================================================================
+# Participles / verbal adjectives
+# =========================================================================
+
+entry factus {
+  headword: "factus"
+  tags: [pos=adj]
+  meaning: "made, done (perf. pass. participle of facere)"
+  inflect for {case, number, gender} {
+    [case=nom, number=sg, gender=fem]  -> `facta`
+    [case=nom, number=sg, gender=neut] -> `factum`
+    [case=acc, number=sg, gender=neut] -> `factum`
+    [_] -> null
+  }
+}
+
+entry virens {
+  headword: "virens"
+  tags: [pos=adj]
+  meaning: "green, verdant"
+  inflect for {case, number, gender} {
+    [case=acc, number=sg, gender=fem] -> `virentem`
+    [_] -> null
+  }
+}
+
+entry faciens {
+  headword: "faciens"
+  tags: [pos=adj]
+  meaning: "making, producing (pres. participle of facere)"
+  inflect for {case, number, gender} {
+    [case=nom, number=sg, gender=masc] -> `faciens`
+    [case=nom, number=sg, gender=fem]  -> `faciens`
+    [case=nom, number=sg, gender=neut] -> `faciens`
+    [case=acc, number=sg, gender=masc] -> `facientem`
+    [case=acc, number=sg, gender=fem]  -> `facientem`
+    [_] -> null
+  }
+}
+
+entry vivens {
+  headword: "vivens"
+  tags: [pos=adj]
+  meaning: "living (pres. participle of vivere)"
+  inflect for {case, number, gender} {
+    [case=nom, number=sg, gender=fem]  -> `vivens`
+    [case=gen, number=sg, gender=fem]  -> `viventis`
+    [case=acc, number=sg, gender=fem]  -> `viventem`
+    [_] -> null
+  }
+}
+
+entry dicens {
+  headword: "dicens"
+  tags: [pos=adj]
+  meaning: "saying (pres. participle of dicere)"
+}
+
+entry habens_part {
+  headword: "habens"
+  tags: [pos=adj]
+  meaning: "having (pres. participle of habere)"
+}
+
+entry adferens {
+  headword: "adferens"
+  tags: [pos=adj]
+  meaning: "bringing (pres. participle of adferre)"
+  inflect for {case, number, gender} {
+    [case=acc, number=sg, gender=fem] -> `adferentem`
+    [_] -> null
+  }
+}
+
+entry animans {
+  headword: "animans"
+  tags: [pos=noun]
+  meaning: "living creature, animal"
+  inflect for {case, number} {
+    [case=dat, number=pl] -> `animantibus`
+    [case=abl, number=pl] -> `animantibus`
+    [_] -> null
+  }
+}
+
+# =========================================================================
+# Verbs
+# =========================================================================
+
+entry creare {
+  headword: "creare"
+  tags: [pos=verb]
+  meaning: "to create"
+  inflect for {tense, person, number} {
+    [tense=perfect, person=3, number=sg] -> `creavit`
+    [_] -> null
+  }
+}
+
+entry dicere {
+  headword: "dicere"
+  tags: [pos=verb]
+  meaning: "to say, to speak"
+  inflect for {tense, person, number} {
+    [tense=perfect, person=3, number=sg] -> `dixit`
+    [_] -> null
+  }
+}
+
+entry videre {
+  headword: "videre"
+  tags: [pos=verb]
+  meaning: "to see"
+  inflect for {tense, person, number} {
+    [tense=perfect, person=3, number=sg] -> `vidit`
+    [_] -> null
+  }
+}
+
+entry vocare {
+  headword: "vocare"
+  tags: [pos=verb]
+  meaning: "to call, to name"
+  inflect for {tense, person, number} {
+    [tense=perfect, person=3, number=sg] -> `vocavit`
+    [_] -> null
+  }
+}
+
+entry appellare {
+  headword: "appellare"
+  tags: [pos=verb]
+  meaning: "to call, to name"
+  inflect for {tense, person, number} {
+    [tense=perfect, person=3, number=sg] -> `appellavit`
+    [_] -> null
+  }
+}
+
+entry proferre {
+  headword: "proferre"
+  tags: [pos=verb]
+  meaning: "to bring forth"
+  inflect for {tense, person, number} {
+    [tense=perfect, person=3, number=sg] -> `protulit`
+    [_] -> null
+  }
+}
+
+entry ponere {
+  headword: "ponere"
+  tags: [pos=verb]
+  meaning: "to place, to put"
+  inflect for {tense, person, number} {
+    [tense=perfect, person=3, number=sg] -> `posuit`
+    [_] -> null
+  }
+}
+
+entry benedicere {
+  headword: "benedicere"
+  tags: [pos=verb]
+  meaning: "to bless"
+  inflect for {tense, person, number} {
+    [tense=perfect, person=3, number=sg] -> `benedixit`
+    [_] -> null
+  }
+}
+
+entry dare {
+  headword: "dare"
+  tags: [pos=verb]
+  meaning: "to give"
+  inflect for {tense, person, number} {
+    [tense=perfect, person=1, number=sg] -> `dedi`
+    [_] -> null
+  }
+}
+
+entry aiere {
+  headword: "aiere"
+  tags: [pos=verb]
+  meaning: "to say (defective)"
+  inflect for {tense, person, number} {
+    [tense=present, person=3, number=sg] -> `ait`
+    [_] -> null
+  }
+}
+
+# Verbs with subjunctive forms
+
+entry esse {
+  headword: "esse"
+  tags: [pos=verb]
+  meaning: "to be"
+  inflect for {tense, person, number, mood} {
+    [tense=present, person=3, number=sg, mood=ind]     -> `est`
+    [tense=present, person=3, number=pl, mood=ind]     -> `sunt`
+    [tense=imperfect, person=3, number=sg, mood=ind]   -> `erat`
+    [tense=imperfect, person=3, number=pl, mood=ind]   -> `erant`
+    [tense=present, person=3, number=sg, mood=subj]    -> `sit`
+    [tense=present, person=3, number=pl, mood=subj]    -> `sint`
+    [tense=imperfect, person=3, number=sg, mood=subj]  -> `esset`
+    [_] -> null
+  }
+}
+
+entry fieri {
+  headword: "fieri"
+  tags: [pos=verb]
+  meaning: "to become, to be made"
+  inflect for {tense, person, number, mood} {
+    [tense=present, person=3, number=sg, mood=subj] -> `fiat`
+    [tense=present, person=3, number=pl, mood=subj] -> `fiant`
+    [_] -> null
+  }
+}
+
+entry facere {
+  headword: "facere"
+  tags: [pos=verb]
+  meaning: "to make, to do"
+  inflect for {tense, person, number, mood} {
+    [tense=perfect, person=3, number=sg, mood=ind]    -> `fecit`
+    [tense=pluperfect, person=3, number=sg, mood=ind] -> `fecerat`
+    [tense=present, person=1, number=pl, mood=subj]   -> `faciamus`
+    [_] -> null
+  }
+}
+
+entry dividere {
+  headword: "dividere"
+  tags: [pos=verb]
+  meaning: "to divide, to separate"
+  inflect for {tense, person, number, mood} {
+    [tense=perfect, person=3, number=sg, mood=ind]     -> `divisit`
+    [tense=present, person=3, number=sg, mood=subj]    -> `dividat`
+    [tense=present, person=3, number=pl, mood=subj]    -> `dividant`
+    [tense=imperfect, person=3, number=pl, mood=subj]  -> `dividerent`
+    [_] -> null
+  }
+}
+
+entry apparere {
+  headword: "apparere"
+  tags: [pos=verb]
+  meaning: "to appear"
+  inflect for {tense, person, number, mood} {
+    [tense=present, person=3, number=sg, mood=subj] -> `appareat`
+    [_] -> null
+  }
+}
+
+entry germinare {
+  headword: "germinare"
+  tags: [pos=verb]
+  meaning: "to sprout, to germinate"
+  inflect for {tense, person, number, mood} {
+    [tense=present, person=3, number=sg, mood=subj] -> `germinet`
+    [_] -> null
+  }
+}
+
+entry habere {
+  headword: "habere"
+  tags: [pos=verb]
+  meaning: "to have"
+  inflect for {tense, person, number, mood} {
+    [tense=present, person=3, number=pl, mood=ind]  -> `habent`
+    [tense=present, person=3, number=pl, mood=subj] -> `habeant`
+    [_] -> null
+  }
+}
+
+entry praesse {
+  headword: "praesse"
+  tags: [pos=verb]
+  meaning: "to be in charge of, to preside"
+  inflect for {tense, person, number, mood} {
+    [tense=present, person=3, number=sg, mood=subj]    -> `praesit`
+    [tense=imperfect, person=3, number=sg, mood=subj]  -> `praeesset`
+    [tense=imperfect, person=3, number=pl, mood=subj]  -> `praeessent`
+    [_] -> null
+  }
+}
+
+entry lucere {
+  headword: "lucere"
+  tags: [pos=verb]
+  meaning: "to shine"
+  inflect for {tense, person, number, mood} {
+    [tense=present, person=3, number=pl, mood=subj]    -> `luceant`
+    [tense=imperfect, person=3, number=pl, mood=subj]  -> `lucerent`
+    [_] -> null
+  }
+}
+
+entry illuminare {
+  headword: "illuminare"
+  tags: [pos=verb]
+  meaning: "to illuminate, to light up"
+  inflect for {tense, person, number, mood} {
+    [tense=present, person=3, number=pl, mood=subj] -> `illuminent`
+    [_] -> null
+  }
+}
+
+entry producere {
+  headword: "producere"
+  tags: [pos=verb]
+  meaning: "to bring forth, to produce"
+  inflect for {tense, person, number, mood} {
+    [tense=present, person=3, number=sg, mood=subj]    -> `producat`
+    [tense=present, person=3, number=pl, mood=subj]    -> `producant`
+    [tense=pluperfect, person=3, number=pl, mood=ind]  -> `produxerant`
+    [_] -> null
+  }
+}
+
+entry crescere {
+  headword: "crescere"
+  tags: [pos=verb]
+  meaning: "to grow, to increase"
+  inflect for {tense, person, number, mood} {
+    [tense=present, person=2, number=pl, mood=imp] -> `crescite`
+    [_] -> null
+  }
+}
+
+entry replere {
+  headword: "replere"
+  tags: [pos=verb]
+  meaning: "to fill"
+  inflect for {tense, person, number, mood} {
+    [tense=present, person=2, number=pl, mood=imp] -> `replete`
+    [_] -> null
+  }
+}
+
+entry subicere {
+  headword: "subicere"
+  tags: [pos=verb]
+  meaning: "to subject, to subdue"
+  inflect for {tense, person, number, mood} {
+    [tense=present, person=2, number=pl, mood=imp] -> `subicite`
+    [_] -> null
+  }
+}
+
+# Verbs with passive forms
+
+entry ferre {
+  headword: "ferre"
+  tags: [pos=verb]
+  meaning: "to carry, to bear"
+  inflect for {tense, person, number, voice} {
+    [tense=imperfect, person=3, number=sg, voice=passive] -> `ferebatur`
+    [_] -> null
+  }
+}
+
+entry movere {
+  headword: "movere"
+  tags: [pos=verb]
+  meaning: "to move"
+  inflect for {tense, person, number, voice} {
+    [tense=present, person=3, number=sg, voice=passive] -> `movetur`
+    [tense=present, person=3, number=pl, voice=passive] -> `moventur`
+    [_] -> null
+  }
+}
+
+# Verbs with passive + mood
+
+entry congregare {
+  headword: "congregare"
+  tags: [pos=verb]
+  meaning: "to gather together"
+  inflect for {tense, person, number, voice, mood} {
+    [tense=present, person=3, number=pl, voice=passive, mood=subj] -> `congregentur`
+    [_] -> null
+  }
+}
+
+entry multiplicare {
+  headword: "multiplicare"
+  tags: [pos=verb]
+  meaning: "to multiply"
+  inflect for {tense, person, number, voice, mood} {
+    [tense=present, person=2, number=pl, voice=passive, mood=imp]  -> `multiplicamini`
+    [tense=present, person=3, number=pl, voice=passive, mood=subj] -> `multiplicentur`
+    [_] -> null
+  }
+}
+
+entry dominari {
+  headword: "dominari"
+  tags: [pos=verb]
+  meaning: "to rule over (deponent)"
+  inflect for {tense, person, number, voice, mood} {
+    [tense=present, person=2, number=pl, voice=passive, mood=imp] -> `dominamini`
+    [_] -> null
+  }
+}

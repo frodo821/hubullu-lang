@@ -1,4 +1,4 @@
-# @source main.hu
+@reference * from "main.hu"
 
 # Ik werk. (I work.)
 "Ik" werken[tense=present, person=1, number=sg] "."

@@ -1398,8 +1398,19 @@ impl Parser {
         Ok(tokens)
     }
 
-    /// Parse a token list until EOF (for `.hut` files).
-    pub fn parse_token_list_to_eof(mut self) -> (Vec<crate::ast::Token>, Vec<Diagnostic>) {
+    /// Parse a `.hut` file until EOF: leading `@reference` directives, then a token list.
+    pub fn parse_token_list_to_eof(mut self) -> (crate::ast::HutFile, Vec<Diagnostic>) {
+        // Parse leading @reference directives
+        let mut references = Vec::new();
+        while matches!(self.peek(), TokenKind::AtReference) {
+            self.advance();
+            match self.parse_import() {
+                Ok(import) => references.push(import),
+                Err(diag) => self.errors.push(diag),
+            }
+        }
+
+        // Parse token list
         let mut tokens = Vec::new();
         while !self.at_eof() {
             match self.peek() {
@@ -1429,7 +1440,7 @@ impl Parser {
                 }
             }
         }
-        (tokens, self.errors)
+        (crate::ast::HutFile { references, tokens }, self.errors)
     }
 
     fn parse_render_config(&mut self) -> Result<RenderConfig, Diagnostic> {

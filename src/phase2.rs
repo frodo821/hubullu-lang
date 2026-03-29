@@ -610,7 +610,14 @@ impl<'a> Phase2Ctx<'a> {
                                 }
                             }
                             Err(errors) => {
-                                for e in errors {
+                                for mut e in errors {
+                                    e.message = format!(
+                                        "entry '{}': {}", entry.name.node, e.message,
+                                    );
+                                    // Point to the entry definition if no label present.
+                                    if e.labels.is_empty() {
+                                        e = e.with_label(entry.name.span, "defined here");
+                                    }
                                     self.diagnostics.add(e);
                                 }
                             }

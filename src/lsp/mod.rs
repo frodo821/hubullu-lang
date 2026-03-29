@@ -12,7 +12,6 @@ mod document;
 mod document_link;
 mod folding;
 mod formatting;
-mod hut_source;
 mod inlay_hints;
 mod hover;
 mod references;
@@ -398,11 +397,18 @@ fn handle_semantic_tokens(id: RequestId, req: Request, s: &ServerState) -> Respo
     let params: lsp_types::SemanticTokensParams = serde_json::from_value(req.params).unwrap();
     let uri = &params.text_document.uri;
     let result = s.documents.get(uri).map(|doc| {
-        semantic_tokens::generate(
-            &doc.parse_result.tokens, &[],
-            doc.parse_result.file_id, &doc.parse_result.source_map,
-            &doc.parse_result.file,
-        )
+        if is_hut_uri(uri) {
+            semantic_tokens::generate_hut(
+                &doc.parse_result.tokens,
+                doc.parse_result.file_id, &doc.parse_result.source_map,
+            )
+        } else {
+            semantic_tokens::generate(
+                &doc.parse_result.tokens, &[],
+                doc.parse_result.file_id, &doc.parse_result.source_map,
+                &doc.parse_result.file,
+            )
+        }
     });
     Response::new_ok(id, serde_json::to_value(result).unwrap())
 }
@@ -448,7 +454,16 @@ fn handle_document_link(id: RequestId, req: Request, s: &ServerState) -> Respons
     let uri = &params.text_document.uri;
     let project = s.project_for(uri);
     let result = s.documents.get(uri).map(|doc| {
-        document_link::document_links(&doc.parse_result, project.map(|p| &p.phase1))
+        if is_hut_uri(uri) {
+            let filename = convert::uri_to_filename(uri);
+            document_link::hut_reference_links(
+                &doc.text, &filename, project.map(|p| &p.phase1),
+            )
+        } else {
+            document_link::document_links(
+                &doc.parse_result, project.map(|p| &p.phase1),
+            )
+        }
     });
     Response::new_ok(id, serde_json::to_value(result).unwrap())
 }
@@ -690,76 +705,90 @@ pub(super) fn is_hut_uri(uri: &Uri) -> bool {
     uri.as_str().ends_with(".hut")
 }
 
-/// Load a project for a `.hut` file based on its `# @source` directive.
+/// Load a project for a `.hut` file based on its `@reference` directives.
 ///
-/// After building the project from the `.hu` entry, the `.hut` file itself is
-/// injected into the project's source map, token cache, symbol table, and file
-/// map so that LSP features (hover, go-to-definition, references, inlay hints)
-/// work seamlessly.
+/// Parses the `.hut` file to extract `@reference` imports, then uses
+/// [`phase1::run_phase1_virtual`] to build a unified project covering all
+/// referenced `.hu` files with proper namespace imports.  The `.hut` file
+/// itself is then injected into the project's source map, token cache, symbol
+/// table, and file map so that LSP features work seamlessly.
 fn try_load_hut_project(
     hut_uri: &Uri,
     hut_text: &str,
     hut_projects: &mut std::collections::HashMap<String, ProjectState>,
 ) {
-    let source_path = match hut_source::parse_source_directive(hut_text) {
-        Some(p) => p,
-        None => return,
-    };
     let hut_file_path = match convert::uri_to_path(hut_uri) {
         Some(p) => p,
         None => return,
     };
-    let entry_path = hut_source::resolve_source_path(&hut_file_path, &source_path);
-    if !entry_path.exists() {
+    let hut_dir = hut_file_path
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .to_path_buf();
+
+    // Parse the .hut to extract @reference directives.
+    let hut_file = match crate::render::parse_hut(hut_text, &hut_file_path.to_string_lossy()) {
+        Ok(h) => h,
+        Err(_) => return,
+    };
+    if hut_file.references.is_empty() {
         return;
     }
-    if let Some(mut proj) = build_project_state(&entry_path) {
-        // Add the .hut file to the project so LSP features work.
-        let hut_filename = convert::uri_to_filename(hut_uri);
-        let hut_file_id = proj.phase1.source_map.add_file(
-            hut_filename.into(),
-            hut_text.to_string(),
-        );
-        proj.url_to_file_id
-            .insert(hut_uri.as_str().to_string(), hut_file_id);
 
-        // Tokenize the .hut file and add to token cache.
-        let lexer = crate::lexer::Lexer::new(
-            proj.phase1.source_map.source(hut_file_id),
-            hut_file_id,
-        );
+    // Build a unified project from all @reference directives.
+    let phase1 = crate::phase1::run_phase1_virtual(&hut_file.references, &hut_dir);
+
+    let phase2 = if !phase1.diagnostics.has_errors() {
+        let p2 = crate::phase2::run_phase2(&phase1);
+        if !p2.diagnostics.has_errors() { Some(p2) } else { None }
+    } else {
+        None
+    };
+
+    let mut token_cache = std::collections::HashMap::new();
+    for fid in phase1.source_map.file_ids() {
+        let source = phase1.source_map.source(fid);
+        let lexer = crate::lexer::Lexer::new(source, fid);
         let (tokens, _) = lexer.tokenize();
-        proj.token_cache.insert(hut_file_id, tokens);
-
-        // Create a scope for the .hut file by mirroring the entry file's scope
-        // so that symbol resolution works.
-        if let Some(&entry_fid) = proj.phase1.path_to_id.get(&entry_path) {
-            if let Some(entry_scope) = proj.phase1.symbol_table.scope(entry_fid).cloned() {
-                let mut hut_scope = crate::symbol_table::Scope::new();
-                // Import the entry file's locals as imports for the .hut scope.
-                for sym in entry_scope.locals.values() {
-                    hut_scope.imports.push(crate::symbol_table::ImportedSymbol {
-                        original_name: sym.name.clone(),
-                        local_name: sym.name.clone(),
-                        namespace: None,
-                        kind: sym.kind,
-                        source_file: sym.file_id,
-                        span: sym.span,
-                        item_index: sym.item_index,
-                    });
-                }
-                // Carry over the entry file's imports.
-                hut_scope.imports.extend(entry_scope.imports);
-                proj.phase1.symbol_table.scopes.insert(hut_file_id, hut_scope);
-            }
-        }
-
-        // Register an empty AST for the .hut file_id.
-        proj.phase1.files.insert(
-            hut_file_id,
-            crate::ast::File { items: Vec::new() },
-        );
-
-        hut_projects.insert(hut_uri.as_str().to_string(), proj);
+        token_cache.insert(fid, tokens);
     }
+
+    let url_to_file_id = build_url_map(&phase1.source_map);
+
+    let mut proj = ProjectState { phase1, phase2, token_cache, url_to_file_id };
+
+    // Add the .hut file to the project so LSP features work.
+    let hut_filename = convert::uri_to_filename(hut_uri);
+    let hut_file_id = proj.phase1.source_map.add_file(
+        hut_filename.into(),
+        hut_text.to_string(),
+    );
+    proj.url_to_file_id
+        .insert(hut_uri.as_str().to_string(), hut_file_id);
+
+    // Tokenize the .hut file and add to token cache.
+    let lexer = crate::lexer::Lexer::new(
+        proj.phase1.source_map.source(hut_file_id),
+        hut_file_id,
+    );
+    let (tokens, _) = lexer.tokenize();
+    proj.token_cache.insert(hut_file_id, tokens);
+
+    // The virtual entry file's scope already has the correct imports from
+    // run_phase1_virtual.  Copy that scope to the .hut file so symbol
+    // resolution works for hover, go-to-definition, completion, etc.
+    let virtual_path = hut_dir.join("<hut-virtual>");
+    if let Some(&virtual_fid) = proj.phase1.path_to_id.get(&virtual_path) {
+        if let Some(virtual_scope) = proj.phase1.symbol_table.scope(virtual_fid).cloned() {
+            proj.phase1.symbol_table.scopes.insert(hut_file_id, virtual_scope);
+        }
+    }
+
+    // Register an empty AST for the .hut file_id.
+    proj.phase1.files.insert(
+        hut_file_id,
+        crate::ast::File { items: Vec::new() },
+    );
+
+    hut_projects.insert(hut_uri.as_str().to_string(), proj);
 }

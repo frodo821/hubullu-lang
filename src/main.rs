@@ -21,18 +21,56 @@ enum Command {
         #[clap(short, long, default_value = "dictionary.sqlite")]
         output: PathBuf,
     },
-    /// Render a .hut token list using a compiled database
+    /// Render a .hut token list
     Render {
         /// Input .hut file
         input: PathBuf,
-
-        /// Compiled SQLite database
-        #[clap(long)]
-        db: PathBuf,
     },
     /// Start the Language Server Protocol server
     #[cfg(feature = "lsp")]
     Lsp,
+    /// Manage Claude Code skills bundled with hubullu
+    Skill {
+        #[clap(subcommand)]
+        action: SkillAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum SkillAction {
+    /// List bundled skills and their install status
+    List,
+    /// Show the content of a bundled skill
+    Show {
+        /// Skill name
+        name: String,
+    },
+    /// Install skills into a project or globally
+    Install {
+        /// Skill name (omit to install all)
+        name: Option<String>,
+
+        /// Install into the current project (.claude/skills/)
+        #[clap(long, group = "scope")]
+        project: bool,
+
+        /// Install globally (~/.claude/skills/)
+        #[clap(long, group = "scope")]
+        global: bool,
+    },
+    /// Uninstall skills from a project or globally
+    Uninstall {
+        /// Skill name (omit to uninstall all)
+        name: Option<String>,
+
+        /// Uninstall from the current project
+        #[clap(long, group = "scope")]
+        project: bool,
+
+        /// Uninstall globally
+        #[clap(long, group = "scope")]
+        global: bool,
+    },
 }
 
 fn main() {
@@ -50,7 +88,7 @@ fn main() {
                 }
             }
         }
-        Command::Render { input, db } => {
+        Command::Render { input } => {
             let source = match std::fs::read_to_string(&input) {
                 Ok(s) => s,
                 Err(e) => {
@@ -59,26 +97,32 @@ fn main() {
                 }
             };
 
-            let tokens = match hubullu::render::parse_hut(&source, &input.to_string_lossy()) {
-                Ok(t) => t,
+            let hut_file = match hubullu::render::parse_hut(&source, &input.to_string_lossy()) {
+                Ok(h) => h,
                 Err(msg) => {
                     eprintln!("{}", msg);
                     process::exit(1);
                 }
             };
 
-            let conn = match rusqlite::Connection::open_with_flags(
-                &db,
-                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            let hut_dir = input
+                .canonicalize()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+
+            let ctx = match hubullu::render::ResolveContext::from_references(
+                &hut_file.references,
+                &hut_dir,
             ) {
                 Ok(c) => c,
-                Err(e) => {
-                    eprintln!("cannot open database '{}': {}", db.display(), e);
+                Err(msg) => {
+                    eprintln!("{}", msg);
                     process::exit(1);
                 }
             };
 
-            let parts = match hubullu::render::resolve(&tokens, &conn) {
+            let parts = match hubullu::render::resolve(&hut_file.tokens, &ctx) {
                 Ok(p) => p,
                 Err(msg) => {
                     eprintln!("{}", msg);
@@ -86,13 +130,38 @@ fn main() {
                 }
             };
 
-            let (separator, no_sep_before) = hubullu::render::read_render_config(&conn);
+            let (separator, no_sep_before) = hubullu::render::read_render_config(&ctx);
             let output = hubullu::render::smart_join(&parts, &separator, &no_sep_before);
             println!("{}", output);
         }
         #[cfg(feature = "lsp")]
         Command::Lsp => {
             hubullu::lsp::run_server();
+        }
+        Command::Skill { action } => {
+            let result = match action {
+                SkillAction::List => hubullu::skill::list(),
+                SkillAction::Show { name } => hubullu::skill::show(&name),
+                SkillAction::Install { name, project, global } => {
+                    if !project && !global {
+                        eprintln!("error: specify --project or --global");
+                        process::exit(1);
+                    }
+                    hubullu::skill::install(name.as_deref(), project, global)
+                }
+                SkillAction::Uninstall { name, project, global } => {
+                    if !project && !global {
+                        eprintln!("error: specify --project or --global");
+                        process::exit(1);
+                    }
+                    hubullu::skill::uninstall(name.as_deref(), project, global)
+                }
+            };
+
+            if let Err(msg) = result {
+                eprintln!("error: {}", msg);
+                process::exit(1);
+            }
         }
     }
 }
