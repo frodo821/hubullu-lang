@@ -288,6 +288,7 @@ name = "hubullu"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "crossbeam-channel",
  "insta",
  "lsp-server",
  "lsp-types",

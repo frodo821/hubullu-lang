@@ -11,11 +11,12 @@ default = ["sqlite", "cli"]
 sqlite = ["dep:rusqlite"]
 cli = ["dep:clap", "sqlite", "lsp"]
 serialization = ["dep:serde"]
-lsp = ["dep:lsp-server", "dep:lsp-types", "dep:serde_json", "serialization"]
+lsp = ["dep:crossbeam-channel", "dep:lsp-server", "dep:lsp-types", "dep:serde_json", "serialization"]
 
 [dependencies]
 rusqlite = { version = "0.31", features = ["bundled"], optional = true }
 clap = { version = "4", features = ["derive"], optional = true }
+crossbeam-channel = { version = "0.5", optional = true }
 lsp-server = { version = "0.7", optional = true }
 lsp-types = { version = "0.97", optional = true }
 serde_json = { version = "1", optional = true }

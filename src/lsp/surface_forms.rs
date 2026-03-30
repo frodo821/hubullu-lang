@@ -8,7 +8,7 @@ use crate::span::{FileId, SourceMap};
 use crate::token::{Token, TokenKind};
 
 use super::convert;
-use super::inlay_hints::{find_matching_form, find_resolved_entry, parse_bracket_conditions, find_tilde_chain_end};
+use super::inlay_hints::{find_matching_form, find_resolved_entry, collect_tilde_chain_parts};
 
 #[derive(Serialize)]
 pub struct SurfaceFormsResult {
@@ -180,39 +180,24 @@ pub fn surface_forms_from_tokens(
     let mut items = Vec::new();
     let mut i = 0;
     while i < tokens.len() {
-        if let TokenKind::Ident(entry_id) = &tokens[i].node {
+        if let TokenKind::Ident(_) = &tokens[i].node {
             if tokens[i].span.file_id == file_id {
-                let ident_start = tokens[i].span.start;
+                let range_start = tokens[i].span.start;
 
-                if let Some((conditions, end_pos, rbracket_end)) =
-                    parse_bracket_conditions(tokens, i + 1, file_id)
-                {
-                    if !conditions.is_empty() {
-                        let (hint_end, skip_to) =
-                            find_tilde_chain_end(tokens, end_pos, file_id, rbracket_end);
+                let (parts, range_end, skip_to) =
+                    collect_tilde_chain_parts(tokens, i, file_id, phase2);
 
-                        // Resolve the surface form for this chain.
-                        if let Some(item) = resolve_token_surface_form(
-                            entry_id, &conditions, file_id, ident_start, hint_end,
-                            tokens, i, skip_to, phase2, source_map,
-                        ) {
-                            items.push(item);
-                        }
-                        i = skip_to;
-                        continue;
-                    }
-                    i = end_pos;
-                    continue;
-                }
+                if !parts.is_empty() {
+                    let surface_form = parts.join("");
+                    let tooltip = source_map
+                        .source_slice(file_id, range_start, range_end)
+                        .map(|s| s.to_string());
 
-                // No bracket — headword hint.
-                let ident_end = tokens[i].span.end;
-                let (chain_end, skip_to) =
-                    find_tilde_chain_end(tokens, i + 1, file_id, ident_end);
-                if let Some(item) = resolve_headword_surface_form(
-                    entry_id, file_id, ident_start, chain_end, phase2, source_map,
-                ) {
-                    items.push(item);
+                    items.push(SurfaceFormItem {
+                        range: convert::offsets_to_range(file_id, range_start, range_end, source_map),
+                        surface_form,
+                        tooltip,
+                    });
                 }
                 i = skip_to;
                 continue;
@@ -221,59 +206,6 @@ pub fn surface_forms_from_tokens(
         i += 1;
     }
     items
-}
-
-fn resolve_token_surface_form(
-    entry_id: &str,
-    conditions: &[(String, String)],
-    file_id: FileId,
-    range_start: usize,
-    range_end: usize,
-    _tokens: &[Token],
-    _token_start: usize,
-    _token_end: usize,
-    phase2: &Phase2Result,
-    source_map: &SourceMap,
-) -> Option<SurfaceFormItem> {
-    let resolved = phase2.entries.iter().find(|e| e.name == entry_id)?;
-    let form_str = resolved.forms.iter().find_map(|form| {
-        let all_match = conditions.iter().all(|(axis, val)| {
-            form.tags.iter().any(|(a, v)| a == axis && v == val)
-        });
-        if all_match { Some(form.form_str.clone()) } else { None }
-    })?;
-
-    let tooltip = source_map.source_slice(file_id, range_start, range_end)
-        .map(|s| s.to_string());
-
-    Some(SurfaceFormItem {
-        range: convert::offsets_to_range(file_id, range_start, range_end, source_map),
-        surface_form: form_str,
-        tooltip,
-    })
-}
-
-fn resolve_headword_surface_form(
-    entry_id: &str,
-    file_id: FileId,
-    range_start: usize,
-    range_end: usize,
-    phase2: &Phase2Result,
-    source_map: &SourceMap,
-) -> Option<SurfaceFormItem> {
-    let resolved = phase2.entries.iter().find(|e| e.name == entry_id)?;
-    if resolved.headword == entry_id {
-        return None;
-    }
-
-    let tooltip = source_map.source_slice(file_id, range_start, range_end)
-        .map(|s| s.to_string());
-
-    Some(SurfaceFormItem {
-        range: convert::offsets_to_range(file_id, range_start, range_end, source_map),
-        surface_form: resolved.headword.clone(),
-        tooltip,
-    })
 }
 
 // ---------------------------------------------------------------------------

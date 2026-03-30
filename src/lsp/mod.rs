@@ -3,25 +3,26 @@
 //! Provides diagnostics, semantic tokens, go-to-definition, hover, and completion
 //! for `.hu` files.
 
-mod completion;
-mod convert;
-mod definition;
-mod diagnostics;
+pub mod completion;
+pub mod convert;
+pub mod definition;
+pub mod diagnostics;
 mod disk_cache;
-mod document;
-mod document_link;
-mod folding;
-mod formatting;
-mod inlay_hints;
-mod hover;
-mod surface_forms;
-mod references;
-mod rename;
-mod semantic_tokens;
-mod symbols;
+pub mod document;
+pub mod document_link;
+pub mod folding;
+pub mod formatting;
+pub mod inlay_hints;
+pub mod hover;
+pub mod surface_forms;
+pub mod references;
+pub mod rename;
+pub mod semantic_tokens;
+pub mod symbols;
 
 use std::path::PathBuf;
 
+use crossbeam_channel::{Receiver, bounded};
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
     CompletionOptions, InitializeParams, OneOf, SemanticTokensFullOptions,
@@ -35,6 +36,83 @@ use crate::span::FileId;
 use crate::token::Token;
 
 use document::DocumentStore;
+
+// ---------------------------------------------------------------------------
+// Graceful shutdown triggers
+// ---------------------------------------------------------------------------
+
+/// Returns a channel that receives a message when SIGINT is delivered.
+fn sigint_channel() -> Receiver<()> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static SIGINT_FIRED: AtomicBool = AtomicBool::new(false);
+
+    // Install a minimal signal handler that sets the flag.
+    unsafe {
+        extern "C" fn handler(_sig: i32) {
+            SIGINT_FIRED.store(true, Ordering::SeqCst);
+        }
+        // sigaction with SA_RESTART so we don't break other syscalls.
+        let mut sa: libc_sigaction = std::mem::zeroed();
+        sa.sa_handler = handler as *const () as usize;
+        sa.sa_flags = 0x02; // SA_RESTART
+        sigaction(2 /* SIGINT */, &sa, std::ptr::null_mut());
+    }
+
+    let (tx, rx) = bounded(1);
+    std::thread::spawn(move || {
+        loop {
+            if SIGINT_FIRED.load(Ordering::SeqCst) {
+                let _ = tx.send(());
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    });
+    rx
+}
+
+// Minimal libc FFI for signal handling (avoids libc crate dependency).
+#[cfg(target_os = "macos")]
+#[repr(C)]
+struct libc_sigaction {
+    sa_handler: usize,
+    sa_mask: u32,
+    sa_flags: i32,
+}
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+struct libc_sigaction {
+    sa_handler: usize,
+    sa_flags: std::os::raw::c_ulong,
+    sa_restorer: usize,
+    sa_mask: [std::os::raw::c_ulong; 2],
+}
+
+extern "C" {
+    fn sigaction(sig: i32, act: *const libc_sigaction, oact: *mut libc_sigaction) -> i32;
+    fn getppid() -> i32;
+    fn kill(pid: i32, sig: i32) -> i32;
+}
+
+/// Returns a channel that receives a message when the parent process exits.
+fn parent_exit_channel() -> Receiver<()> {
+    let (tx, rx) = bounded(1);
+    let parent_pid = unsafe { getppid() };
+    std::thread::spawn(move || {
+        loop {
+            // kill(pid, 0) checks if the process exists without sending a signal.
+            let alive = unsafe { kill(parent_pid, 0) } == 0;
+            if !alive {
+                let _ = tx.send(());
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+    });
+    rx
+}
 
 /// Display mode for entry references (inlay hints vs overlay vs off).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,21 +135,23 @@ struct ProjectState {
 
 /// Run the LSP server on stdin/stdout.
 pub fn run_server() {
+    let sigint = sigint_channel();
+    let parent_exit = parent_exit_channel();
+
     let (connection, io_threads) = Connection::stdio();
 
     let server_caps = serde_json::to_value(server_capabilities()).unwrap();
     let init_params = connection.initialize(server_caps).unwrap();
     let init_params: InitializeParams = serde_json::from_value(init_params).unwrap();
 
-    main_loop(&connection, init_params);
+    main_loop(&connection, init_params, &sigint, &parent_exit);
 
-    // Drop the connection to flush the shutdown response to stdout and
-    // close the channels, allowing IO threads to finish.
+    // Drop the connection to close the channels, allowing IO threads to
+    // finish.
     drop(connection);
 
-    // io_threads.join() can hang if the stdin reader blocks waiting for
-    // the exit notification. Spawn a thread to attempt the join and give
-    // it a brief window before exiting the process.
+    // io_threads.join() can hang if the stdin reader blocks.  Give it a
+    // brief window before force-exiting.
     std::thread::spawn(move || { let _ = io_threads.join(); });
     std::thread::sleep(std::time::Duration::from_millis(100));
     std::process::exit(0);
@@ -217,7 +297,12 @@ impl ServerState {
     }
 }
 
-fn main_loop(connection: &Connection, init_params: InitializeParams) {
+fn main_loop(
+    connection: &Connection,
+    init_params: InitializeParams,
+    sigint: &Receiver<()>,
+    parent_exit: &Receiver<()>,
+) {
     let mut state = ServerState {
         documents: DocumentStore::default(),
         project: None,
@@ -232,31 +317,52 @@ fn main_loop(connection: &Connection, init_params: InitializeParams) {
         state.project = try_analyze_project(&root);
     }
 
-    for msg in &connection.receiver {
-        match msg {
-            Message::Request(req) => {
-                if connection.handle_shutdown(&req).unwrap() {
-                    return;
-                }
-                if req.method == "hubullu/setEntryRefDisplayMode" {
-                    let (resp, notifications) =
-                        handle_set_display_mode(req.id.clone(), req, &mut state);
-                    connection.sender.send(Message::Response(resp)).unwrap();
-                    for n in notifications {
-                        connection.sender.send(Message::Notification(n)).unwrap();
+    loop {
+        crossbeam_channel::select! {
+            recv(connection.receiver) -> msg => {
+                let msg = match msg {
+                    Ok(msg) => msg,
+                    Err(_) => {
+                        return;
                     }
-                } else {
-                    let resp = handle_request(req, &state);
-                    connection.sender.send(Message::Response(resp)).unwrap();
+                };
+                match msg {
+                    Message::Request(req) => {
+                        if req.method == "shutdown" {
+                            let resp = Response::new_ok(req.id, ());
+                            let _ = connection.sender.send(Message::Response(resp));
+                            return;
+                        }
+                        if req.method == "hubullu/setEntryRefDisplayMode" {
+                            let (resp, notifications) =
+                                handle_set_display_mode(req.id.clone(), req, &mut state);
+                            connection.sender.send(Message::Response(resp)).unwrap();
+                            for n in notifications {
+                                connection.sender.send(Message::Notification(n)).unwrap();
+                            }
+                        } else {
+                            let resp = handle_request(req, &state);
+                            connection.sender.send(Message::Response(resp)).unwrap();
+                        }
+                    }
+                    Message::Notification(notif) => {
+                        if notif.method == "exit" {
+                            return;
+                        }
+                        let notifications = handle_notification(notif, &mut state);
+                        for n in notifications {
+                            connection.sender.send(Message::Notification(n)).unwrap();
+                        }
+                    }
+                    Message::Response(_) => {}
                 }
             }
-            Message::Notification(notif) => {
-                let notifications = handle_notification(notif, &mut state);
-                for n in notifications {
-                    connection.sender.send(Message::Notification(n)).unwrap();
-                }
+            recv(sigint) -> _ => {
+                return;
             }
-            Message::Response(_) => {}
+            recv(parent_exit) -> _ => {
+                return;
+            }
         }
     }
 }
