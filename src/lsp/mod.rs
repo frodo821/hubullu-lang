@@ -441,7 +441,8 @@ impl ServerState {
         // Build a new project from this file.
         if let Some(path) = convert::uri_to_path(uri) {
             if path.exists() {
-                if let Some(proj) = build_project_state(&path) {
+                let cache_root = path.parent().unwrap_or(&path);
+                if let Some(proj) = build_project_state(&path, cache_root) {
                     self.file_projects.insert(uri.as_str().to_string(), proj);
                 }
             }
@@ -462,7 +463,8 @@ impl ServerState {
         if let Some(key) = entry_key {
             if let Some(entry_uri) = key.parse::<Uri>().ok() {
                 if let Some(path) = convert::uri_to_path(&entry_uri) {
-                    if let Some(new_proj) = build_project_state(&path) {
+                    let cache_root = path.parent().unwrap_or(&path);
+                    if let Some(new_proj) = build_project_state(&path, cache_root) {
                         self.file_projects.insert(key, new_proj);
                     }
                 }
@@ -1064,14 +1066,17 @@ fn workspace_root_from_init(init_params: &InitializeParams) -> Option<PathBuf> {
 
 fn try_analyze_project(root: &PathBuf) -> Option<ProjectState> {
     let entry_path = find_entry_file(root)?;
-    build_project_state(&entry_path)
+    build_project_state(&entry_path, root)
 }
 
 /// Build a complete ProjectState from an entry file path.
 /// Tries disk cache first; if stale or missing, runs full analysis and saves.
-fn build_project_state(entry_path: &std::path::Path) -> Option<ProjectState> {
+///
+/// `cache_root` is the directory under which `.hubullu-cache/` is placed
+/// (workspace root for projects, entry file's parent for standalone files).
+fn build_project_state(entry_path: &std::path::Path, cache_root: &std::path::Path) -> Option<ProjectState> {
     // Try disk cache first.
-    if let Some(cached) = disk_cache::load(entry_path) {
+    if let Some(cached) = disk_cache::load(entry_path, cache_root) {
         let url_to_file_id = build_url_map(&cached.phase1.source_map);
         let lint_diagnostics = crate::lint::run_lint_from_phase1(&cached.phase1);
         return Some(ProjectState {
@@ -1102,7 +1107,7 @@ fn build_project_state(entry_path: &std::path::Path) -> Option<ProjectState> {
     }
 
     // Save to disk cache for next startup.
-    disk_cache::save(entry_path, &phase1, phase2.as_ref(), &token_cache);
+    disk_cache::save(entry_path, cache_root, &phase1, phase2.as_ref(), &token_cache);
 
     let lint_diagnostics = crate::lint::run_lint_from_phase1(&phase1);
     let url_to_file_id = build_url_map(&phase1.source_map);

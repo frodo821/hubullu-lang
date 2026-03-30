@@ -1,7 +1,10 @@
 //! Disk cache for ProjectState — persist analysis results across LSP restarts.
 //!
 //! Cache layout:
-//!   `<project_root>/.hubullu-cache/project.json`
+//!   `<cache_root>/.hubullu-cache/project.json`
+//!
+//! `cache_root` is the workspace root when running under the LSP with a
+//! workspace, or the entry file's parent directory for standalone files.
 //!
 //! The cache stores the serialized Phase1Result, Phase2Result, and token cache.
 //! On load, file modification times are checked; if any source file changed
@@ -42,8 +45,11 @@ pub struct CachedProject {
 }
 
 /// Try to load a cached project. Returns `None` if cache is missing, stale, or corrupt.
-pub fn load(entry_path: &Path) -> Option<CachedProject> {
-    let cache_path = cache_file_path(entry_path)?;
+///
+/// `cache_root` is the directory under which `.hubullu-cache/` is created
+/// (typically the workspace root).
+pub fn load(entry_path: &Path, cache_root: &Path) -> Option<CachedProject> {
+    let cache_path = cache_file_path(cache_root)?;
     let data = std::fs::read_to_string(&cache_path).ok()?;
     let envelope: CacheEnvelope = serde_json::from_str(&data).ok()?;
 
@@ -73,13 +79,17 @@ pub fn load(entry_path: &Path) -> Option<CachedProject> {
 }
 
 /// Write project data to disk cache.
+///
+/// `cache_root` is the directory under which `.hubullu-cache/` is created
+/// (typically the workspace root).
 pub fn save(
     entry_path: &Path,
+    cache_root: &Path,
     phase1: &Phase1Result,
     phase2: Option<&Phase2Result>,
     token_cache: &HashMap<FileId, Vec<Token>>,
 ) {
-    let cache_path = match cache_file_path(entry_path) {
+    let cache_path = match cache_file_path(cache_root) {
         Some(p) => p,
         None => return,
     };
@@ -120,10 +130,9 @@ pub fn save(
     }
 }
 
-/// Determine the cache file path for a given entry file.
-fn cache_file_path(entry_path: &Path) -> Option<PathBuf> {
-    let dir = entry_path.parent()?;
-    Some(dir.join(CACHE_DIR).join(CACHE_FILE))
+/// Determine the cache file path under the given root directory.
+fn cache_file_path(cache_root: &Path) -> Option<PathBuf> {
+    Some(cache_root.join(CACHE_DIR).join(CACHE_FILE))
 }
 
 /// Get file modification time as seconds since epoch.
