@@ -201,6 +201,16 @@ phonrule harmony {
 - `class NAME = [...]` or union `A | B`
 - `map NAME = param -> match { ... }`
 - `PATTERN -> REPLACEMENT / LEFT _ RIGHT` — context-sensitive rewrite
+- Context elements: `+` (morpheme boundary), `^` (word start), `$` (word end), `(a | b)` (alternation)
+- Empty pattern for insertion: `"" -> "e" / C + _ C` (epenthesis)
+
+```
+# Devoicing: before consonant or word end
+"b" -> "p" / _ (C | $)
+
+# Voicing: at word start or after vowel
+"k" -> "g" / (^ | V) _
+```
 
 # entry
 

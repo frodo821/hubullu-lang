@@ -288,6 +288,7 @@ pub enum PhonContextElem {
     WordEnd,
     Literal(StringLit),
     Repeat(Box<PhonContextElem>),
+    Alt(Vec<PhonContextElem>),
 }
 
 // ---------------------------------------------------------------------------

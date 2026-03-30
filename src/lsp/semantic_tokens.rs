@@ -595,6 +595,11 @@ fn classify_phon_context_elem(elem: &ast::PhonContextElem, fid: FileId, map: &mu
         ast::PhonContextElem::Repeat(inner) => {
             classify_phon_context_elem(inner, fid, map);
         }
+        ast::PhonContextElem::Alt(alts) => {
+            for alt in alts {
+                classify_phon_context_elem(alt, fid, map);
+            }
+        }
         _ => {}
     }
 }

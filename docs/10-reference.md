@@ -136,6 +136,9 @@ phon_context = context_elem* "_" context_elem* ;
 context_elem = IDENT ("*" | "+")?
              | "!" IDENT ("*" | "+")?
              | "+"
+             | "^"
+             | "$"
+             | "(" context_elem ("|" context_elem)* ")"
              | STRING ;
 ```
 

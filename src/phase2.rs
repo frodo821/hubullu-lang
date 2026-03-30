@@ -396,6 +396,11 @@ impl<'a> Phase2Ctx<'a> {
             PhonContextElem::Repeat(inner) => {
                 self.validate_context_elem(pr, inner, class_names);
             }
+            PhonContextElem::Alt(alts) => {
+                for alt in alts {
+                    self.validate_context_elem(pr, alt, class_names);
+                }
+            }
             PhonContextElem::Boundary | PhonContextElem::WordStart | PhonContextElem::WordEnd | PhonContextElem::Literal(_) => {}
         }
     }

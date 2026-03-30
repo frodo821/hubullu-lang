@@ -1081,6 +1081,16 @@ impl Parser {
                 self.advance();
                 return Ok(PhonContextElem::WordEnd);
             }
+            TokenKind::LParen => {
+                self.advance();
+                let mut alts = vec![self.parse_phon_context_elem()?];
+                while matches!(self.peek(), TokenKind::Pipe) {
+                    self.advance();
+                    alts.push(self.parse_phon_context_elem()?);
+                }
+                self.expect(&TokenKind::RParen)?;
+                PhonContextElem::Alt(alts)
+            }
             TokenKind::Bang => {
                 self.advance();
                 let id = self.expect_ident()?;

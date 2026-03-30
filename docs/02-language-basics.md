@@ -158,6 +158,8 @@ A bare `-` is not valid and produces a compile error.
 | `_` | Wildcard in tag conditions |
 | `*` | Glob import |
 | `~` | Glue marker (suppresses separator between tokens in examples) |
-| `\|` | Union operator (in `phonrule` character class definitions) |
+| `\|` | Union operator (in `phonrule` character class definitions), alternation (in context patterns) |
 | `!` | Negation (in `phonrule` context patterns) |
 | `/` | Context separator (in `phonrule` rewrite rules) |
+| `^` | Word start (in `phonrule` context patterns) |
+| `$` | Word end (in `phonrule` context patterns) |

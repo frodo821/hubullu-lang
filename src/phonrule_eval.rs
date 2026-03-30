@@ -329,6 +329,16 @@ fn match_left_elem(
             *cursor = c;
             true
         }
+        PhonContextElem::Alt(alts) => {
+            for alt in alts {
+                let mut trial = *cursor;
+                if match_left_elem(chars, &mut trial, alt, phonrule) {
+                    *cursor = trial;
+                    return true;
+                }
+            }
+            false
+        }
     }
 }
 
@@ -417,6 +427,16 @@ fn match_right_elem(
             }
             *cursor = c;
             true
+        }
+        PhonContextElem::Alt(alts) => {
+            for alt in alts {
+                let mut trial = *cursor;
+                if match_right_elem(chars, &mut trial, alt, phonrule) {
+                    *cursor = trial;
+                    return true;
+                }
+            }
+            false
         }
     }
 }
@@ -744,5 +764,103 @@ mod tests {
         // pos 2: left=C→'p' ✓, right=C→'t' ✓ → insert 'x'
         // pos 3: left=C→'t' ✓, right=end → no C → no
         assert_eq!(strip_boundaries(&apply_phonrule("apt", &rule)), "apxt");
+    }
+
+    fn vowel_class() -> CharClassDef {
+        CharClassDef {
+            name: make_ident("V"),
+            body: CharClassBody::List(vec![
+                make_string_lit("a"), make_string_lit("e"), make_string_lit("i"),
+                make_string_lit("o"), make_string_lit("u"),
+            ]),
+        }
+    }
+
+    #[test]
+    fn test_alt_right_context() {
+        // "b" -> "p" / _ (C | $)  (devoice b before consonant or word end)
+        let rule = PhonRule {
+            name: make_ident("devoice"),
+            classes: vec![consonant_class(), vowel_class()],
+            maps: vec![],
+            rules: vec![PhonRewriteRule {
+                from: PhonPattern::Literal(make_string_lit("b")),
+                to: PhonReplacement::Literal(make_string_lit("p")),
+                context: Some(PhonContext {
+                    left: vec![],
+                    right: vec![PhonContextElem::Alt(vec![
+                        PhonContextElem::Class(make_ident("C")),
+                        PhonContextElem::WordEnd,
+                    ])],
+                }),
+                span: make_span(),
+            }],
+            span: make_span(),
+        };
+        // word-final b → p (matches $)
+        assert_eq!(strip_boundaries(&apply_phonrule("kitab", &rule)), "kitap");
+        // b before consonant → p (matches C)
+        assert_eq!(strip_boundaries(&apply_phonrule("abt", &rule)), "apt");
+        // b before vowel → no change
+        assert_eq!(strip_boundaries(&apply_phonrule("aba", &rule)), "aba");
+    }
+
+    #[test]
+    fn test_alt_left_context() {
+        // "k" -> "g" / (^ | V) _  (voice k after vowel or at word start)
+        let rule = PhonRule {
+            name: make_ident("voice"),
+            classes: vec![consonant_class(), vowel_class()],
+            maps: vec![],
+            rules: vec![PhonRewriteRule {
+                from: PhonPattern::Literal(make_string_lit("k")),
+                to: PhonReplacement::Literal(make_string_lit("g")),
+                context: Some(PhonContext {
+                    left: vec![PhonContextElem::Alt(vec![
+                        PhonContextElem::WordStart,
+                        PhonContextElem::Class(make_ident("V")),
+                    ])],
+                    right: vec![],
+                }),
+                span: make_span(),
+            }],
+            span: make_span(),
+        };
+        // word-initial k → g (matches ^)
+        assert_eq!(strip_boundaries(&apply_phonrule("kal", &rule)), "gal");
+        // k after vowel → g (matches V)
+        assert_eq!(strip_boundaries(&apply_phonrule("ake", &rule)), "age");
+        // k after consonant → no change
+        assert_eq!(strip_boundaries(&apply_phonrule("tka", &rule)), "tka");
+    }
+
+    #[test]
+    fn test_alt_with_repeat() {
+        // (C | V)* — match zero or more of consonant or vowel
+        // "b" -> "p" / _ (C | V)* $  (devoice b if only C/V follow until end)
+        let rule = PhonRule {
+            name: make_ident("devoice2"),
+            classes: vec![consonant_class(), vowel_class()],
+            maps: vec![],
+            rules: vec![PhonRewriteRule {
+                from: PhonPattern::Literal(make_string_lit("b")),
+                to: PhonReplacement::Literal(make_string_lit("p")),
+                context: Some(PhonContext {
+                    left: vec![],
+                    right: vec![
+                        PhonContextElem::Repeat(Box::new(PhonContextElem::Alt(vec![
+                            PhonContextElem::Class(make_ident("C")),
+                            PhonContextElem::Class(make_ident("V")),
+                        ]))),
+                        PhonContextElem::WordEnd,
+                    ],
+                }),
+                span: make_span(),
+            }],
+            span: make_span(),
+        };
+        // All following chars are C or V → devoice
+        assert_eq!(strip_boundaries(&apply_phonrule("bat", &rule)), "pat");
+        assert_eq!(strip_boundaries(&apply_phonrule("b", &rule)), "p");
     }
 }

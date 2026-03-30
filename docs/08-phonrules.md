@@ -105,10 +105,25 @@ This reads: "apply `to_back` to any vowel that is preceded (across morpheme boun
 | `class*` | Matches zero or more characters in the class |
 | `!class*` | Matches zero or more characters NOT in the class |
 | `class+` | Matches one or more characters in the class (use `!` prefix for negation) |
+| `(a \| b)` | Matches if any alternative matches (alternation) |
 
 Context elements can appear on either side of `_`. Left context reads right-to-left from the match position; right context reads left-to-right.
 
 `^` is used in left context, `$` is used in right context. `+` matches morpheme boundaries (`\0`) as well as word edges, while `^` and `$` match only the true start/end of the word.
+
+#### Alternation
+
+Use `(... | ...)` to match any of several alternatives:
+
+```
+# Devoice b before a consonant or at word end
+"b" -> "p" / _ (C | $)
+
+# Voice k at word start or after a vowel
+"k" -> "g" / (^ | V) _
+```
+
+Alternation can be combined with `*`: `(C | V)*` matches zero or more characters that are either consonants or vowels.
 
 ### Application Order
 
