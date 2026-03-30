@@ -154,12 +154,7 @@ fn collect_ref_surface_form(
                 None => return,
             }
         }
-        _ => {
-            if resolved.headword == *entry_id {
-                return;
-            }
-            resolved.headword.clone()
-        }
+        _ => resolved.headword.clone(),
     };
 
     let tooltip = source_text_for_ref(entry_ref, source_map);

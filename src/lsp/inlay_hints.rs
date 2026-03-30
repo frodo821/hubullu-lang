@@ -181,13 +181,7 @@ fn collect_ref_hint_at(
                 None => return,
             }
         }
-        _ => {
-            // No form spec — show headword if it differs from the entry name.
-            if resolved.headword == *entry_id {
-                return;
-            }
-            resolved.headword.clone()
-        }
+        _ => resolved.headword.clone(),
     };
 
     let position = convert::offset_to_position(file_id, hint_offset, source_map);
@@ -295,17 +289,11 @@ fn parse_single_element(
         }
         // Empty conditions — skip brackets, treat as bare ident.
         let resolved = phase2.entries.iter().find(|e| e.name == *entry_id)?;
-        if resolved.headword == *entry_id {
-            return None;
-        }
         return Some((resolved.headword.clone(), end_pos, rbracket_end));
     }
 
     // No bracket — headword hint.
     let resolved = phase2.entries.iter().find(|e| e.name == *entry_id)?;
-    if resolved.headword == *entry_id {
-        return None;
-    }
     Some((resolved.headword.clone(), pos + 1, tokens[pos].span.end))
 }
 
