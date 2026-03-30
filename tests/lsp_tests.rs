@@ -572,6 +572,112 @@ mod completion_tests {
         }
     }
 
+    /// Simulate what the LSP does for .hut files:
+    /// - tokens come from the document's own SourceMap (token_file_id)
+    /// - scope comes from the project's SourceMap (scope_file_id)
+    /// These are different FileIds.
+    #[test]
+    fn hut_top_level_completion_shows_entries() {
+        // 1. Parse a .hu source with entries and tagaxes.
+        let hu_src = r#"
+tagaxis number { role: inflectional }
+tagaxis case { role: inflectional }
+entry cat {
+    headword: "cat"
+    meaning: "a cat"
+}
+entry dog {
+    headword: "dog"
+    meaning: "a dog"
+}
+"#;
+        let pr = parse(hu_src);
+        let mut p1 = single_file_phase1(&pr);
+
+        // 2. Add a .hut file to the project (separate file_id, like the LSP does).
+        let hut_src = "cat[number=sg] ";
+        let hut_file_id = p1.source_map.add_file(
+            "/tmp/test.hut".into(),
+            hut_src.to_string(),
+        );
+
+        // 3. Copy the .hu file's scope to the .hut file (like try_load_hut_project does).
+        if let Some(hu_scope) = p1.symbol_table.scope(pr.file_id).cloned() {
+            p1.symbol_table.scopes.insert(hut_file_id, hu_scope);
+        }
+
+        // 4. Lex the .hut content separately (like the document store does).
+        let mut doc_source_map = hubullu::span::SourceMap::new();
+        let doc_file_id = doc_source_map.add_file("/tmp/test.hut".into(), hut_src.to_string());
+        let lexer = hubullu::lexer::Lexer::new(doc_source_map.source(doc_file_id), doc_file_id);
+        let (doc_tokens, _) = lexer.tokenize();
+
+        // 5. Call complete with doc_file_id as token_file_id and hut_file_id as scope_file_id.
+        // Cursor at end of file (after "cat[number=sg] ").
+        let resp = hubullu::lsp::completion::complete(
+            doc_file_id, hut_file_id, hut_src.len(), &doc_tokens, Some(&p1), true,
+        );
+        match resp {
+            lsp_types::CompletionResponse::List(list) => {
+                let labels: Vec<_> = list.items.iter().map(|i| i.label.as_str()).collect();
+                assert!(labels.contains(&"cat"), "should suggest entry 'cat', got: {:?}", labels);
+                assert!(labels.contains(&"dog"), "should suggest entry 'dog', got: {:?}", labels);
+            }
+            lsp_types::CompletionResponse::Array(items) => {
+                let labels: Vec<_> = items.iter().map(|i| i.label.as_str()).collect();
+                assert!(labels.contains(&"cat"), "should suggest entry 'cat', got: {:?}", labels);
+            }
+        }
+    }
+
+    /// Test .hut tagaxis completion inside brackets.
+    #[test]
+    fn hut_tagaxis_completion_inside_brackets() {
+        let hu_src = r#"
+tagaxis number { role: inflectional }
+tagaxis case { role: inflectional }
+inflection cat_infl for { number, case } {
+    [number=sg, case=nom] -> `cat`
+}
+entry cat {
+    headword: "cat"
+    meaning: "a cat"
+    inflection_class: cat_infl
+}
+"#;
+        let pr = parse(hu_src);
+        let mut p1 = single_file_phase1(&pr);
+
+        let hut_src = "cat[";
+        let hut_file_id = p1.source_map.add_file(
+            "/tmp/test.hut".into(),
+            hut_src.to_string(),
+        );
+        if let Some(hu_scope) = p1.symbol_table.scope(pr.file_id).cloned() {
+            p1.symbol_table.scopes.insert(hut_file_id, hu_scope);
+        }
+
+        let mut doc_source_map = hubullu::span::SourceMap::new();
+        let doc_file_id = doc_source_map.add_file("/tmp/test.hut".into(), hut_src.to_string());
+        let lexer = hubullu::lexer::Lexer::new(doc_source_map.source(doc_file_id), doc_file_id);
+        let (doc_tokens, _) = lexer.tokenize();
+
+        let resp = hubullu::lsp::completion::complete(
+            doc_file_id, hut_file_id, hut_src.len(), &doc_tokens, Some(&p1), true,
+        );
+        match resp {
+            lsp_types::CompletionResponse::List(list) => {
+                let labels: Vec<_> = list.items.iter().map(|i| i.label.as_str()).collect();
+                assert!(labels.contains(&"number"), "should suggest tagaxis 'number', got: {:?}", labels);
+                assert!(labels.contains(&"case"), "should suggest tagaxis 'case', got: {:?}", labels);
+            }
+            lsp_types::CompletionResponse::Array(items) => {
+                let labels: Vec<_> = items.iter().map(|i| i.label.as_str()).collect();
+                assert!(labels.contains(&"number"), "should suggest tagaxis 'number', got: {:?}", labels);
+            }
+        }
+    }
+
     #[test]
     fn completion_inside_entry_body() {
         let src = "entry foo {\n  \n}";

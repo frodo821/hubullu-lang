@@ -218,10 +218,15 @@ enum Context {
 }
 
 /// Collect preceding tokens for the given file and offset.
+/// Excludes the Eof token so that context detection sees the last real token.
 fn preceding_tokens<'a>(tokens: &'a [Token], file_id: FileId, offset: usize) -> Vec<&'a Token> {
     tokens
         .iter()
-        .filter(|t| t.span.file_id == file_id && t.span.end <= offset)
+        .filter(|t| {
+            t.span.file_id == file_id
+                && t.span.end <= offset
+                && !matches!(t.node, TokenKind::Eof)
+        })
         .collect()
 }
 
