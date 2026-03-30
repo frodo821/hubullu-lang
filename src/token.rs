@@ -39,6 +39,7 @@ pub enum TokenKind {
     AtUse,       // @use
     AtReference, // @reference
     AtExtend,    // @extend
+    AtExport,    // @export
     AtRender,    // @render
 
     // End of file

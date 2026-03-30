@@ -429,7 +429,7 @@ fn lint_import_order(file_id: FileId, file: &File, source: &str, lints: &mut Vec
 
     for item in &file.items {
         match &item.node {
-            Item::Use(_) | Item::Reference(_) => {
+            Item::Use(_) | Item::Reference(_) | Item::Export(_) => {
                 if first_non_import_span.is_some() {
                     misplaced.push(item);
                 }
@@ -570,21 +570,24 @@ fn lint_cross_file(p1: &Phase1Result, lints: &mut Vec<LintDiagnostic>) {
     lint_unused_definitions(p1, lints);
 }
 
-/// `glob-import`: `@use *` imports everything — prefer named imports.
+/// `glob-import`: `@use *` / `@export use *` imports everything — prefer named imports.
 fn lint_glob_import(p1: &Phase1Result, lints: &mut Vec<LintDiagnostic>) {
     for file in p1.files.values() {
         for item in &file.items {
-            if let Item::Use(import) = &item.node {
-                if let ImportTarget::Glob { alias: None } = &import.target {
-                    lints.push(LintDiagnostic {
-                        rule: "glob-import",
-                        diagnostic: Diagnostic::warning(
-                            "prefer named imports over `@use *`",
-                        )
-                        .with_label(item.span, "glob import"),
-                        fix: None,
-                    });
+            let (target, msg) = match &item.node {
+                Item::Use(import) => (&import.target, "prefer named imports over `@use *`"),
+                Item::Export(export) if export.is_use => {
+                    (&export.target, "prefer named exports over `@export use *`")
                 }
+                _ => continue,
+            };
+            if let ImportTarget::Glob { alias: None } = target {
+                lints.push(LintDiagnostic {
+                    rule: "glob-import",
+                    diagnostic: Diagnostic::warning(msg)
+                        .with_label(item.span, "glob import"),
+                    fix: None,
+                });
             }
         }
     }
@@ -1212,6 +1215,18 @@ impl Visitor for NameCollector {
 
     fn visit_entry_ref(&mut self, entry_ref: &EntryRef) {
         self.used.insert(entry_ref.entry_id.node.clone());
+    }
+
+    fn visit_export(&mut self, export: &Export) {
+        // Names referenced in @export (form 1, no path) count as "used"
+        // so that the backing @use/@reference is not flagged as unused.
+        if export.path.is_none() {
+            if let ImportTarget::Named(entries) = &export.target {
+                for entry in entries {
+                    self.used.insert(entry.name.node.clone());
+                }
+            }
+        }
     }
 }
 

@@ -54,6 +54,8 @@ pub struct Scope {
     pub locals: HashMap<String, Symbol>,
     /// Symbols imported via @use or @reference.
     pub imports: Vec<ImportedSymbol>,
+    /// Symbols re-exported via @export.
+    pub exports: Vec<ImportedSymbol>,
 }
 
 impl Scope {

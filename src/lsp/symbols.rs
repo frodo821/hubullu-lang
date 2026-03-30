@@ -92,6 +92,24 @@ pub fn document_symbols(parse_result: &ParseResult) -> Vec<DocumentSymbol> {
                         deprecated: None,
                     })
                 }
+                Item::Export(exp) => {
+                    let sub = if exp.is_use { "use" } else { "reference" };
+                    let name = if let Some(ref path) = exp.path {
+                        format!("@export {} \"{}\"", sub, path.node)
+                    } else {
+                        format!("@export {}", sub)
+                    };
+                    Some(DocumentSymbol {
+                        name,
+                        detail: None,
+                        kind: SymbolKind::NAMESPACE,
+                        range,
+                        selection_range: range,
+                        children: None,
+                        tags: None,
+                        deprecated: None,
+                    })
+                }
                 Item::Render(_) => Some(DocumentSymbol {
                     name: "@render".into(),
                     detail: None,

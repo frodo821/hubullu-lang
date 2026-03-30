@@ -362,6 +362,24 @@ fn classify_item(item: &ast::Item, fid: FileId, map: &mut HashMap<(usize, usize)
         ast::Item::Entry(entry) => classify_entry(entry, fid, map),
         ast::Item::PhonRule(pr) => classify_phonrule(pr, fid, map),
         ast::Item::Use(imp) | ast::Item::Reference(imp) => classify_import(imp, fid, map),
+        ast::Item::Export(exp) => {
+            // Classify the import target names/aliases within the @export
+            match &exp.target {
+                ast::ImportTarget::Glob { alias } => {
+                    if let Some(alias) = alias {
+                        put(map, &alias.span, fid, NAMESPACE);
+                    }
+                }
+                ast::ImportTarget::Named(entries) => {
+                    for entry in entries {
+                        put(map, &entry.name.span, fid, TYPE);
+                        if let Some(ref alias) = entry.alias {
+                            put(map, &alias.span, fid, TYPE);
+                        }
+                    }
+                }
+            }
+        }
         ast::Item::Render(_) => {}
     }
 }

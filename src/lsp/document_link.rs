@@ -17,20 +17,26 @@ pub fn document_links(
     let mut links = Vec::new();
 
     for item_spanned in &parse_result.file.items {
-        let import = match &item_spanned.node {
-            Item::Use(imp) | Item::Reference(imp) => imp,
-            _ => continue,
+        let path_lit = match &item_spanned.node {
+            Item::Use(imp) | Item::Reference(imp) => Some(&imp.path),
+            Item::Export(exp) => exp.path.as_ref(),
+            _ => None,
         };
 
-        let range = convert::span_to_range(&import.path.span, source_map);
+        let path_lit = match path_lit {
+            Some(p) => p,
+            None => continue,
+        };
 
-        let target = phase1.and_then(|p1| resolve_import_target(&import.path.node, p1));
+        let range = convert::span_to_range(&path_lit.span, source_map);
+
+        let target = phase1.and_then(|p1| resolve_import_target(&path_lit.node, p1));
 
         if let Some(uri) = target {
             links.push(DocumentLink {
                 range,
                 target: Some(uri),
-                tooltip: Some(format!("Open {}", import.path.node)),
+                tooltip: Some(format!("Open {}", path_lit.node)),
                 data: None,
             });
         }

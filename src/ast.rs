@@ -73,6 +73,7 @@ pub struct File {
 pub enum Item {
     Use(Import),
     Reference(Import),
+    Export(Export),
     TagAxis(TagAxis),
     Extend(Extend),
     Inflection(Inflection),
@@ -116,6 +117,22 @@ pub enum ImportTarget {
 pub struct ImportEntry {
     pub name: Ident,
     pub alias: Option<Ident>,
+}
+
+// ---------------------------------------------------------------------------
+// @export
+// ---------------------------------------------------------------------------
+
+/// An `@export` directive that re-exports symbols transitively.
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Export {
+    /// `true` for `@export use`, `false` for `@export reference`.
+    pub is_use: bool,
+    /// What to export: `*`, `* as ns`, or named list.
+    pub target: ImportTarget,
+    /// Source file path. Present for form 2 (`from "file"`), absent for form 1.
+    pub path: Option<StringLit>,
 }
 
 // ---------------------------------------------------------------------------

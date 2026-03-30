@@ -210,7 +210,7 @@ pub fn compute_schema_fingerprint(p1: &Phase1Result) -> String {
                         hasher.update(src.as_bytes());
                     }
                 }
-                Item::Entry(_) | Item::Use(_) | Item::Reference(_) => {}
+                Item::Entry(_) | Item::Use(_) | Item::Reference(_) | Item::Export(_) => {}
             }
         }
     }

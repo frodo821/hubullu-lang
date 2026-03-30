@@ -36,6 +36,8 @@ pub trait Visitor: Sized {
 
     fn visit_import(&mut self, _import: &Import) {}
 
+    fn visit_export(&mut self, _export: &Export) {}
+
     fn visit_tagaxis(&mut self, _tagaxis: &TagAxis) {}
 
     fn visit_extend(&mut self, extend: &Extend) {
@@ -87,6 +89,9 @@ pub fn walk_item<V: Visitor>(visitor: &mut V, item: &Spanned<Item>) {
     match &item.node {
         Item::Use(import) | Item::Reference(import) => {
             visitor.visit_import(import);
+        }
+        Item::Export(export) => {
+            visitor.visit_export(export);
         }
         Item::TagAxis(ta) => {
             visitor.visit_tagaxis(ta);

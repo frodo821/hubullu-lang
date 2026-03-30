@@ -137,7 +137,7 @@ impl Parser {
         loop {
             match self.peek() {
                 TokenKind::Eof => break,
-                TokenKind::AtUse | TokenKind::AtReference | TokenKind::AtExtend | TokenKind::AtRender => break,
+                TokenKind::AtUse | TokenKind::AtReference | TokenKind::AtExport | TokenKind::AtExtend | TokenKind::AtRender => break,
                 TokenKind::Ident(s) if matches!(s.as_str(), "tagaxis" | "inflection" | "entry" | "phonrule") => {
                     break
                 }
@@ -162,6 +162,10 @@ impl Parser {
             TokenKind::AtReference => {
                 self.advance();
                 Item::Reference(self.parse_import()?)
+            }
+            TokenKind::AtExport => {
+                self.advance();
+                Item::Export(self.parse_export()?)
             }
             TokenKind::AtExtend => {
                 self.advance();
@@ -255,6 +259,33 @@ impl Parser {
             }
         }
         Ok(entries)
+    }
+
+    // -----------------------------------------------------------------------
+    // @export
+    // -----------------------------------------------------------------------
+
+    fn parse_export(&mut self) -> Result<Export, Diagnostic> {
+        let is_use = if self.at_ident("use") {
+            self.advance();
+            true
+        } else if self.at_ident("reference") {
+            self.advance();
+            false
+        } else {
+            return Err(self.error("expected 'use' or 'reference' after @export"));
+        };
+
+        let target = self.parse_import_target()?;
+
+        let path = if self.at_ident("from") {
+            self.advance();
+            Some(self.expect_string()?)
+        } else {
+            None
+        };
+
+        Ok(Export { is_use, target, path })
     }
 
     // -----------------------------------------------------------------------

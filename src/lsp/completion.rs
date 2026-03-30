@@ -142,6 +142,7 @@ pub fn complete(
 const TOP_LEVEL_KEYWORDS: &[(&str, &str)] = &[
     ("@use", "Import symbols from another file"),
     ("@reference", "Reference symbols from another file (read-only)"),
+    ("@export", "Re-export symbols transitively"),
     ("@extend", "Add values to a tag axis"),
     ("@render", "Configure .hut token rendering"),
     ("entry", "Define a dictionary entry"),

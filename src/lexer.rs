@@ -426,6 +426,7 @@ impl<'a> Lexer<'a> {
             "use" => TokenKind::AtUse,
             "reference" => TokenKind::AtReference,
             "extend" => TokenKind::AtExtend,
+            "export" => TokenKind::AtExport,
             "render" => TokenKind::AtRender,
             _ => {
                 self.errors.push(
