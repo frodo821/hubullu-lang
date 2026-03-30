@@ -42,7 +42,7 @@ entry faren {
 Requires Rust 1.70+.
 
 ```sh
-cargo install --path .
+cargo install --git https://github.com/frodo821/hubullu-lang.git
 ```
 
 ## Usage
