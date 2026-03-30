@@ -26,9 +26,67 @@ pub fn apply_phonrule(input: &str, phonrule: &PhonRule) -> String {
     result
 }
 
+/// Check if the FROM pattern is an empty literal (insertion rule).
+fn is_insertion_rule(rule: &PhonRewriteRule) -> bool {
+    matches!(&rule.from, PhonPattern::Literal(lit) if lit.node.is_empty())
+}
+
 /// Apply a single rewrite rule to the input.
 /// All matches are found first, then applied simultaneously.
 fn apply_rewrite_rule(input: &str, rule: &PhonRewriteRule, phonrule: &PhonRule) -> String {
+    if is_insertion_rule(rule) {
+        apply_insertion_rule(input, rule, phonrule)
+    } else {
+        apply_replacement_rule(input, rule, phonrule)
+    }
+}
+
+/// Apply an insertion rule (empty FROM pattern) to the input.
+/// Scans all inter-character positions (0..=len) and checks context.
+fn apply_insertion_rule(input: &str, rule: &PhonRewriteRule, phonrule: &PhonRule) -> String {
+    let chars: Vec<char> = input.chars().collect();
+    let mut insertions: Vec<(usize, String)> = Vec::new();
+
+    let replacement = match &rule.to {
+        PhonReplacement::Literal(lit) => lit.node.clone(),
+        PhonReplacement::Null => return input.to_string(),
+        PhonReplacement::Map(_) => return input.to_string(),
+    };
+
+    // Try every inter-character position, including before first and after last
+    for i in 0..=chars.len() {
+        if let Some(ctx) = &rule.context {
+            if !check_context(&chars, i, 0, ctx, phonrule) {
+                continue;
+            }
+        }
+        insertions.push((i, replacement.clone()));
+    }
+
+    if insertions.is_empty() {
+        return input.to_string();
+    }
+
+    // Build result with insertions
+    let mut result = String::new();
+    for (ci, ch) in chars.iter().enumerate() {
+        // Insert before this position if needed
+        if let Some((_, ins)) = insertions.iter().find(|(pos, _)| *pos == ci) {
+            result.push_str(ins);
+        }
+        result.push(*ch);
+    }
+    // Insert at the very end if needed
+    if let Some((_, ins)) = insertions.iter().find(|(pos, _)| *pos == chars.len()) {
+        result.push_str(ins);
+    }
+
+    result
+}
+
+/// Apply a non-insertion rewrite rule (non-empty FROM pattern).
+/// All matches are found first, then applied simultaneously.
+fn apply_replacement_rule(input: &str, rule: &PhonRewriteRule, phonrule: &PhonRule) -> String {
     let chars: Vec<char> = input.chars().collect();
     let mut replacements: Vec<(usize, usize, String)> = Vec::new();
 
@@ -571,5 +629,120 @@ mod tests {
         // Single morpheme, no \0 — the + in context should still match at string start
         let result = apply_phonrule("yollar", &harmony);
         assert_eq!(strip_boundaries(&result), "yollar");
+    }
+
+    fn make_insertion_rule(
+        to: &str,
+        context: PhonContext,
+        classes: Vec<CharClassDef>,
+    ) -> PhonRule {
+        PhonRule {
+            name: make_ident("insert_test"),
+            classes,
+            maps: vec![],
+            rules: vec![
+                PhonRewriteRule {
+                    from: PhonPattern::Literal(make_string_lit("")),
+                    to: PhonReplacement::Literal(make_string_lit(to)),
+                    context: Some(context),
+                    span: make_span(),
+                },
+            ],
+            span: make_span(),
+        }
+    }
+
+    fn consonant_class() -> CharClassDef {
+        CharClassDef {
+            name: make_ident("C"),
+            body: CharClassBody::List(vec![
+                make_string_lit("p"), make_string_lit("t"), make_string_lit("k"),
+                make_string_lit("b"), make_string_lit("d"), make_string_lit("g"),
+                make_string_lit("l"), make_string_lit("r"), make_string_lit("n"),
+            ]),
+        }
+    }
+
+    #[test]
+    fn test_insertion_at_morpheme_boundary() {
+        // "" -> "e" / C + _ C  (epenthesis: insert 'e' between consonants across boundary)
+        let rule = make_insertion_rule(
+            "e",
+            PhonContext {
+                left: vec![PhonContextElem::Class(make_ident("C")), PhonContextElem::Boundary],
+                right: vec![PhonContextElem::Class(make_ident("C"))],
+            },
+            vec![consonant_class()],
+        );
+        // "park\0ta" → "parke\0ta" (sic — inserted before boundary? no...)
+        // Actually: position is between chars. At position of \0:
+        //   left: C then + → 'k' then boundary → match
+        //   right: C → 't' → match
+        // But \0 itself... let's check the insertion logic.
+        // Positions: p(0) a(1) r(2) k(3) \0(4) t(5) a(6)
+        // At insertion point 5 (before 't'):
+        //   left context: check from pos 5 backwards
+        //     first elem (rightmost): Boundary → chars[4] == \0 ✓, cursor=4
+        //     second elem: C → chars[3] == 'k' ✓
+        //   right context: check from pos 5 forwards
+        //     C → chars[5] == 't' ✓
+        // → insert 'e' at position 5
+        let input = format!("park{}ta", BOUNDARY);
+        let result = apply_phonrule(&input, &rule);
+        assert_eq!(strip_boundaries(&result), "parketa");
+    }
+
+    #[test]
+    fn test_insertion_at_word_start() {
+        // "" -> "e" / ^ _ C C  (prothesis: insert 'e' before initial CC cluster)
+        let rule = make_insertion_rule(
+            "e",
+            PhonContext {
+                left: vec![PhonContextElem::WordStart],
+                right: vec![PhonContextElem::Class(make_ident("C")), PhonContextElem::Class(make_ident("C"))],
+            },
+            vec![consonant_class()],
+        );
+        // "plan" → "eplan" (insert before initial pl cluster)
+        assert_eq!(strip_boundaries(&apply_phonrule("plan", &rule)), "eplan");
+        // "an" → "an" (no initial CC, no insertion)
+        assert_eq!(strip_boundaries(&apply_phonrule("an", &rule)), "an");
+    }
+
+    #[test]
+    fn test_insertion_at_word_end() {
+        // "" -> "e" / C C _ $  (paragoge: insert 'e' after final CC cluster)
+        let rule = make_insertion_rule(
+            "e",
+            PhonContext {
+                left: vec![PhonContextElem::Class(make_ident("C")), PhonContextElem::Class(make_ident("C"))],
+                right: vec![PhonContextElem::WordEnd],
+            },
+            vec![consonant_class()],
+        );
+        // "park" → "parke" (insert after final rk cluster)
+        assert_eq!(strip_boundaries(&apply_phonrule("park", &rule)), "parke");
+        // "par" → "par" (only one final C, no insertion)
+        assert_eq!(strip_boundaries(&apply_phonrule("par", &rule)), "par");
+    }
+
+    #[test]
+    fn test_insertion_no_context_match() {
+        // "" -> "x" / C _ C  (insert between consonants, no boundary required)
+        let rule = make_insertion_rule(
+            "x",
+            PhonContext {
+                left: vec![PhonContextElem::Class(make_ident("C"))],
+                right: vec![PhonContextElem::Class(make_ident("C"))],
+            },
+            vec![consonant_class()],
+        );
+        // "apt" → "axpxt" (insert between a-p? no, 'a' is not C. between p-t: yes)
+        // positions: a(0) p(1) t(2)
+        // pos 0: left=nothing, right=C('a')→'a' not in C → no
+        // pos 1: left=C→'a' not in C → no
+        // pos 2: left=C→'p' ✓, right=C→'t' ✓ → insert 'x'
+        // pos 3: left=C→'t' ✓, right=end → no C → no
+        assert_eq!(strip_boundaries(&apply_phonrule("apt", &rule)), "apxt");
     }
 }
