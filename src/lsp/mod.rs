@@ -30,6 +30,7 @@ use lsp_types::{
     TextDocumentSyncCapability, TextDocumentSyncKind, Uri, WorkDoneProgressOptions,
 };
 
+use crate::lint::LintDiagnostic;
 use crate::phase1::Phase1Result;
 use crate::phase2::Phase2Result;
 use crate::span::FileId;
@@ -131,6 +132,8 @@ struct ProjectState {
     token_cache: std::collections::HashMap<FileId, Vec<Token>>,
     /// Map from URI string to FileId in the phase1 source map.
     url_to_file_id: std::collections::HashMap<String, FileId>,
+    /// Lint diagnostics from the linter.
+    lint_diagnostics: Vec<LintDiagnostic>,
 }
 
 /// Run the LSP server on stdin/stdout.
@@ -800,11 +803,14 @@ fn publish_doc_diagnostics(
         None => return diagnostics::clear_notification(uri),
     };
 
-    // Start with single-file parse diagnostics.
-    let mut diags: Vec<&crate::error::Diagnostic> =
+    // Start with single-file parse diagnostics (use doc's source_map).
+    let parse_diags: Vec<&crate::error::Diagnostic> =
         doc.parse_result.diagnostics.iter().collect();
 
-    // If project analysis is available, include phase1 diagnostics for this file.
+    // Project-level diagnostics (phase1 + lint) use the project source_map.
+    let mut proj_diags: Vec<&crate::error::Diagnostic> = Vec::new();
+    let proj_source_map;
+
     if let Some(proj) = project {
         if let Some(&fid) = proj.url_to_file_id.get(uri.as_str()) {
             let p1_diags: Vec<_> = proj
@@ -814,11 +820,29 @@ fn publish_doc_diagnostics(
                 .iter()
                 .filter(|d| d.labels.first().is_some_and(|l| l.span.file_id == fid))
                 .collect();
-            diags.extend(p1_diags);
+            proj_diags.extend(p1_diags);
+
+            // Include lint diagnostics for this file.
+            let lint_diags: Vec<_> = proj
+                .lint_diagnostics
+                .iter()
+                .filter(|ld| ld.diagnostic.labels.first().is_some_and(|l| l.span.file_id == fid))
+                .map(|ld| &ld.diagnostic)
+                .collect();
+            proj_diags.extend(lint_diags);
         }
+        proj_source_map = Some(&proj.phase1.source_map);
+    } else {
+        proj_source_map = None;
     }
 
-    diagnostics::publish_notification(uri, &diags, &doc.parse_result.source_map)
+    diagnostics::publish_combined_notification(
+        uri,
+        &parse_diags,
+        &doc.parse_result.source_map,
+        &proj_diags,
+        proj_source_map,
+    )
 }
 
 fn workspace_root(init_params: &InitializeParams) -> Option<PathBuf> {
@@ -846,11 +870,13 @@ fn build_project_state(entry_path: &std::path::Path) -> Option<ProjectState> {
     // Try disk cache first.
     if let Some(cached) = disk_cache::load(entry_path) {
         let url_to_file_id = build_url_map(&cached.phase1.source_map);
+        let lint_diagnostics = crate::lint::run_lint_from_phase1(&cached.phase1);
         return Some(ProjectState {
             phase1: cached.phase1,
             phase2: cached.phase2,
             token_cache: cached.token_cache,
             url_to_file_id,
+            lint_diagnostics,
         });
     }
 
@@ -875,8 +901,9 @@ fn build_project_state(entry_path: &std::path::Path) -> Option<ProjectState> {
     // Save to disk cache for next startup.
     disk_cache::save(entry_path, &phase1, phase2.as_ref(), &token_cache);
 
+    let lint_diagnostics = crate::lint::run_lint_from_phase1(&phase1);
     let url_to_file_id = build_url_map(&phase1.source_map);
-    Some(ProjectState { phase1, phase2, token_cache, url_to_file_id })
+    Some(ProjectState { phase1, phase2, token_cache, url_to_file_id, lint_diagnostics })
 }
 
 fn build_url_map(source_map: &crate::span::SourceMap) -> std::collections::HashMap<String, FileId> {
@@ -967,7 +994,8 @@ fn try_load_hut_project(
 
     let url_to_file_id = build_url_map(&phase1.source_map);
 
-    let mut proj = ProjectState { phase1, phase2, token_cache, url_to_file_id };
+    let lint_diagnostics = crate::lint::run_lint_from_phase1(&phase1);
+    let mut proj = ProjectState { phase1, phase2, token_cache, url_to_file_id, lint_diagnostics };
 
     // Add the .hut file to the project so LSP features work.
     let hut_filename = convert::uri_to_filename(hut_uri);

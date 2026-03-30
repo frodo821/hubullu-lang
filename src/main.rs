@@ -26,6 +26,15 @@ enum Command {
         /// Input .hut file
         input: PathBuf,
     },
+    /// Lint .hu files for warnings and style issues
+    Lint {
+        /// Entry point .hu file
+        input: PathBuf,
+
+        /// Automatically fix issues where possible
+        #[clap(long)]
+        fix: bool,
+    },
     /// Start the Language Server Protocol server
     #[cfg(feature = "lsp")]
     Lsp,
@@ -86,6 +95,40 @@ fn main() {
                     eprintln!("{}", msg);
                     process::exit(1);
                 }
+            }
+        }
+        Command::Lint { input, fix } => {
+            let result = hubullu::lint::run_lint(&input);
+
+            if result.compile_errors.has_errors() {
+                eprintln!("{}", result.compile_errors.render_all(&result.source_map));
+                process::exit(1);
+            }
+
+            if !result.has_lints() {
+                eprintln!("No lint issues found.");
+                return;
+            }
+
+            eprint!("{}", result.render_all());
+
+            if fix {
+                match hubullu::lint::apply_fixes(&result.lints, &result.source_map) {
+                    Ok(n) => {
+                        eprintln!("Fixed {} issue(s).", n);
+                    }
+                    Err(e) => {
+                        eprintln!("error applying fixes: {}", e);
+                        process::exit(1);
+                    }
+                }
+            }
+
+            let unfixed = result.lints.iter().filter(|l| {
+                if fix { l.fix.is_none() } else { true }
+            }).count();
+            if unfixed > 0 {
+                process::exit(1);
             }
         }
         Command::Render { input } => {

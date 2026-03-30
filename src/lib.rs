@@ -36,6 +36,8 @@ pub mod render;
 pub mod error;
 /// Inflection paradigm evaluator — cartesian expansion, rule matching, compose, delegation.
 pub mod inflection_eval;
+/// Linter for `.hu` files — warnings and style checks with optional auto-fix.
+pub mod lint;
 /// Hand-written lexer (scanner) for the LexDSL language.
 pub mod lexer;
 /// Recursive descent parser — tokens to [`ast::File`].

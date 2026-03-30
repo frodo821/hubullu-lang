@@ -31,6 +31,41 @@ pub fn publish_notification(
     )
 }
 
+/// Build a notification combining diagnostics from two different source maps.
+///
+/// This is needed because parse diagnostics use the document's source map (single
+/// file) while project-level diagnostics (phase1 errors, lint warnings) use the
+/// project's source map (multi-file).
+pub fn publish_combined_notification(
+    url: &Uri,
+    parse_diags: &[&Diagnostic],
+    parse_source_map: &SourceMap,
+    proj_diags: &[&Diagnostic],
+    proj_source_map: Option<&SourceMap>,
+) -> Notification {
+    let mut lsp_diags: Vec<lsp_types::Diagnostic> = parse_diags
+        .iter()
+        .map(|d| convert_diagnostic(d, url, parse_source_map))
+        .collect();
+
+    if let Some(psm) = proj_source_map {
+        lsp_diags.extend(
+            proj_diags
+                .iter()
+                .map(|d| convert_diagnostic(d, url, psm)),
+        );
+    }
+
+    Notification::new(
+        "textDocument/publishDiagnostics".into(),
+        PublishDiagnosticsParams {
+            uri: url.clone(),
+            diagnostics: lsp_diags,
+            version: None,
+        },
+    )
+}
+
 /// Build an empty publishDiagnostics notification (clears stale markers).
 pub fn clear_notification(url: &Uri) -> Notification {
     Notification::new(
