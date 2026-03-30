@@ -79,8 +79,8 @@ impl Scope {
             });
         }
 
-        // Check imports
-        for imp in &self.imports {
+        // Check imports and exports
+        for imp in self.imports.iter().chain(self.exports.iter()) {
             if imp.local_name == name {
                 results.push(ResolvedSymbol {
                     name: imp.original_name.clone(),
@@ -98,7 +98,7 @@ impl Scope {
     /// Resolve a namespaced name like `ns.name`.
     pub fn resolve_qualified(&self, namespace: &str, name: &str) -> Vec<ResolvedSymbol> {
         let mut results = Vec::new();
-        for imp in &self.imports {
+        for imp in self.imports.iter().chain(self.exports.iter()) {
             if imp.namespace.as_deref() == Some(namespace)
                 && imp.original_name == name
             {

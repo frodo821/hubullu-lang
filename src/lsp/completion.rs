@@ -729,7 +729,7 @@ fn add_tag_axes(
                 }
             }
         }
-        for imp in &scope.imports {
+        for imp in scope.imports.iter().chain(scope.exports.iter()) {
             if imp.kind == SymbolKind::TagAxis {
                 if allowed.map_or(true, |a| a.iter().any(|n| n == &imp.local_name)) {
                     items.push(CompletionItem {
@@ -995,7 +995,7 @@ fn add_symbols_of_kind(
                 });
             }
         }
-        for imp in &scope.imports {
+        for imp in scope.imports.iter().chain(scope.exports.iter()) {
             if imp.kind == kind {
                 items.push(CompletionItem {
                     label: imp.local_name.clone(),
@@ -1057,7 +1057,7 @@ fn add_all_symbols(
                 ..Default::default()
             });
         }
-        for imp in &scope.imports {
+        for imp in scope.imports.iter().chain(scope.exports.iter()) {
             items.push(CompletionItem {
                 label: imp.local_name.clone(),
                 kind: Some(symbol_kind_to_completion(imp.kind)),
