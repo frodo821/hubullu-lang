@@ -1,9 +1,12 @@
-//! SQLite emitter — writes compiled dictionary data to a SQLite database.
+//! SQLite emitter — writes compiled dictionary data to a `.huc` file.
 //!
 //! Creates tables for entries, forms, links, tag-axis metadata, inflection
-//! metadata, and an FTS5 virtual table for full-text search.
+//! metadata, name resolution, and an FTS5 virtual table for full-text search.
 //! All entity tables use INTEGER PRIMARY KEY; source-level names are stored
 //! in `name` columns but are not used as foreign keys.
+//!
+//! The `name_resolution` table preserves the per-file symbol scope so that
+//! `.hut` renderers can resolve entry names without re-compiling sources.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -11,17 +14,20 @@ use std::path::Path;
 use rusqlite::{params, Connection};
 
 use crate::error::Diagnostic;
+use crate::phase1::Phase1Result;
 use crate::phase2::Phase2Result;
+use crate::symbol_table::SymbolKind;
 
-/// Write all compiled data to a new SQLite database at `output_path`.
-pub fn emit(output_path: &Path, p2: &Phase2Result) -> Result<(), Diagnostic> {
+/// Write all compiled data to a new `.huc` file (SQLite format) at `output_path`.
+pub fn emit(output_path: &Path, p1: &Phase1Result, p2: &Phase2Result) -> Result<(), Diagnostic> {
     let conn = Connection::open(output_path).map_err(|e| {
-        Diagnostic::error(format!("cannot open output database: {}", e))
+        Diagnostic::error(format!("cannot open output file: {}", e))
     })?;
 
     create_schema(&conn)?;
     insert_data(&conn, p2)?;
     insert_render_config(&conn, p2)?;
+    insert_name_resolution(&conn, p1, p2)?;
     create_indexes(&conn, p2)?;
     create_fts(&conn)?;
 
@@ -106,6 +112,19 @@ fn create_schema(conn: &Connection) -> Result<(), Diagnostic> {
         CREATE TABLE IF NOT EXISTS render_config (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS compile_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS name_resolution (
+            file_hash TEXT NOT NULL,
+            name TEXT NOT NULL,
+            entry_id INTEGER NOT NULL,
+            PRIMARY KEY (file_hash, name),
+            FOREIGN KEY (entry_id) REFERENCES entries(id)
         );
         ",
     )
@@ -253,6 +272,90 @@ fn insert_render_config(conn: &Connection, p2: &Phase2Result) -> Result<(), Diag
     Ok(())
 }
 
+fn insert_name_resolution(
+    conn: &Connection,
+    p1: &Phase1Result,
+    _p2: &Phase2Result,
+) -> Result<(), Diagnostic> {
+    use sha2::{Digest, Sha256};
+
+    // Build entry name → DB id map (same names used during insert_data)
+    let entry_ids: HashMap<String, i64> = {
+        let mut stmt = conn
+            .prepare("SELECT id, name FROM entries")
+            .map_err(|e| Diagnostic::error(format!("query entries failed: {}", e)))?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get::<_, String>(1)?, row.get::<_, i64>(0)?)))
+            .map_err(|e| Diagnostic::error(format!("query entries failed: {}", e)))?;
+        let mut map = HashMap::new();
+        for row in rows {
+            let (name, id) =
+                row.map_err(|e| Diagnostic::error(format!("read entry row failed: {}", e)))?;
+            map.insert(name, id);
+        }
+        map
+    };
+
+    // Determine entry point directory for relative path computation.
+    // The first file added to the source map is the entry point.
+    let entry_point_dir = {
+        let entry_file_id = crate::span::FileId(0);
+        let entry_path = p1.source_map.path(entry_file_id);
+        entry_path
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .to_path_buf()
+    };
+
+    conn.execute(
+        "INSERT INTO compile_meta (key, value) VALUES (?1, ?2)",
+        params!["entry_point_dir", entry_point_dir.to_string_lossy()],
+    )
+    .map_err(|e| Diagnostic::error(format!("insert compile_meta failed: {}", e)))?;
+
+    // For each file in the symbol table, record all Entry-kind names in scope.
+    let mut stmt = conn
+        .prepare("INSERT OR IGNORE INTO name_resolution (file_hash, name, entry_id) VALUES (?1, ?2, ?3)")
+        .map_err(|e| Diagnostic::error(format!("prepare name_resolution insert failed: {}", e)))?;
+
+    for (&file_id, scope) in &p1.symbol_table.scopes {
+        let file_path = p1.source_map.path(file_id);
+        let rel_path = file_path
+            .strip_prefix(&entry_point_dir)
+            .unwrap_or(file_path);
+        let file_hash = {
+            let mut hasher = Sha256::new();
+            hasher.update(rel_path.to_string_lossy().as_bytes());
+            format!("{:x}", hasher.finalize())
+        };
+
+        // Collect Entry symbols from locals
+        for sym in scope.locals.values() {
+            if sym.kind == SymbolKind::Entry {
+                if let Some(&eid) = entry_ids.get(&sym.name) {
+                    stmt.execute(params![file_hash, sym.name, eid]).map_err(|e| {
+                        Diagnostic::error(format!("insert name_resolution failed: {}", e))
+                    })?;
+                }
+            }
+        }
+
+        // Collect Entry symbols from imports (excluding namespaced — they are ephemeral)
+        for imp in &scope.imports {
+            if imp.kind == SymbolKind::Entry && imp.namespace.is_none() {
+                if let Some(&eid) = entry_ids.get(&imp.original_name) {
+                    stmt.execute(params![file_hash, imp.local_name, eid])
+                        .map_err(|e| {
+                            Diagnostic::error(format!("insert name_resolution failed: {}", e))
+                        })?;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn create_indexes(conn: &Connection, _p2: &Phase2Result) -> Result<(), Diagnostic> {
     conn.execute_batch(
         "
@@ -265,6 +368,7 @@ fn create_indexes(conn: &Connection, _p2: &Phase2Result) -> Result<(), Diagnosti
         CREATE INDEX IF NOT EXISTS idx_entry_tags_axis ON entry_tags(axis, value);
         CREATE INDEX IF NOT EXISTS idx_inflection_display ON inflection_display(inflection_id);
         CREATE INDEX IF NOT EXISTS idx_inflection_axes ON inflection_axes(inflection_id);
+        CREATE INDEX IF NOT EXISTS idx_name_resolution_hash ON name_resolution(file_hash);
         ",
     )
     .map_err(|e| Diagnostic::error(format!("index creation failed: {}", e)))?;

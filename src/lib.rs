@@ -1,6 +1,6 @@
 //! # hubullu — LexDSL compiler
 //!
-//! Compiles `.hu` artificial natural language dictionary files into SQLite databases.
+//! Compiles `.hu` artificial natural language dictionary files into `.huc` files.
 //!
 //! ## Compilation pipeline
 //!
@@ -9,13 +9,14 @@
 //!    symbol registration
 //! 3. **Phase 2** ([`phase2`]) — `@extend` resolution, inflection validation,
 //!    paradigm expansion, DAG check
-//! 4. **Emit** ([`emit_sqlite`]) — write entries, forms, links, and FTS5 to SQLite
+//! 4. **Emit** ([`emit_sqlite`]) — write entries, forms, links, name resolution,
+//!    and FTS5 to a `.huc` file (SQLite format)
 //!
 //! ## Quick start
 //!
 //! ```no_run
 //! # use std::path::Path;
-//! hubullu::compile(Path::new("lang.hu"), Path::new("dict.sqlite"))
+//! hubullu::compile(Path::new("lang.hu"), Path::new("dict.huc"))
 //!     .expect("compilation failed");
 //! ```
 //!
@@ -26,10 +27,10 @@
 pub mod ast;
 /// Generic DAG cycle detector (Kahn's algorithm).
 pub mod dag;
-/// SQLite emitter — writes compiled dictionary data to a SQLite database.
+/// `.huc` emitter — writes compiled dictionary data to a `.huc` file (SQLite format).
 #[cfg(feature = "sqlite")]
 pub mod emit_sqlite;
-/// `.hut` file rendering — resolves token lists against a compiled SQLite database.
+/// `.hut` file rendering — resolves token lists against a compiled `.huc` file.
 #[cfg(feature = "sqlite")]
 pub mod render;
 /// Diagnostic types for error/warning reporting with source locations.
@@ -141,7 +142,7 @@ pub fn lex_source(source: &str, filename: &str) -> (Vec<Token>, Vec<Diagnostic>,
 // Full compilation (requires "sqlite" feature)
 // ---------------------------------------------------------------------------
 
-/// Compile a LexDSL project from the given entry file to SQLite output.
+/// Compile a LexDSL project from the given entry file to a `.huc` file.
 #[cfg(feature = "sqlite")]
 pub fn compile(entry_path: &Path, output_path: &Path) -> Result<(), String> {
     // Phase 1: load, parse, register symbols
@@ -156,8 +157,8 @@ pub fn compile(entry_path: &Path, output_path: &Path) -> Result<(), String> {
         return Err(p2.diagnostics.render_all(&p1.source_map));
     }
 
-    // Emit SQLite
-    if let Err(diag) = emit_sqlite::emit(output_path, &p2) {
+    // Emit .huc file
+    if let Err(diag) = emit_sqlite::emit(output_path, &p1, &p2) {
         return Err(diag.render(&p1.source_map));
     }
 

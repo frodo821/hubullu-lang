@@ -1,11 +1,13 @@
-//! `.hut` file rendering — resolves token lists against compiled databases.
+//! `.hut` file rendering — resolves token lists against compiled `.huc` files.
 //!
 //! Each `.hut` file declares `@reference` directives pointing at `.hu` source
-//! files. The renderer compiles those sources (with mtime-based caching) and
-//! resolves entry references through namespace-aware lookup.
+//! files. The renderer either compiles those sources on demand (with
+//! mtime-based caching) or uses a pre-compiled `.huc` file supplied via
+//! `--huc`, resolving entry references through namespace-aware lookup.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use rusqlite::Connection;
 
@@ -45,9 +47,9 @@ pub fn parse_hut(source: &str, filename: &str) -> Result<HutFile, String> {
 // Cached compilation
 // ---------------------------------------------------------------------------
 
-/// Compile a `.hu` file to SQLite, returning the path to the database.
+/// Compile a `.hu` file to a `.huc` file, returning the path.
 ///
-/// Uses mtime-based caching: if a cached `.sqlite` already exists and is newer
+/// Uses mtime-based caching: if a cached `.huc` already exists and is newer
 /// than the source file, compilation is skipped.  The cache is stored next to
 /// the source as `<name>.hu.cache.sqlite`.
 ///
@@ -84,19 +86,19 @@ pub fn compile_cached(hu_path: &Path) -> Result<PathBuf, String> {
 }
 
 // ---------------------------------------------------------------------------
-// Entry source — one compiled database with its import rules
+// Entry source — one compiled .huc file with its import rules
 // ---------------------------------------------------------------------------
 
 struct EntrySource {
-    conn: Connection,
+    conn: Rc<Connection>,
     /// `None` = glob (all entries visible); `Some(map)` = named imports
-    /// where key = local name, value = name in db.
+    /// where key = local name, value = name in the .huc file.
     name_map: Option<HashMap<String, String>>,
 }
 
 impl EntrySource {
-    /// Look up the database-side entry name for a local reference name.
-    /// Returns `Some(db_name)` if the entry is visible through this source.
+    /// Look up the .huc-side entry name for a local reference name.
+    /// Returns `Some(huc_name)` if the entry is visible through this source.
     fn resolve_name<'a>(&'a self, local_name: &'a str) -> Option<&'a str> {
         match &self.name_map {
             None => Some(local_name), // glob — everything visible
@@ -106,11 +108,11 @@ impl EntrySource {
 }
 
 // ---------------------------------------------------------------------------
-// Resolve context — namespace-aware multi-database lookup
+// Resolve context — namespace-aware lookup against .huc files
 // ---------------------------------------------------------------------------
 
-/// Holds compiled databases and namespace mappings built from `@reference`
-/// directives.
+/// Holds compiled `.huc` connections and namespace mappings built from
+/// `@reference` directives.
 pub struct ResolveContext {
     /// namespace name → entry source
     namespaced: HashMap<String, EntrySource>,
@@ -121,7 +123,8 @@ pub struct ResolveContext {
 impl ResolveContext {
     /// Build a [`ResolveContext`] from the `@reference` directives in a `.hut`
     /// file.  `hut_dir` is the directory containing the `.hut` file, used to
-    /// resolve relative paths.
+    /// resolve relative paths.  Each referenced `.hu` file is compiled (with
+    /// mtime-based caching) to produce a `.huc` file.
     pub fn from_references(
         references: &[ast::Import],
         hut_dir: &Path,
@@ -129,7 +132,7 @@ impl ResolveContext {
         let mut namespaced: HashMap<String, EntrySource> = HashMap::new();
         let mut default_sources: Vec<EntrySource> = Vec::new();
         // avoid compiling the same file twice
-        let mut compiled: HashMap<PathBuf, PathBuf> = HashMap::new();
+        let mut compiled: HashMap<PathBuf, Rc<Connection>> = HashMap::new();
 
         for import in references {
             let hu_rel = &import.path.node;
@@ -138,20 +141,21 @@ impl ResolveContext {
                 .canonicalize()
                 .map_err(|e| format!("cannot resolve '{}': {}", hu_path.display(), e))?;
 
-            let db_path = match compiled.get(&hu_canon) {
-                Some(p) => p.clone(),
+            let conn = match compiled.get(&hu_canon) {
+                Some(c) => Rc::clone(c),
                 None => {
-                    let p = compile_cached(&hu_canon)?;
-                    compiled.insert(hu_canon.clone(), p.clone());
-                    p
+                    let huc_path = compile_cached(&hu_canon)?;
+                    let c = Rc::new(
+                        Connection::open_with_flags(
+                            &huc_path,
+                            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+                        )
+                        .map_err(|e| format!("cannot open '{}': {}", huc_path.display(), e))?,
+                    );
+                    compiled.insert(hu_canon.clone(), Rc::clone(&c));
+                    c
                 }
             };
-
-            let conn = Connection::open_with_flags(
-                &db_path,
-                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-            )
-            .map_err(|e| format!("cannot open '{}': {}", db_path.display(), e))?;
 
             let (namespace, name_map) = match &import.target {
                 ImportTarget::Glob { alias } => {
@@ -162,8 +166,8 @@ impl ResolveContext {
                         .iter()
                         .map(|e| {
                             let local = e.alias.as_ref().unwrap_or(&e.name).node.clone();
-                            let db_name = e.name.node.clone();
-                            (local, db_name)
+                            let huc_name = e.name.node.clone();
+                            (local, huc_name)
                         })
                         .collect();
                     (None, Some(map))
@@ -187,7 +191,118 @@ impl ResolveContext {
         })
     }
 
-    /// Find the entry source and database-side name for the given reference.
+    /// Build a [`ResolveContext`] from a pre-compiled `.huc` file.
+    ///
+    /// Uses the `name_resolution` table inside the `.huc` to scope entry
+    /// lookups per `@reference` directive, without re-compiling `.hu` sources.
+    pub fn from_huc(
+        references: &[ast::Import],
+        hut_dir: &Path,
+        huc_path: &Path,
+    ) -> Result<Self, String> {
+        use sha2::{Digest, Sha256};
+
+        let conn = Rc::new(
+            Connection::open_with_flags(huc_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .map_err(|e| format!("cannot open '{}': {}", huc_path.display(), e))?,
+        );
+
+        // Read entry point directory from compile_meta.
+        let entry_point_dir: String = conn
+            .query_row(
+                "SELECT value FROM compile_meta WHERE key = 'entry_point_dir'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("cannot read entry_point_dir from .huc: {}", e))?;
+        let entry_point_dir = PathBuf::from(entry_point_dir);
+
+        let mut namespaced: HashMap<String, EntrySource> = HashMap::new();
+        let mut default_sources: Vec<EntrySource> = Vec::new();
+
+        for import in references {
+            let hu_rel = &import.path.node;
+            let hu_path = hut_dir.join(hu_rel);
+            // Compute relative path from the entry point directory.
+            let hu_canon = hu_path
+                .canonicalize()
+                .map_err(|e| format!("cannot resolve '{}': {}", hu_path.display(), e))?;
+            let rel_path = hu_canon
+                .strip_prefix(&entry_point_dir)
+                .unwrap_or(&hu_canon);
+            let file_hash = {
+                let mut hasher = Sha256::new();
+                hasher.update(rel_path.to_string_lossy().as_bytes());
+                format!("{:x}", hasher.finalize())
+            };
+
+            // Query name_resolution for all entries visible in this file's scope.
+            let scope_names: HashMap<String, String> = {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT nr.name, e.name FROM name_resolution nr \
+                         JOIN entries e ON nr.entry_id = e.id \
+                         WHERE nr.file_hash = ?1",
+                    )
+                    .map_err(|e| format!("query name_resolution failed: {}", e))?;
+                let rows = stmt
+                    .query_map([&file_hash], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    })
+                    .map_err(|e| format!("query name_resolution failed: {}", e))?;
+                let mut map = HashMap::new();
+                for row in rows {
+                    let (local_name, entry_name) =
+                        row.map_err(|e| format!("read name_resolution row: {}", e))?;
+                    map.insert(local_name, entry_name);
+                }
+                map
+            };
+
+            let (namespace, name_map) = match &import.target {
+                ImportTarget::Glob { alias } => {
+                    // For glob imports, the scope_names IS the name map.
+                    (alias.as_ref().map(|a| a.node.clone()), Some(scope_names))
+                }
+                ImportTarget::Named(entries) => {
+                    // For named imports, filter scope_names to only requested names.
+                    let mut map = HashMap::new();
+                    for entry in entries {
+                        let orig_name = &entry.name.node;
+                        let local = entry
+                            .alias
+                            .as_ref()
+                            .map(|a| a.node.clone())
+                            .unwrap_or_else(|| orig_name.clone());
+                        if let Some(huc_name) = scope_names.get(orig_name) {
+                            map.insert(local, huc_name.clone());
+                        }
+                    }
+                    (None, Some(map))
+                }
+            };
+
+            let source = EntrySource {
+                conn: Rc::clone(&conn),
+                name_map,
+            };
+            match namespace {
+                Some(ns) => {
+                    namespaced.insert(ns, source);
+                }
+                None => {
+                    default_sources.push(source);
+                }
+            }
+        }
+
+        Ok(ResolveContext {
+            namespaced,
+            default_sources,
+        })
+    }
+
+    /// Find the entry source and .huc-side name for the given reference.
     fn find_entry<'a>(
         &'a self,
         namespace: &[ast::Ident],
@@ -196,8 +311,8 @@ impl ResolveContext {
         if namespace.is_empty() {
             // Search un-namespaced sources in order
             for src in &self.default_sources {
-                if let Some(db_name) = src.resolve_name(local_name) {
-                    return Ok((src, db_name));
+                if let Some(huc_name) = src.resolve_name(local_name) {
+                    return Ok((src, huc_name));
                 }
             }
             Err(format!("entry '{}' not found in any @reference", local_name))
@@ -218,7 +333,7 @@ impl ResolveContext {
                 ));
             }
             match src.resolve_name(local_name) {
-                Some(db_name) => Ok((src, db_name)),
+                Some(huc_name) => Ok((src, huc_name)),
                 None => Err(format!("entry '{}' not found in namespace '{}'", local_name, ns)),
             }
         }
@@ -327,10 +442,10 @@ pub fn resolve(
     Ok(parts)
 }
 
-/// Read render config from the first available database in the context,
+/// Read render config from the first available `.huc` source in the context,
 /// falling back to defaults.
 pub fn read_render_config(ctx: &ResolveContext) -> (String, String) {
-    // Try namespaced DBs first, then default sources
+    // Try namespaced sources first, then default sources
     let all_conns = ctx
         .namespaced
         .values()

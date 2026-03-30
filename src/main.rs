@@ -4,7 +4,7 @@ use std::process;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[clap(name = "hubullu", about = "LexDSL compiler")]
+#[clap(name = "hubullu", about = "Hubullu compiler — .hu to .huc")]
 struct Cli {
     #[clap(subcommand)]
     command: Command,
@@ -12,19 +12,23 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Compile a .hu file to SQLite
+    /// Compile a .hu file to a .huc file
     Compile {
         /// Entry point .hu file
         input: PathBuf,
 
-        /// Output SQLite file
-        #[clap(short, long, default_value = "dictionary.sqlite")]
+        /// Output .huc file
+        #[clap(short, long, default_value = "dictionary.huc")]
         output: PathBuf,
     },
     /// Render a .hut token list
     Render {
         /// Input .hut file
         input: PathBuf,
+
+        /// Pre-compiled .huc file to use for resolution (skips .hu compilation)
+        #[clap(long)]
+        huc: Option<PathBuf>,
     },
     /// Start the Language Server Protocol server
     #[cfg(feature = "lsp")]
@@ -88,7 +92,7 @@ fn main() {
                 }
             }
         }
-        Command::Render { input } => {
+        Command::Render { input, huc } => {
             let source = match std::fs::read_to_string(&input) {
                 Ok(s) => s,
                 Err(e) => {
@@ -111,14 +115,28 @@ fn main() {
                 .and_then(|p| p.parent().map(|d| d.to_path_buf()))
                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
 
-            let ctx = match hubullu::render::ResolveContext::from_references(
-                &hut_file.references,
-                &hut_dir,
-            ) {
-                Ok(c) => c,
-                Err(msg) => {
-                    eprintln!("{}", msg);
-                    process::exit(1);
+            let ctx = if let Some(huc_path) = huc {
+                match hubullu::render::ResolveContext::from_huc(
+                    &hut_file.references,
+                    &hut_dir,
+                    &huc_path,
+                ) {
+                    Ok(c) => c,
+                    Err(msg) => {
+                        eprintln!("{}", msg);
+                        process::exit(1);
+                    }
+                }
+            } else {
+                match hubullu::render::ResolveContext::from_references(
+                    &hut_file.references,
+                    &hut_dir,
+                ) {
+                    Ok(c) => c,
+                    Err(msg) => {
+                        eprintln!("{}", msg);
+                        process::exit(1);
+                    }
                 }
             };
 
