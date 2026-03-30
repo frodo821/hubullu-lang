@@ -8,7 +8,7 @@ rust-version = "1.70"
 
 [features]
 default = ["sqlite", "cli"]
-sqlite = ["dep:rusqlite", "dep:sha2"]
+sqlite = ["dep:rusqlite", "dep:sha2", "serialization", "dep:serde_json"]
 cli = ["dep:clap", "sqlite", "lsp"]
 serialization = ["dep:serde"]
 lsp = ["dep:crossbeam-channel", "dep:lsp-server", "dep:lsp-types", "dep:serde_json", "dep:notify", "serialization"]

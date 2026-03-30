@@ -5,6 +5,7 @@
 //! each entry's paradigm, and checks for cyclic `derived_from` links.
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 use crate::ast::*;
 use crate::dag;
@@ -63,6 +64,7 @@ pub struct Phase2Result {
 #[derive(Debug, Clone)]
 pub struct ResolvedEntry {
     pub name: String,
+    pub source_file: PathBuf,
     pub headword: String,
     pub headword_scripts: HashMap<String, String>,
     pub tags: Vec<(String, String)>,
@@ -111,6 +113,42 @@ pub fn run_phase2(p1: &Phase1Result) -> Phase2Result {
     ctx.validate_inflections();
     ctx.collect_inflections();
     ctx.resolve_entries();
+    ctx.check_dag();
+
+    let render_config = ctx.collect_render_config();
+
+    Phase2Result {
+        axes: ctx.axes,
+        inflections: ctx.inflections,
+        entries: ctx.entries,
+        render_config,
+        diagnostics: ctx.diagnostics,
+    }
+}
+
+/// Run phase 2 with incremental entry resolution.
+///
+/// `files_to_resolve` specifies which files need fresh entry expansion.
+/// `cached_entries` provides pre-resolved entries from unchanged files.
+/// Schema validation (extends, inflections, phonrules) always runs fully.
+pub fn run_phase2_incremental(
+    p1: &Phase1Result,
+    files_to_resolve: &HashSet<FileId>,
+    cached_entries: Vec<ResolvedEntry>,
+) -> Phase2Result {
+    let mut ctx = Phase2Ctx {
+        p1,
+        axes: HashMap::new(),
+        inflections: Vec::new(),
+        entries: Vec::new(),
+        diagnostics: Diagnostics::new(),
+    };
+
+    ctx.resolve_extends();
+    ctx.validate_phonrules();
+    ctx.validate_inflections();
+    ctx.collect_inflections();
+    ctx.resolve_entries_selective(files_to_resolve, cached_entries);
     ctx.check_dag();
 
     let render_config = ctx.collect_render_config();
@@ -462,6 +500,35 @@ impl<'a> Phase2Ctx<'a> {
         }
     }
 
+    /// Resolve entries only from the specified files; use cached entries for the rest.
+    fn resolve_entries_selective(
+        &mut self,
+        files_to_resolve: &HashSet<FileId>,
+        cached: Vec<ResolvedEntry>,
+    ) {
+        self.entries = cached;
+
+        let entries: Vec<(FileId, Entry)> = self
+            .p1
+            .files
+            .iter()
+            .filter(|(&fid, _)| files_to_resolve.contains(&fid))
+            .flat_map(|(&fid, file)| {
+                file.items.iter().filter_map(move |item| {
+                    if let Item::Entry(e) = &item.node {
+                        Some((fid, e.clone()))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect();
+
+        for (file_id, entry) in entries {
+            self.resolve_entry(file_id, &entry);
+        }
+    }
+
     fn resolve_entry(&mut self, file_id: FileId, entry: &Entry) {
         let headword = match &entry.headword {
             Headword::Simple(s) => s.node.clone(),
@@ -670,6 +737,7 @@ impl<'a> Phase2Ctx<'a> {
 
         self.entries.push(ResolvedEntry {
             name: entry.name.node.clone(),
+            source_file: self.p1.source_map.path(file_id).to_path_buf(),
             headword,
             headword_scripts,
             tags,

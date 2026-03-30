@@ -10,6 +10,21 @@ fn fixture_path(name: &str) -> PathBuf {
         .join(name)
 }
 
+/// Create a temporary directory with .hu files for incremental tests.
+/// Returns (dir, entry_path, output_path).
+fn setup_incremental_fixture(
+    name: &str,
+    profile_hu: &str,
+    main_hu: &str,
+) -> (tempfile::TempDir, PathBuf, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("profile.hu"), profile_hu).unwrap();
+    std::fs::write(dir.path().join("main.hu"), main_hu).unwrap();
+    let entry = dir.path().join("main.hu");
+    let output = dir.path().join(format!("{}.huc", name));
+    (dir, entry, output)
+}
+
 #[test]
 fn test_simple_compile() {
     let input = fixture_path("simple/main.hu");
@@ -154,4 +169,183 @@ entry sein {
     assert_eq!(form_count, 2);
 
     let _ = std::fs::remove_file(&output);
+}
+
+// ---------------------------------------------------------------------------
+// Incremental compilation tests
+// ---------------------------------------------------------------------------
+
+const PROFILE_HU: &str = r#"
+tagaxis tense {
+  role: inflectional
+  display: { en: "Tense" }
+}
+
+tagaxis number {
+  role: inflectional
+  display: { en: "Number" }
+}
+
+@extend tense_vals for tagaxis tense {
+  present { display: { en: "Present" } }
+  past { display: { en: "Past" } }
+}
+
+@extend number_vals for tagaxis number {
+  sg { display: { en: "Singular" } }
+  pl { display: { en: "Plural" } }
+}
+
+inflection strong_I for {tense, number} {
+  requires stems: pres, past
+
+  [tense=present, number=sg] -> `{pres}s`
+  [tense=present, number=pl] -> `{pres}en`
+  [tense=past, number=sg] -> `{past}`
+  [tense=past, number=pl] -> `{past}en`
+}
+"#;
+
+const MAIN_HU: &str = r#"
+@use * from "profile.hu"
+
+entry faren {
+  headword: "faren"
+  tags: [tense=present]
+  stems { pres: "far", past: "for" }
+  inflection_class: strong_I
+  meaning: "to go"
+}
+"#;
+
+#[test]
+fn test_incremental_cache_created() {
+    let (_dir, entry, output) = setup_incremental_fixture("cache_created", PROFILE_HU, MAIN_HU);
+    let cache_path = {
+        let mut p = output.as_os_str().to_owned();
+        p.push(".cache");
+        PathBuf::from(p)
+    };
+
+    let _ = std::fs::remove_file(&output);
+    let _ = std::fs::remove_file(&cache_path);
+
+    hubullu::compile(&entry, &output).unwrap();
+    assert!(cache_path.exists(), "cache file should be created after first compile");
+}
+
+#[test]
+fn test_incremental_no_change() {
+    let (_dir, entry, output) = setup_incremental_fixture("no_change", PROFILE_HU, MAIN_HU);
+
+    // First compile
+    hubullu::compile(&entry, &output).unwrap();
+    let conn = Connection::open(&output).unwrap();
+    let count1: i64 = conn.query_row("SELECT COUNT(*) FROM forms", [], |r| r.get(0)).unwrap();
+    drop(conn);
+
+    // Second compile (no changes)
+    hubullu::compile(&entry, &output).unwrap();
+    let conn = Connection::open(&output).unwrap();
+    let count2: i64 = conn.query_row("SELECT COUNT(*) FROM forms", [], |r| r.get(0)).unwrap();
+
+    assert_eq!(count1, count2, "form count should be identical after incremental recompile");
+    assert_eq!(count1, 4, "expected 4 forms");
+}
+
+#[test]
+fn test_incremental_entry_change() {
+    let (dir, entry, output) = setup_incremental_fixture("entry_change", PROFILE_HU, MAIN_HU);
+
+    // First compile
+    hubullu::compile(&entry, &output).unwrap();
+    let conn = Connection::open(&output).unwrap();
+    let count1: i64 = conn.query_row("SELECT COUNT(*) FROM entries", [], |r| r.get(0)).unwrap();
+    drop(conn);
+    assert_eq!(count1, 1);
+
+    // Add a new entry to main.hu
+    let new_main = format!(
+        "{}\n{}",
+        MAIN_HU,
+        r#"
+entry hus {
+  headword: "hus"
+  tags: []
+  stems {}
+  meaning: "house"
+}
+"#
+    );
+    std::fs::write(dir.path().join("main.hu"), new_main).unwrap();
+
+    // Recompile (incremental — schema unchanged, only main.hu changed)
+    hubullu::compile(&entry, &output).unwrap();
+    let conn = Connection::open(&output).unwrap();
+    let count2: i64 = conn.query_row("SELECT COUNT(*) FROM entries", [], |r| r.get(0)).unwrap();
+    assert_eq!(count2, 2, "new entry should appear after incremental recompile");
+}
+
+#[test]
+fn test_incremental_schema_change_forces_full_rebuild() {
+    let (dir, entry, output) =
+        setup_incremental_fixture("schema_change", PROFILE_HU, MAIN_HU);
+
+    // First compile
+    hubullu::compile(&entry, &output).unwrap();
+
+    // Modify schema (change display text of an extend value)
+    let new_profile = PROFILE_HU.replace(
+        "sg { display: { en: \"Singular\" } }",
+        "sg { display: { en: \"Sing.\" } }",
+    );
+    std::fs::write(dir.path().join("profile.hu"), new_profile).unwrap();
+
+    // Recompile (should trigger full rebuild due to schema change)
+    hubullu::compile(&entry, &output).unwrap();
+    let conn = Connection::open(&output).unwrap();
+    // Still 2 tenses × 2 numbers = 4 forms, but verify rebuild happened
+    let form_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM forms WHERE entry_id = (SELECT id FROM entries WHERE name = 'faren')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(form_count, 4, "schema change should cause full rebuild");
+
+    // Verify the display text changed in metadata
+    let display: String = conn
+        .query_row(
+            "SELECT display_text FROM tagaxis_meta WHERE axis_name = 'number' AND value_name = 'sg'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(display, "Sing.", "metadata should reflect schema change");
+}
+
+#[test]
+fn test_incremental_cache_deleted() {
+    let (_dir, entry, output) = setup_incremental_fixture("cache_deleted", PROFILE_HU, MAIN_HU);
+    let cache_path = {
+        let mut p = output.as_os_str().to_owned();
+        p.push(".cache");
+        PathBuf::from(p)
+    };
+
+    // First compile
+    hubullu::compile(&entry, &output).unwrap();
+    assert!(cache_path.exists());
+
+    // Delete cache
+    std::fs::remove_file(&cache_path).unwrap();
+
+    // Recompile should succeed (falls back to full compile)
+    hubullu::compile(&entry, &output).unwrap();
+    assert!(cache_path.exists(), "cache should be recreated");
+
+    let conn = Connection::open(&output).unwrap();
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM forms", [], |r| r.get(0)).unwrap();
+    assert_eq!(count, 4);
 }
