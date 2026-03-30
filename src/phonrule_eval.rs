@@ -212,6 +212,13 @@ fn match_left_elem(
                 false
             }
         }
+        PhonContextElem::WordStart => {
+            *cursor == 0
+        }
+        PhonContextElem::WordEnd => {
+            // WordEnd in left context: not meaningful (word end is to the right)
+            false
+        }
         PhonContextElem::Class(name) => {
             if *cursor == 0 {
                 return false;
@@ -299,6 +306,13 @@ fn match_right_elem(
             } else {
                 false
             }
+        }
+        PhonContextElem::WordStart => {
+            // WordStart in right context: not meaningful (word start is to the left)
+            false
+        }
+        PhonContextElem::WordEnd => {
+            *cursor >= chars.len()
         }
         PhonContextElem::Class(name) => {
             if *cursor >= chars.len() || chars[*cursor] == BOUNDARY {
@@ -466,5 +480,96 @@ mod tests {
         assert_eq!(strip_boundaries("yol\0lar"), "yollar");
         assert_eq!(strip_boundaries("abc"), "abc");
         assert_eq!(strip_boundaries("\0a\0b\0"), "ab");
+    }
+
+    /// Helper: build a phonrule with a single rewrite rule for word-boundary tests.
+    fn make_word_boundary_rule(
+        from: PhonPattern,
+        to: PhonReplacement,
+        context: PhonContext,
+    ) -> PhonRule {
+        PhonRule {
+            name: make_ident("wb_test"),
+            classes: vec![
+                CharClassDef {
+                    name: make_ident("C"),
+                    body: CharClassBody::List(vec![
+                        make_string_lit("p"), make_string_lit("t"), make_string_lit("k"),
+                        make_string_lit("b"), make_string_lit("d"), make_string_lit("g"),
+                    ]),
+                },
+            ],
+            maps: vec![],
+            rules: vec![
+                PhonRewriteRule {
+                    from,
+                    to,
+                    context: Some(context),
+                    span: make_span(),
+                },
+            ],
+            span: make_span(),
+        }
+    }
+
+    #[test]
+    fn test_word_start_matches_beginning() {
+        // "k" -> "g" / ^ _   (voice word-initial k)
+        let rule = make_word_boundary_rule(
+            PhonPattern::Literal(make_string_lit("k")),
+            PhonReplacement::Literal(make_string_lit("g")),
+            PhonContext {
+                left: vec![PhonContextElem::WordStart],
+                right: vec![],
+            },
+        );
+        // Word-initial k should become g
+        assert_eq!(strip_boundaries(&apply_phonrule("kale", &rule)), "gale");
+        // k after morpheme boundary should NOT change (^ ≠ +)
+        let input = format!("a{}kale", BOUNDARY);
+        assert_eq!(strip_boundaries(&apply_phonrule(&input, &rule)), "akale");
+    }
+
+    #[test]
+    fn test_word_end_matches_end() {
+        // "b" -> "p" / _ $   (devoice word-final b)
+        let rule = make_word_boundary_rule(
+            PhonPattern::Literal(make_string_lit("b")),
+            PhonReplacement::Literal(make_string_lit("p")),
+            PhonContext {
+                left: vec![],
+                right: vec![PhonContextElem::WordEnd],
+            },
+        );
+        // Word-final b should become p
+        assert_eq!(strip_boundaries(&apply_phonrule("kitab", &rule)), "kitap");
+        // b before morpheme boundary should NOT change ($ ≠ +)
+        let input = format!("kitab{}a", BOUNDARY);
+        assert_eq!(strip_boundaries(&apply_phonrule(&input, &rule)), "kitaba");
+    }
+
+    #[test]
+    fn test_word_end_with_trailing_boundary() {
+        // "b" -> "p" / _ $   — input has trailing boundary marker
+        let rule = make_word_boundary_rule(
+            PhonPattern::Literal(make_string_lit("b")),
+            PhonReplacement::Literal(make_string_lit("p")),
+            PhonContext {
+                left: vec![],
+                right: vec![PhonContextElem::WordEnd],
+            },
+        );
+        // Even with a trailing \0, the string ends after it, so b\0 → b is NOT word-final
+        let input = format!("kitab{}", BOUNDARY);
+        assert_eq!(strip_boundaries(&apply_phonrule(&input, &rule)), "kitab");
+    }
+
+    #[test]
+    fn test_boundary_still_matches_word_edges() {
+        // Verify + still matches word start/end (existing behavior preserved)
+        let harmony = make_test_harmony();
+        // Single morpheme, no \0 — the + in context should still match at string start
+        let result = apply_phonrule("yollar", &harmony);
+        assert_eq!(strip_boundaries(&result), "yollar");
     }
 }

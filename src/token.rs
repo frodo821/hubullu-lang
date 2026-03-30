@@ -32,6 +32,8 @@ pub enum TokenKind {
     Bang,      // !
     Pipe,      // |
     Tilde,     // ~
+    Caret,     // ^
+    Dollar,    // $
 
     // @-prefixed directives
     AtUse,       // @use

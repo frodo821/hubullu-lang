@@ -396,7 +396,7 @@ impl<'a> Phase2Ctx<'a> {
             PhonContextElem::Repeat(inner) => {
                 self.validate_context_elem(pr, inner, class_names);
             }
-            PhonContextElem::Boundary | PhonContextElem::Literal(_) => {}
+            PhonContextElem::Boundary | PhonContextElem::WordStart | PhonContextElem::WordEnd | PhonContextElem::Literal(_) => {}
         }
     }
 

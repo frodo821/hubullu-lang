@@ -1073,6 +1073,14 @@ impl Parser {
                 self.advance();
                 return Ok(PhonContextElem::Boundary);
             }
+            TokenKind::Caret => {
+                self.advance();
+                return Ok(PhonContextElem::WordStart);
+            }
+            TokenKind::Dollar => {
+                self.advance();
+                return Ok(PhonContextElem::WordEnd);
+            }
             TokenKind::Bang => {
                 self.advance();
                 let id = self.expect_ident()?;

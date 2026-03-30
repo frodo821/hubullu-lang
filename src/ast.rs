@@ -284,6 +284,8 @@ pub enum PhonContextElem {
     Class(Ident),
     NegClass(Ident),
     Boundary,
+    WordStart,
+    WordEnd,
     Literal(StringLit),
     Repeat(Box<PhonContextElem>),
 }

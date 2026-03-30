@@ -99,12 +99,16 @@ This reads: "apply `to_back` to any vowel that is preceded (across morpheme boun
 | `class` | Matches a character in the class |
 | `!class` | Matches a character NOT in the class |
 | `"lit"` | Matches a literal string |
-| `+` | Matches a morpheme boundary |
+| `+` | Matches a morpheme boundary (also matches word start/end) |
+| `^` | Matches word start only |
+| `$` | Matches word end only |
 | `class*` | Matches zero or more characters in the class |
 | `!class*` | Matches zero or more characters NOT in the class |
 | `class+` | Matches one or more characters in the class (use `!` prefix for negation) |
 
 Context elements can appear on either side of `_`. Left context reads right-to-left from the match position; right context reads left-to-right.
+
+`^` is used in left context, `$` is used in right context. `+` matches morpheme boundaries (`\0`) as well as word edges, while `^` and `$` match only the true start/end of the word.
 
 ### Application Order
 

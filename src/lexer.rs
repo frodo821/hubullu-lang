@@ -179,6 +179,14 @@ impl<'a> Lexer<'a> {
                 self.advance();
                 Some(self.make_token(TokenKind::Tilde, start, self.pos))
             }
+            '^' => {
+                self.advance();
+                Some(self.make_token(TokenKind::Caret, start, self.pos))
+            }
+            '$' => {
+                self.advance();
+                Some(self.make_token(TokenKind::Dollar, start, self.pos))
+            }
             '-' => {
                 if self.peek_at(1) == Some('>') {
                     self.advance();
