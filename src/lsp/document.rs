@@ -79,4 +79,9 @@ impl DocumentStore {
     pub fn get(&self, uri: &Uri) -> Option<&DocumentState> {
         self.documents.get(uri.as_str())
     }
+
+    /// Returns URI strings of all open documents.
+    pub fn uri_strings(&self) -> Vec<String> {
+        self.documents.keys().cloned().collect()
+    }
 }

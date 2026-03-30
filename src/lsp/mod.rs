@@ -22,7 +22,7 @@ pub mod symbols;
 
 use std::path::PathBuf;
 
-use crossbeam_channel::{Receiver, bounded};
+use crossbeam_channel::{Receiver, bounded, never};
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
     CompletionOptions, InitializeParams, OneOf, SemanticTokensFullOptions,
@@ -43,6 +43,7 @@ use document::DocumentStore;
 // ---------------------------------------------------------------------------
 
 /// Returns a channel that receives a message when SIGINT is delivered.
+#[cfg(unix)]
 fn sigint_channel() -> Receiver<()> {
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -58,6 +59,42 @@ fn sigint_channel() -> Receiver<()> {
         sa.sa_handler = handler as *const () as usize;
         sa.sa_flags = 0x02; // SA_RESTART
         sigaction(2 /* SIGINT */, &sa, std::ptr::null_mut());
+    }
+
+    let (tx, rx) = bounded(1);
+    std::thread::spawn(move || {
+        loop {
+            if SIGINT_FIRED.load(Ordering::SeqCst) {
+                let _ = tx.send(());
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    });
+    rx
+}
+
+/// Returns a channel that receives a message when SIGINT (Ctrl+C) is delivered.
+#[cfg(windows)]
+fn sigint_channel() -> Receiver<()> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static SIGINT_FIRED: AtomicBool = AtomicBool::new(false);
+
+    extern "system" {
+        fn SetConsoleCtrlHandler(
+            handler: Option<extern "system" fn(u32) -> i32>,
+            add: i32,
+        ) -> i32;
+    }
+
+    extern "system" fn handler(_ctrl_type: u32) -> i32 {
+        SIGINT_FIRED.store(true, std::sync::atomic::Ordering::SeqCst);
+        1 // TRUE — signal handled
+    }
+
+    unsafe {
+        SetConsoleCtrlHandler(Some(handler), 1);
     }
 
     let (tx, rx) = bounded(1);
@@ -91,20 +128,47 @@ struct libc_sigaction {
     sa_mask: [std::os::raw::c_ulong; 2],
 }
 
+#[cfg(unix)]
 extern "C" {
     fn sigaction(sig: i32, act: *const libc_sigaction, oact: *mut libc_sigaction) -> i32;
-    fn getppid() -> i32;
-    fn kill(pid: i32, sig: i32) -> i32;
 }
 
-/// Returns a channel that receives a message when the parent process exits.
-fn parent_exit_channel() -> Receiver<()> {
+/// Returns a channel that fires when the LSP client process exits.
+///
+/// Uses `process_id` from `InitializeParams` (the LSP client PID).  Falls back
+/// to the OS parent PID on Unix when the client does not supply one.
+fn client_exit_channel(client_pid: Option<u32>) -> Receiver<()> {
+    let pid = match client_pid {
+        Some(p) if p > 0 => p,
+        _ => {
+            #[cfg(unix)]
+            {
+                extern "C" { fn getppid() -> i32; }
+                unsafe { getppid() as u32 }
+            }
+            #[cfg(windows)]
+            {
+                // No reliable fallback on Windows; return a channel that never
+                // fires.  In practice every LSP client sends process_id.
+                return never();
+            }
+        }
+    };
+
+    client_exit_channel_for_pid(pid)
+}
+
+#[cfg(unix)]
+fn client_exit_channel_for_pid(pid: u32) -> Receiver<()> {
+    extern "C" {
+        fn kill(pid: i32, sig: i32) -> i32;
+    }
+
     let (tx, rx) = bounded(1);
-    let parent_pid = unsafe { getppid() };
     std::thread::spawn(move || {
         loop {
             // kill(pid, 0) checks if the process exists without sending a signal.
-            let alive = unsafe { kill(parent_pid, 0) } == 0;
+            let alive = unsafe { kill(pid as i32, 0) } == 0;
             if !alive {
                 let _ = tx.send(());
                 return;
@@ -113,6 +177,102 @@ fn parent_exit_channel() -> Receiver<()> {
         }
     });
     rx
+}
+
+#[cfg(windows)]
+fn client_exit_channel_for_pid(pid: u32) -> Receiver<()> {
+    extern "system" {
+        fn OpenProcess(
+            desired_access: u32,
+            inherit_handles: i32,
+            process_id: u32,
+        ) -> *mut std::ffi::c_void;
+        fn WaitForSingleObject(handle: *mut std::ffi::c_void, millis: u32) -> u32;
+        fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
+    }
+
+    const SYNCHRONIZE: u32 = 0x0010_0000;
+    const WAIT_OBJECT_0: u32 = 0;
+
+    let (tx, rx) = bounded(1);
+    std::thread::spawn(move || {
+        let handle = unsafe { OpenProcess(SYNCHRONIZE, 0, pid) };
+        if handle.is_null() {
+            // Cannot open the process — assume it already exited.
+            let _ = tx.send(());
+            return;
+        }
+        // Block until the process exits (poll every 500 ms so the thread can
+        // be joined on server shutdown without waiting forever).
+        loop {
+            let result = unsafe { WaitForSingleObject(handle, 500) };
+            if result == WAIT_OBJECT_0 {
+                unsafe { CloseHandle(handle); }
+                let _ = tx.send(());
+                return;
+            }
+        }
+    });
+    rx
+}
+
+// ---------------------------------------------------------------------------
+// File watcher (notify crate – cross-platform: macOS / Linux / Windows)
+// ---------------------------------------------------------------------------
+
+/// Spawn a background file watcher on `root` that monitors `.hu` / `.hut` files.
+///
+/// Returns a [`Receiver`] that fires (at most once per debounce window) whenever
+/// a relevant file is created, modified, or removed.  The watcher itself is
+/// returned as well so that it is not dropped (which would stop watching).
+fn file_watcher_channel(
+    root: &std::path::Path,
+) -> Option<(Receiver<()>, notify::RecommendedWatcher)> {
+    use notify::{RecursiveMode, Watcher};
+
+    let (raw_tx, raw_rx) = crossbeam_channel::unbounded::<()>();
+
+    let mut watcher = notify::RecommendedWatcher::new(
+        move |res: Result<notify::Event, notify::Error>| {
+            if let Ok(event) = res {
+                let dominated = event.paths.iter().any(|p| {
+                    p.extension()
+                        .is_some_and(|e| e == "hu" || e == "hut")
+                });
+                if dominated {
+                    let _ = raw_tx.send(());
+                }
+            }
+        },
+        notify::Config::default(),
+    )
+    .ok()?;
+
+    watcher.watch(root, RecursiveMode::Recursive).ok()?;
+
+    // Debounce thread: collapses rapid-fire events into a single signal.
+    let (tx, rx) = bounded::<()>(1);
+    std::thread::spawn(move || {
+        let debounce = std::time::Duration::from_millis(300);
+        loop {
+            // Block until the first event arrives.
+            if raw_rx.recv().is_err() {
+                return;
+            }
+            // Drain subsequent events within the debounce window.
+            loop {
+                match raw_rx.recv_timeout(debounce) {
+                    Ok(()) => continue,
+                    Err(crossbeam_channel::RecvTimeoutError::Timeout) => break,
+                    Err(crossbeam_channel::RecvTimeoutError::Disconnected) => return,
+                }
+            }
+            // Emit one debounced signal (non-blocking so we never stall).
+            let _ = tx.try_send(());
+        }
+    });
+
+    Some((rx, watcher))
 }
 
 /// Display mode for entry references (inlay hints vs overlay vs off).
@@ -139,7 +299,6 @@ struct ProjectState {
 /// Run the LSP server on stdin/stdout.
 pub fn run_server() {
     let sigint = sigint_channel();
-    let parent_exit = parent_exit_channel();
 
     let (connection, io_threads) = Connection::stdio();
 
@@ -147,7 +306,19 @@ pub fn run_server() {
     let init_params = connection.initialize(server_caps).unwrap();
     let init_params: InitializeParams = serde_json::from_value(init_params).unwrap();
 
-    main_loop(&connection, init_params, &sigint, &parent_exit);
+    let parent_exit = client_exit_channel(init_params.process_id);
+
+    // Start file watcher if a workspace root is available.
+    let watcher_pair = workspace_root_from_init(&init_params)
+        .and_then(|root| file_watcher_channel(&root));
+    let file_changed: Receiver<()> = match watcher_pair {
+        Some((ref rx, _)) => rx.clone(),
+        None => never(),
+    };
+    // Keep the watcher alive for the lifetime of the server.
+    let _watcher = watcher_pair.map(|(_, w)| w);
+
+    main_loop(&connection, init_params, &sigint, &parent_exit, &file_changed);
 
     // Drop the connection to close the channels, allowing IO threads to
     // finish.
@@ -305,6 +476,7 @@ fn main_loop(
     init_params: InitializeParams,
     sigint: &Receiver<()>,
     parent_exit: &Receiver<()>,
+    file_changed: &Receiver<()>,
 ) {
     let mut state = ServerState {
         documents: DocumentStore::default(),
@@ -365,6 +537,33 @@ fn main_loop(
             }
             recv(parent_exit) -> _ => {
                 return;
+            }
+            recv(file_changed) -> _ => {
+                // A .hu / .hut file changed on disk — re-analyze and republish.
+                if let Some(root) = workspace_root(&state.init_params) {
+                    state.project = try_analyze_project(&root);
+                }
+                // Refresh hut projects for all open .hut documents.
+                for uri_str in state.documents.uri_strings() {
+                    if let Ok(uri) = uri_str.parse::<Uri>() {
+                        if is_hut_uri(&uri) {
+                            if let Some(doc) = state.documents.get(&uri) {
+                                let text = doc.text.clone();
+                                try_load_hut_project(&uri, &text, &mut state.hut_projects);
+                            }
+                        } else {
+                            state.refresh_file_project(&uri);
+                        }
+                    }
+                }
+                // Republish diagnostics for every open document.
+                for uri_str in state.documents.uri_strings() {
+                    if let Ok(uri) = uri_str.parse::<Uri>() {
+                        let project = state.project_for(&uri);
+                        let n = publish_doc_diagnostics(&uri, &state.documents, project);
+                        connection.sender.send(Message::Notification(n)).unwrap();
+                    }
+                }
             }
         }
     }
@@ -846,6 +1045,10 @@ fn publish_doc_diagnostics(
 }
 
 fn workspace_root(init_params: &InitializeParams) -> Option<PathBuf> {
+    workspace_root_from_init(init_params)
+}
+
+fn workspace_root_from_init(init_params: &InitializeParams) -> Option<PathBuf> {
     // Try workspace_folders first, fall back to deprecated root_uri.
     if let Some(ref folders) = init_params.workspace_folders {
         if let Some(folder) = folders.first() {
