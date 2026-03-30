@@ -459,7 +459,14 @@ fn classify_rule_rhs(rhs: &ast::RuleRhs, fid: FileId, map: &mut HashMap<(usize, 
             }
             for sm in &del.stem_mapping {
                 put(map, &sm.target_stem.span, fid, VARIABLE);
-                put(map, &sm.source_stem.span, fid, VARIABLE);
+                match &sm.source {
+                    ast::StemSource::Stem(ident) => {
+                        put(map, &ident.span, fid, VARIABLE);
+                    }
+                    ast::StemSource::Literal(lit) => {
+                        put(map, &lit.span, fid, STRING);
+                    }
+                }
             }
         }
         ast::RuleRhs::PhonApply { rule, inner } => {

@@ -418,8 +418,17 @@ pub enum DelegateTag {
 pub struct StemMapping {
     /// Stem name in the delegate target.
     pub target_stem: Ident,
-    /// Stem name in the caller.
-    pub source_stem: Ident,
+    /// Source: a stem reference or a literal string value.
+    pub source: StemSource,
+}
+
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StemSource {
+    /// Reference to a stem in the caller.
+    Stem(Ident),
+    /// Literal string value.
+    Literal(StringLit),
 }
 
 // ---------------------------------------------------------------------------

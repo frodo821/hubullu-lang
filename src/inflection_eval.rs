@@ -309,11 +309,18 @@ fn resolve_delegate(
     let mut delegate_stems = HashMap::new();
     let mut delegate_struct_stems = HashMap::new();
     for mapping in &deleg.stem_mapping {
-        if let Some(val) = stems.get(&mapping.source_stem.node) {
-            delegate_stems.insert(mapping.target_stem.node.clone(), val.clone());
-        }
-        if let Some(slot_map) = struct_stems.get(&mapping.source_stem.node) {
-            delegate_struct_stems.insert(mapping.target_stem.node.clone(), slot_map.clone());
+        match &mapping.source {
+            StemSource::Stem(source_ident) => {
+                if let Some(val) = stems.get(&source_ident.node) {
+                    delegate_stems.insert(mapping.target_stem.node.clone(), val.clone());
+                }
+                if let Some(slot_map) = struct_stems.get(&source_ident.node) {
+                    delegate_struct_stems.insert(mapping.target_stem.node.clone(), slot_map.clone());
+                }
+            }
+            StemSource::Literal(lit) => {
+                delegate_stems.insert(mapping.target_stem.node.clone(), lit.node.clone());
+            }
         }
     }
 

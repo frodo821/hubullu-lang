@@ -709,10 +709,14 @@ impl Parser {
             while !matches!(self.peek(), TokenKind::RBrace | TokenKind::Eof) {
                 let target_stem = self.expect_ident()?;
                 self.expect(&TokenKind::Colon)?;
-                let source_stem = self.expect_ident()?;
+                let source = if matches!(self.peek(), TokenKind::StringLit(_)) {
+                    StemSource::Literal(self.expect_string()?)
+                } else {
+                    StemSource::Stem(self.expect_ident()?)
+                };
                 mappings.push(StemMapping {
                     target_stem,
-                    source_stem,
+                    source,
                 });
                 if matches!(self.peek(), TokenKind::Comma) {
                     self.advance();

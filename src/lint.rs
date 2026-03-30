@@ -968,7 +968,9 @@ fn collect_rhs_template_stems(rhs: &RuleRhs, stems: &mut HashSet<String>) {
         RuleRhs::Delegate(d) => {
             // Stems passed via `with stems { target: source }` — source is used
             for mapping in &d.stem_mapping {
-                stems.insert(mapping.source_stem.node.clone());
+                if let StemSource::Stem(ident) = &mapping.source {
+                    stems.insert(ident.node.clone());
+                }
             }
         }
         RuleRhs::Null => {}

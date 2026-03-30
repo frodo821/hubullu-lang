@@ -308,7 +308,7 @@ Each tag argument is either:
 
 ### Stem Mapping
 
-`with stems { target_stem: source_stem }` maps the delegate's expected stem names to the caller's stems.
+`with stems { target_stem: source_stem }` maps the delegate's expected stem names to the caller's stems. The source can also be a literal string: `with stems { root: "fixed_value" }`.
 
 ### Example: Adjective Declension by Gender
 
