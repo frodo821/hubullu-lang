@@ -383,7 +383,11 @@ fn match_right_elem(
             *cursor >= chars.len()
         }
         PhonContextElem::Class(name) => {
-            if *cursor >= chars.len() || chars[*cursor] == BOUNDARY {
+            // Skip over boundary markers — boundaries are transparent in context matching
+            while *cursor < chars.len() && chars[*cursor] == BOUNDARY {
+                *cursor += 1;
+            }
+            if *cursor >= chars.len() {
                 return false;
             }
             let ch_str = chars[*cursor].to_string();
@@ -395,7 +399,10 @@ fn match_right_elem(
             }
         }
         PhonContextElem::NegClass(name) => {
-            if *cursor >= chars.len() || chars[*cursor] == BOUNDARY {
+            while *cursor < chars.len() && chars[*cursor] == BOUNDARY {
+                *cursor += 1;
+            }
+            if *cursor >= chars.len() {
                 return false;
             }
             let ch_str = chars[*cursor].to_string();
@@ -420,7 +427,11 @@ fn match_right_elem(
             let lit_chars: Vec<char> = lit.node.chars().collect();
             let mut c = *cursor;
             for lch in &lit_chars {
-                if c >= chars.len() || chars[c] == BOUNDARY || chars[c] != *lch {
+                // Skip over boundary markers
+                while c < chars.len() && chars[c] == BOUNDARY {
+                    c += 1;
+                }
+                if c >= chars.len() || chars[c] != *lch {
                     return false;
                 }
                 c += 1;
@@ -862,5 +873,86 @@ mod tests {
         // All following chars are C or V → devoice
         assert_eq!(strip_boundaries(&apply_phonrule("bat", &rule)), "pat");
         assert_eq!(strip_boundaries(&apply_phonrule("b", &rule)), "p");
+    }
+
+    #[test]
+    fn test_right_context_crosses_boundary() {
+        // Right context should see through slot boundaries.
+        // Rule: "k" -> "g" / _ V  (voice k before a vowel)
+        let rule = PhonRule {
+            name: make_ident("voicing"),
+            classes: vec![vowel_class()],
+            maps: vec![],
+            rules: vec![PhonRewriteRule {
+                from: PhonPattern::Literal(make_string_lit("k")),
+                to: PhonReplacement::Literal(make_string_lit("g")),
+                context: Some(PhonContext {
+                    left: vec![],
+                    right: vec![PhonContextElem::Class(make_ident("V"))],
+                }),
+                span: make_span(),
+            }],
+            span: make_span(),
+        };
+        // Without boundary: works normally
+        assert_eq!(strip_boundaries(&apply_phonrule("ka", &rule)), "ga");
+        // k before consonant: no change
+        assert_eq!(strip_boundaries(&apply_phonrule("kt", &rule)), "kt");
+        // k at boundary followed by vowel: should cross boundary
+        assert_eq!(strip_boundaries(&apply_phonrule("ak\0e", &rule)), "age");
+        // k at boundary followed by consonant: no change
+        assert_eq!(strip_boundaries(&apply_phonrule("ak\0t", &rule)), "akt");
+    }
+
+    #[test]
+    fn test_right_context_literal_crosses_boundary() {
+        // Literal right context should also cross boundaries.
+        // Rule: "b" -> "p" / _ "an"
+        let rule = PhonRule {
+            name: make_ident("lit_cross"),
+            classes: vec![],
+            maps: vec![],
+            rules: vec![PhonRewriteRule {
+                from: PhonPattern::Literal(make_string_lit("b")),
+                to: PhonReplacement::Literal(make_string_lit("p")),
+                context: Some(PhonContext {
+                    left: vec![],
+                    right: vec![PhonContextElem::Literal(make_string_lit("an"))],
+                }),
+                span: make_span(),
+            }],
+            span: make_span(),
+        };
+        // Without boundary
+        assert_eq!(strip_boundaries(&apply_phonrule("ban", &rule)), "pan");
+        // With boundary in the middle of literal match
+        assert_eq!(strip_boundaries(&apply_phonrule("b\0an", &rule)), "pan");
+        // No match
+        assert_eq!(strip_boundaries(&apply_phonrule("b\0ox", &rule)), "box");
+    }
+
+    #[test]
+    fn test_right_context_negclass_crosses_boundary() {
+        // NegClass right context should cross boundaries.
+        // Rule: "s" -> "z" / _ !V  (voice s before non-vowel)
+        let rule = PhonRule {
+            name: make_ident("neg_cross"),
+            classes: vec![vowel_class()],
+            maps: vec![],
+            rules: vec![PhonRewriteRule {
+                from: PhonPattern::Literal(make_string_lit("s")),
+                to: PhonReplacement::Literal(make_string_lit("z")),
+                context: Some(PhonContext {
+                    left: vec![],
+                    right: vec![PhonContextElem::NegClass(make_ident("V"))],
+                }),
+                span: make_span(),
+            }],
+            span: make_span(),
+        };
+        // s before consonant across boundary
+        assert_eq!(strip_boundaries(&apply_phonrule("s\0t", &rule)), "zt");
+        // s before vowel across boundary: no change
+        assert_eq!(strip_boundaries(&apply_phonrule("s\0a", &rule)), "sa");
     }
 }
