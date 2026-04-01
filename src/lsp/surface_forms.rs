@@ -108,7 +108,7 @@ fn collect_example_surface_forms(
                             parts.push(lit.node.clone());
                             tooltip_parts.push(lit.node.clone());
                         }
-                        ast::Token::Glue => {}
+                        ast::Token::Glue | ast::Token::Newline => {}
                         _ => {}
                     }
                 }

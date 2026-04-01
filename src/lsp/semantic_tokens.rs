@@ -117,7 +117,7 @@ pub fn generate(
                 TokenKind::Ident(_) => VARIABLE,
                 TokenKind::StringLit(_) | TokenKind::TemplateLit(_) => STRING,
                 TokenKind::Arrow | TokenKind::Plus | TokenKind::Star | TokenKind::Pipe
-                | TokenKind::Tilde | TokenKind::Eq | TokenKind::Bang | TokenKind::Slash => OPERATOR,
+                | TokenKind::Tilde | TokenKind::Eq | TokenKind::Bang | TokenKind::Slash | TokenKind::DoubleSlash => OPERATOR,
                 TokenKind::Eof => continue,
                 _ => continue,
             }
@@ -250,7 +250,7 @@ pub fn generate_hut(
                 STRING
             }
             TokenKind::Arrow | TokenKind::Plus | TokenKind::Star | TokenKind::Pipe
-            | TokenKind::Tilde | TokenKind::Eq | TokenKind::Bang | TokenKind::Slash => OPERATOR,
+            | TokenKind::Tilde | TokenKind::Eq | TokenKind::Bang | TokenKind::Slash | TokenKind::DoubleSlash => OPERATOR,
             TokenKind::Eof => continue,
             _ => continue,
         };

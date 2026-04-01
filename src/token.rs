@@ -28,7 +28,8 @@ pub enum TokenKind {
     Plus,      // +
     Underscore, // _ (standalone wildcard)
     Star,       // *
-    Slash,     // /
+    Slash,       // /
+    DoubleSlash, // //
     Bang,      // !
     Pipe,      // |
     Tilde,     // ~

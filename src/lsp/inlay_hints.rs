@@ -100,7 +100,7 @@ fn collect_example_hints(
                         ast::Token::Lit(lit) if lit.span.file_id == file_id => {
                             parts.push(lit.node.clone());
                         }
-                        ast::Token::Glue => {}
+                        ast::Token::Glue | ast::Token::Newline => {}
                         _ => {}
                     }
                 }

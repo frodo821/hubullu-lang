@@ -344,11 +344,12 @@ impl ResolveContext {
 // Resolution
 // ---------------------------------------------------------------------------
 
-/// A resolved piece: either a string part or a glue marker.
+/// A resolved piece: a string part, a glue marker, or a newline.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolvedPart {
     Text(String),
     Glue,
+    Newline,
 }
 
 /// Resolve a list of AST tokens using the [`ResolveContext`].
@@ -361,6 +362,9 @@ pub fn resolve(
         match token {
             ast::Token::Glue => {
                 parts.push(ResolvedPart::Glue);
+            }
+            ast::Token::Newline => {
+                parts.push(ResolvedPart::Newline);
             }
             ast::Token::Lit(s) => {
                 parts.push(ResolvedPart::Text(s.node.clone()));
@@ -480,13 +484,21 @@ pub fn read_render_config(ctx: &ResolveContext) -> (String, String) {
 pub fn smart_join(parts: &[ResolvedPart], separator: &str, no_sep_before: &str) -> String {
     let mut result = String::new();
     let mut glue_next = false;
+    let mut newline_next = false;
     for part in parts {
         match part {
             ResolvedPart::Glue => {
                 glue_next = true;
             }
+            ResolvedPart::Newline => {
+                newline_next = true;
+            }
             ResolvedPart::Text(text) => {
-                if !result.is_empty() && !separator.is_empty() && !glue_next {
+                if newline_next {
+                    result.push('\n');
+                    newline_next = false;
+                    glue_next = false;
+                } else if !result.is_empty() && !separator.is_empty() && !glue_next {
                     let first_char = text.chars().next();
                     let suppress = first_char
                         .map(|c| no_sep_before.contains(c))
@@ -542,6 +554,38 @@ mod tests {
             text("."),
         ];
         assert_eq!(smart_join(&parts, " ", ".,;:!?"), "malbona hundo.");
+    }
+
+    #[test]
+    fn test_smart_join_newline() {
+        // "hello" // "world" → "hello\nworld"
+        let parts = vec![
+            text("hello"),
+            ResolvedPart::Newline,
+            text("world"),
+        ];
+        assert_eq!(smart_join(&parts, " ", ".,;:!?"), "hello\nworld");
+    }
+
+    #[test]
+    fn test_smart_join_newline_no_extra_separator() {
+        // Newline should replace separator, not add one
+        let parts = vec![
+            text("line1"),
+            text("word"),
+            ResolvedPart::Newline,
+            text("line2"),
+        ];
+        assert_eq!(smart_join(&parts, " ", ".,;:!?"), "line1 word\nline2");
+    }
+
+    #[test]
+    fn test_parse_hut_newline() {
+        let hut = parse_hut(r#""hello" // "world""#, "test.hut").unwrap();
+        assert_eq!(hut.tokens.len(), 3);
+        assert!(matches!(hut.tokens[0], ast::Token::Lit(_)));
+        assert!(matches!(hut.tokens[1], ast::Token::Newline));
+        assert!(matches!(hut.tokens[2], ast::Token::Lit(_)));
     }
 
     #[test]

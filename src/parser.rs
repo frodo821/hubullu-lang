@@ -1445,6 +1445,10 @@ impl Parser {
                     self.advance();
                     tokens.push(crate::ast::Token::Glue);
                 }
+                TokenKind::DoubleSlash => {
+                    self.advance();
+                    tokens.push(crate::ast::Token::Newline);
+                }
                 _ => break,
             }
         }
@@ -1483,6 +1487,10 @@ impl Parser {
                 TokenKind::Tilde => {
                     self.advance();
                     tokens.push(crate::ast::Token::Glue);
+                }
+                TokenKind::DoubleSlash => {
+                    self.advance();
+                    tokens.push(crate::ast::Token::Newline);
                 }
                 _ => {
                     self.errors.push(self.error(format!(

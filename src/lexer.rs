@@ -165,7 +165,12 @@ impl<'a> Lexer<'a> {
             }
             '/' => {
                 self.advance();
-                Some(self.make_token(TokenKind::Slash, start, self.pos))
+                if self.peek() == Some('/') {
+                    self.advance();
+                    Some(self.make_token(TokenKind::DoubleSlash, start, self.pos))
+                } else {
+                    Some(self.make_token(TokenKind::Slash, start, self.pos))
+                }
             }
             '!' => {
                 self.advance();
@@ -623,6 +628,35 @@ mod tests {
             vec![
                 TokenKind::Ident("foo".into()),
                 TokenKind::Ident("bar".into()),
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_double_slash() {
+        let tokens = lex("foo // bar");
+        assert_eq!(
+            tokens,
+            vec![
+                TokenKind::Ident("foo".into()),
+                TokenKind::DoubleSlash,
+                TokenKind::Ident("bar".into()),
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_single_slash_still_works() {
+        // phonrule context separator: V -> to_back / context
+        let tokens = lex("V / ctx");
+        assert_eq!(
+            tokens,
+            vec![
+                TokenKind::Ident("V".into()),
+                TokenKind::Slash,
+                TokenKind::Ident("ctx".into()),
                 TokenKind::Eof,
             ]
         );

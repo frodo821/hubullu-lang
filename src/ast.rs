@@ -555,6 +555,8 @@ pub enum Token {
     Lit(StringLit),
     /// `~` — glue marker: suppresses separator between adjacent tokens.
     Glue,
+    /// `//` — newline marker: inserts a line break in rendered output.
+    Newline,
 }
 
 // ---------------------------------------------------------------------------
