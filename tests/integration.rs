@@ -208,14 +208,24 @@ entry faren {
 }
 "#;
 
+/// Derive the cache path matching the production logic in lib.rs.
+fn cache_path_for(output_path: &std::path::Path) -> PathBuf {
+    let dir = output_path
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join(".hubullu-cache");
+    let mut name = output_path
+        .file_name()
+        .unwrap_or_default()
+        .to_os_string();
+    name.push(".cache");
+    dir.join(name)
+}
+
 #[test]
 fn test_incremental_cache_created() {
     let (_dir, entry, output) = setup_incremental_fixture("cache_created", PROFILE_HU, MAIN_HU);
-    let cache_path = {
-        let mut p = output.as_os_str().to_owned();
-        p.push(".cache");
-        PathBuf::from(p)
-    };
+    let cache_path = cache_path_for(&output);
 
     let _ = std::fs::remove_file(&output);
     let _ = std::fs::remove_file(&cache_path);
@@ -318,11 +328,7 @@ fn test_incremental_schema_change_forces_full_rebuild() {
 #[test]
 fn test_incremental_cache_deleted() {
     let (_dir, entry, output) = setup_incremental_fixture("cache_deleted", PROFILE_HU, MAIN_HU);
-    let cache_path = {
-        let mut p = output.as_os_str().to_owned();
-        p.push(".cache");
-        PathBuf::from(p)
-    };
+    let cache_path = cache_path_for(&output);
 
     // First compile
     hubullu::compile(&entry, &output).unwrap();

@@ -237,10 +237,21 @@ pub fn compile(entry_path: &Path, output_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Derive the cache file path from the output path (e.g. `dict.huc` → `dict.huc.cache`).
+/// Derive the cache file path from the output path.
+///
+/// Places the cache in `.hubullu-cache/` next to the output file:
+/// e.g. `/path/to/dict.huc` → `/path/to/.hubullu-cache/dict.huc.cache`
 #[cfg(feature = "sqlite")]
 fn cache_path_for(output_path: &Path) -> std::path::PathBuf {
-    let mut p = output_path.as_os_str().to_owned();
-    p.push(".cache");
-    std::path::PathBuf::from(p)
+    let dir = output_path
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join(".hubullu-cache");
+    let _ = std::fs::create_dir_all(&dir);
+    let mut name = output_path
+        .file_name()
+        .unwrap_or_default()
+        .to_os_string();
+    name.push(".cache");
+    dir.join(name)
 }

@@ -74,7 +74,18 @@ pub fn compile_cached(hu_path: &Path) -> Result<PathBuf, String> {
         .canonicalize()
         .map_err(|e| format!("cannot resolve '{}': {}", hu_path.display(), e))?;
 
-    let cache_path = hu_path.with_extension("hu.cache.sqlite");
+    let cache_dir = hu_path
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join(".hubullu-cache");
+    let _ = std::fs::create_dir_all(&cache_dir);
+    let cache_path = cache_dir.join(
+        hu_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .replace(".hu", ".huc"),
+    );
 
     let needs_compile = if cache_path.exists() {
         let src_meta = std::fs::metadata(&hu_path)
