@@ -284,6 +284,15 @@ fn parse_single_element(
         _ => return None,
     };
 
+    // Try [$=stem_name] first.
+    if let Some((stem_name, end_pos, rbracket_end)) =
+        parse_stem_spec(tokens, pos + 1, file_id)
+    {
+        let resolved = phase2.entries.iter().find(|e| e.name == *entry_id)?;
+        let stem_value = resolved.stems.get(&stem_name)?.clone();
+        return Some((stem_value, end_pos, rbracket_end));
+    }
+
     if let Some((conditions, end_pos, rbracket_end)) =
         parse_bracket_conditions(tokens, pos + 1, file_id)
     {
@@ -358,6 +367,37 @@ pub fn collect_tilde_chain_parts(
     }
 
     (parts, end_offset, pos)
+}
+
+/// Parse `[$=stem_name]` from the token stream starting at `start`.
+/// Returns (stem_name, next_index_after_rbracket, rbracket_end_offset).
+fn parse_stem_spec(
+    tokens: &[Token],
+    start: usize,
+    file_id: FileId,
+) -> Option<(String, usize, usize)> {
+    // Expect: [ $ = ident ]
+    if start + 4 >= tokens.len() {
+        return None;
+    }
+    if !matches!(tokens[start].node, TokenKind::LBracket) {
+        return None;
+    }
+    if !matches!(tokens[start + 1].node, TokenKind::Dollar) {
+        return None;
+    }
+    if !matches!(tokens[start + 2].node, TokenKind::Eq) {
+        return None;
+    }
+    let stem_name = match &tokens[start + 3].node {
+        TokenKind::Ident(name) if tokens[start + 3].span.file_id == file_id => name.clone(),
+        _ => return None,
+    };
+    if !matches!(tokens[start + 4].node, TokenKind::RBracket) {
+        return None;
+    }
+    let rbracket_end = tokens[start + 4].span.end;
+    Some((stem_name, start + 5, rbracket_end))
 }
 
 /// Parse `[axis=value, axis=value, ...]` from the token stream starting at `start`.
