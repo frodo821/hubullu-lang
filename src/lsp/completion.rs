@@ -115,6 +115,9 @@ pub fn complete(
         Context::TagAxis(filter) => {
             if let Some(p1) = phase1 {
                 add_tag_axes(&mut items, scope_file_id, filter.as_deref(), p1);
+                if let Some(ref f) = filter {
+                    add_stem_specs(&mut items, scope_file_id, f, p1);
+                }
             }
         }
         Context::TagValue(axis_name) => {
@@ -721,10 +724,12 @@ fn add_tag_axes(
     let resolved_filter = filter.map(|f| resolve_axis_filter(f, scope_file_id, phase1));
     let allowed = resolved_filter.as_deref();
 
+    let mut found_any = false;
     if let Some(scope) = phase1.symbol_table.scope(scope_file_id) {
         for sym in scope.locals.values() {
             if sym.kind == SymbolKind::TagAxis {
                 if allowed.map_or(true, |a| a.iter().any(|n| n == &sym.name)) {
+                    found_any = true;
                     items.push(CompletionItem {
                         label: sym.name.clone(),
                         kind: Some(symbol_kind_to_completion(SymbolKind::TagAxis)),
@@ -738,11 +743,44 @@ fn add_tag_axes(
         for imp in scope.imports.iter().chain(scope.exports.iter()) {
             if imp.kind == SymbolKind::TagAxis {
                 if allowed.map_or(true, |a| a.iter().any(|n| n == &imp.local_name)) {
+                    found_any = true;
                     items.push(CompletionItem {
                         label: imp.local_name.clone(),
                         kind: Some(symbol_kind_to_completion(SymbolKind::TagAxis)),
                         detail: symbol_detail(imp.source_file, imp.item_index, phase1),
                         documentation: symbol_documentation(imp.source_file, imp.item_index, phase1),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+    }
+
+    // Fallback: if the scope doesn't have tagaxis symbols (e.g. .hut files where
+    // only entries are @referenced), search all files for tagaxis definitions
+    // matching the resolved axis names.
+    if !found_any {
+        if let Some(allowed) = allowed {
+            add_tag_axes_from_all_files(items, allowed, phase1);
+        }
+    }
+}
+
+/// Fallback: search all files for tagaxis definitions matching the given names.
+fn add_tag_axes_from_all_files(
+    items: &mut Vec<CompletionItem>,
+    allowed: &[String],
+    phase1: &Phase1Result,
+) {
+    for (&fid, file_ast) in &phase1.files {
+        for (idx, item_spanned) in file_ast.items.iter().enumerate() {
+            if let Item::TagAxis(t) = &item_spanned.node {
+                if allowed.iter().any(|n| n == &t.name.node) {
+                    items.push(CompletionItem {
+                        label: t.name.node.clone(),
+                        kind: Some(symbol_kind_to_completion(SymbolKind::TagAxis)),
+                        detail: symbol_detail(fid, idx, phase1),
+                        documentation: symbol_documentation(fid, idx, phase1),
                         ..Default::default()
                     });
                 }
@@ -1044,6 +1082,46 @@ fn add_extend_values(
                     }
                 }
             }
+        }
+    }
+}
+
+/// Add `$=stem_name` completion items for entries in the filter list.
+fn add_stem_specs(
+    items: &mut Vec<CompletionItem>,
+    scope_file_id: FileId,
+    filter: &[String],
+    phase1: &Phase1Result,
+) {
+    let scope = match phase1.symbol_table.scope(scope_file_id) {
+        Some(s) => s,
+        None => return,
+    };
+    for name in filter {
+        let results = scope.resolve(name);
+        let sym = match results.iter().find(|s| s.kind == SymbolKind::Entry) {
+            Some(s) => s,
+            None => continue,
+        };
+        let file_ast = match phase1.files.get(&sym.file_id) {
+            Some(f) => f,
+            None => continue,
+        };
+        let entry = match file_ast.items.get(sym.item_index) {
+            Some(item) => match &item.node {
+                Item::Entry(e) => e,
+                _ => continue,
+            },
+            None => continue,
+        };
+        for stem in &entry.stems {
+            items.push(CompletionItem {
+                label: format!("$={}", stem.name.node),
+                kind: Some(CompletionItemKind::SNIPPET),
+                detail: Some(format!("stem \"{}\"", stem.value.node)),
+                insert_text: Some(format!("$={}", stem.name.node)),
+                ..Default::default()
+            });
         }
     }
 }

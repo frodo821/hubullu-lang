@@ -779,6 +779,110 @@ entry cat {
     }
 
     #[test]
+    fn hut_stem_spec_completion() {
+        let hu_src = r#"
+tagaxis tense { role: inflectional }
+inflection verb_conj for { tense } {
+    requires stems: root
+    [tense=present] -> `{root}s`
+}
+entry gelmek {
+    headword: "gelmek"
+    stems { root: "gel", past: "geld" }
+    inflection_class: verb_conj
+    meaning: "to come"
+}
+"#;
+        let pr = parse(hu_src);
+        let mut p1 = single_file_phase1(&pr);
+
+        let hut_src = "gelmek[";
+        let hut_file_id = p1.source_map.add_file("/tmp/test.hut".into(), hut_src.to_string());
+        if let Some(hu_scope) = p1.symbol_table.scope(pr.file_id).cloned() {
+            p1.symbol_table.scopes.insert(hut_file_id, hu_scope);
+        }
+
+        let mut doc_source_map = hubullu::span::SourceMap::new();
+        let doc_file_id = doc_source_map.add_file("/tmp/test.hut".into(), hut_src.to_string());
+        let lexer = hubullu::lexer::Lexer::new(doc_source_map.source(doc_file_id), doc_file_id);
+        let (doc_tokens, _) = lexer.tokenize();
+
+        let resp = hubullu::lsp::completion::complete(
+            doc_file_id, hut_file_id, hut_src.len(), &doc_tokens, Some(&p1), true,
+        );
+        match resp {
+            lsp_types::CompletionResponse::List(list) => {
+                let labels: Vec<_> = list.items.iter().map(|i| i.label.as_str()).collect();
+                assert!(labels.contains(&"$=root"), "should suggest '$=root', got: {:?}", labels);
+                assert!(labels.contains(&"$=past"), "should suggest '$=past', got: {:?}", labels);
+                // Also check that normal axis completions are present
+                assert!(labels.contains(&"tense"), "should also suggest tagaxis 'tense', got: {:?}", labels);
+            }
+            lsp_types::CompletionResponse::Array(items) => {
+                let labels: Vec<_> = items.iter().map(|i| i.label.as_str()).collect();
+                assert!(labels.contains(&"$=root"), "should suggest '$=root', got: {:?}", labels);
+            }
+        }
+    }
+
+    /// In .hut files, the scope only has entries (via @reference), not tagaxes.
+    /// Completion should still resolve axes via the entry's inflection class.
+    #[test]
+    fn hut_tagaxis_completion_entry_only_scope() {
+        let hu_src = r#"
+tagaxis tense { role: inflectional }
+inflection verb_conj for { tense } {
+    requires stems: root
+    [tense=present] -> `{root}s`
+}
+entry gelmek {
+    headword: "gelmek"
+    stems { root: "gel" }
+    inflection_class: verb_conj
+    meaning: "to come"
+}
+"#;
+        let pr = parse(hu_src);
+        let mut p1 = single_file_phase1(&pr);
+
+        let hut_src = "gelmek[";
+        let hut_file_id = p1.source_map.add_file("/tmp/test.hut".into(), hut_src.to_string());
+
+        // Simulate .hut scope: only entries, no tagaxes or inflections
+        let mut entry_only_scope = hubullu::symbol_table::Scope::default();
+        if let Some(hu_scope) = p1.symbol_table.scope(pr.file_id) {
+            for sym in hu_scope.locals.values() {
+                if sym.kind == hubullu::symbol_table::SymbolKind::Entry {
+                    entry_only_scope.locals.insert(sym.name.clone(), sym.clone());
+                }
+            }
+        }
+        p1.symbol_table.scopes.insert(hut_file_id, entry_only_scope);
+
+        let mut doc_source_map = hubullu::span::SourceMap::new();
+        let doc_file_id = doc_source_map.add_file("/tmp/test.hut".into(), hut_src.to_string());
+        let lexer = hubullu::lexer::Lexer::new(doc_source_map.source(doc_file_id), doc_file_id);
+        let (doc_tokens, _) = lexer.tokenize();
+
+        let resp = hubullu::lsp::completion::complete(
+            doc_file_id, hut_file_id, hut_src.len(), &doc_tokens, Some(&p1), true,
+        );
+        match resp {
+            lsp_types::CompletionResponse::List(list) => {
+                let labels: Vec<_> = list.items.iter().map(|i| i.label.as_str()).collect();
+                assert!(labels.contains(&"tense"),
+                    "should suggest 'tense' even with entry-only scope (fallback), got: {:?}", labels);
+                assert!(labels.contains(&"$=root"),
+                    "should suggest '$=root', got: {:?}", labels);
+            }
+            lsp_types::CompletionResponse::Array(items) => {
+                let labels: Vec<_> = items.iter().map(|i| i.label.as_str()).collect();
+                assert!(labels.contains(&"tense"), "got: {:?}", labels);
+            }
+        }
+    }
+
+    #[test]
     fn completion_inside_entry_body() {
         let src = "entry foo {\n  \n}";
         let pr = parse(src);
