@@ -161,6 +161,60 @@ mod formatting {
         // Should have edits for "stems {" (indent 1) and "pres:" (indent 2)
         assert!(edits.len() >= 2);
     }
+
+    /// Apply TextEdits to a string (handles non-overlapping edits).
+    fn apply_edits(input: &str, edits: &[lsp_types::TextEdit]) -> String {
+        let lines: Vec<&str> = input.lines().collect();
+        // Convert edits to byte-offset replacements, then apply in reverse order.
+        let mut byte_edits: Vec<(usize, usize, &str)> = Vec::new();
+        for e in edits {
+            let start = lines.iter().take(e.range.start.line as usize).map(|l| l.len() + 1).sum::<usize>()
+                + e.range.start.character as usize;
+            let end = lines.iter().take(e.range.end.line as usize).map(|l| l.len() + 1).sum::<usize>()
+                + e.range.end.character as usize;
+            byte_edits.push((start, end, &e.new_text));
+        }
+        byte_edits.sort_by(|a, b| b.0.cmp(&a.0));
+        let mut result = input.to_string();
+        for (start, end, replacement) in byte_edits {
+            result.replace_range(start..end, replacement);
+        }
+        result
+    }
+
+    #[test]
+    fn sorts_imports() {
+        let input = "@use z from \"z.hu\"\n@use a from \"a.hu\"\n@use m from \"m.hu\"\n";
+        let edits = hubullu::lsp::formatting::format_document(input);
+        let result = apply_edits(input, &edits);
+        assert_eq!(result, "@use a from \"a.hu\"\n@use m from \"m.hu\"\n@use z from \"z.hu\"\n");
+    }
+
+    #[test]
+    fn sorted_imports_no_edits() {
+        let input = "@use a from \"a.hu\"\n@use b from \"b.hu\"\n";
+        let edits = hubullu::lsp::formatting::format_document(input);
+        // Already sorted and at top level — no edits expected.
+        assert!(edits.is_empty());
+    }
+
+    #[test]
+    fn sorts_imports_preserves_non_import_lines() {
+        let input = "@use z from \"z.hu\"\n@use a from \"a.hu\"\n\nentry foo {\n    headword: \"foo\"\n}\n";
+        let edits = hubullu::lsp::formatting::format_document(input);
+        let result = apply_edits(input, &edits);
+        assert!(result.starts_with("@use a from \"a.hu\"\n@use z from \"z.hu\"\n"));
+        assert!(result.contains("entry foo {"));
+    }
+
+    #[test]
+    fn sorts_reference_with_use() {
+        let input = "@use z from \"z.hu\"\n@reference a from \"a.hu\"\n@use b from \"b.hu\"\n";
+        let edits = hubullu::lsp::formatting::format_document(input);
+        let result = apply_edits(input, &edits);
+        // @reference sorts before @use alphabetically
+        assert_eq!(result, "@reference a from \"a.hu\"\n@use b from \"b.hu\"\n@use z from \"z.hu\"\n");
+    }
 }
 
 // ===========================================================================
