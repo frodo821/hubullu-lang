@@ -492,12 +492,12 @@ pub fn smart_join(parts: &[ResolvedPart], separator: &str, no_sep_before: &str) 
             }
             ResolvedPart::Newline => {
                 newline_next = true;
+                glue_next = false;
             }
             ResolvedPart::Text(text) => {
                 if newline_next {
                     result.push('\n');
                     newline_next = false;
-                    glue_next = false;
                 } else if !result.is_empty() && !separator.is_empty() && !glue_next {
                     let first_char = text.chars().next();
                     let suppress = first_char
