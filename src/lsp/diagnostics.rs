@@ -2,7 +2,7 @@
 
 use lsp_server::Notification;
 use lsp_types::{
-    DiagnosticRelatedInformation, Location, PublishDiagnosticsParams, Uri,
+    DiagnosticRelatedInformation, Location, NumberOrString, PublishDiagnosticsParams, Uri,
 };
 
 use crate::error::Diagnostic;
@@ -18,7 +18,7 @@ pub fn publish_notification(
 ) -> Notification {
     let lsp_diags = diagnostics
         .iter()
-        .map(|d| convert_diagnostic(d, url, source_map))
+        .map(|d| convert_diagnostic(d, None, url, source_map))
         .collect();
 
     Notification::new(
@@ -41,18 +41,24 @@ pub fn publish_combined_notification(
     parse_diags: &[&Diagnostic],
     parse_source_map: &SourceMap,
     proj_diags: &[&Diagnostic],
+    lint_diags: &[&crate::lint::LintDiagnostic],
     proj_source_map: Option<&SourceMap>,
 ) -> Notification {
     let mut lsp_diags: Vec<lsp_types::Diagnostic> = parse_diags
         .iter()
-        .map(|d| convert_diagnostic(d, url, parse_source_map))
+        .map(|d| convert_diagnostic(d, None, url, parse_source_map))
         .collect();
 
     if let Some(psm) = proj_source_map {
         lsp_diags.extend(
             proj_diags
                 .iter()
-                .map(|d| convert_diagnostic(d, url, psm)),
+                .map(|d| convert_diagnostic(d, None, url, psm)),
+        );
+        lsp_diags.extend(
+            lint_diags
+                .iter()
+                .map(|ld| convert_diagnostic(&ld.diagnostic, Some(ld.rule), url, psm)),
         );
     }
 
@@ -80,6 +86,7 @@ pub fn clear_notification(url: &Uri) -> Notification {
 
 fn convert_diagnostic(
     diag: &Diagnostic,
+    code: Option<&str>,
     doc_url: &Uri,
     source_map: &SourceMap,
 ) -> lsp_types::Diagnostic {
@@ -115,11 +122,22 @@ fn convert_diagnostic(
     lsp_types::Diagnostic {
         range,
         severity: Some(convert::severity_to_lsp(diag.severity)),
+        code: code.map(|c| NumberOrString::String(c.to_string())),
         source: Some("hubullu".into()),
         message: diag.message.clone(),
         related_information: related,
         ..Default::default()
     }
+}
+
+/// Convert a `LintDiagnostic` to an `lsp_types::Diagnostic`, including the rule
+/// name as the diagnostic code.
+pub fn lint_to_lsp_diagnostic(
+    ld: &crate::lint::LintDiagnostic,
+    doc_url: &Uri,
+    source_map: &SourceMap,
+) -> lsp_types::Diagnostic {
+    convert_diagnostic(&ld.diagnostic, Some(ld.rule), doc_url, source_map)
 }
 
 fn file_id_to_uri(

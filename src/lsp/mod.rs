@@ -3,6 +3,7 @@
 //! Provides diagnostics, semantic tokens, go-to-definition, hover, and completion
 //! for `.hu` files.
 
+pub mod code_action;
 pub mod completion;
 pub mod convert;
 pub mod definition;
@@ -364,6 +365,7 @@ fn server_capabilities() -> ServerCapabilities {
         folding_range_provider: Some(lsp_types::FoldingRangeProviderCapability::Simple(true)),
         document_highlight_provider: Some(OneOf::Left(true)),
         inlay_hint_provider: Some(OneOf::Left(true)),
+        code_action_provider: Some(lsp_types::CodeActionProviderCapability::Simple(true)),
         document_formatting_provider: Some(OneOf::Left(true)),
         rename_provider: Some(OneOf::Right(lsp_types::RenameOptions {
             prepare_provider: Some(true),
@@ -518,7 +520,27 @@ fn main_loop(
                                 connection.sender.send(Message::Notification(n)).unwrap();
                             }
                         } else {
-                            let resp = handle_request(req, &state);
+                            let req_id = req.id.clone();
+                            let resp = match std::panic::catch_unwind(
+                                std::panic::AssertUnwindSafe(|| handle_request(req, &state)),
+                            ) {
+                                Ok(r) => r,
+                                Err(e) => {
+                                    let msg = match e.downcast_ref::<&str>() {
+                                        Some(s) => s.to_string(),
+                                        None => match e.downcast_ref::<String>() {
+                                            Some(s) => s.clone(),
+                                            None => "internal error".to_string(),
+                                        },
+                                    };
+                                    eprintln!("handler panicked: {}", msg);
+                                    Response::new_err(
+                                        req_id,
+                                        -32603,
+                                        format!("internal error: {}", msg),
+                                    )
+                                }
+                            };
                             connection.sender.send(Message::Response(resp)).unwrap();
                         }
                     }
@@ -526,9 +548,24 @@ fn main_loop(
                         if notif.method == "exit" {
                             return;
                         }
-                        let notifications = handle_notification(notif, &mut state);
-                        for n in notifications {
-                            connection.sender.send(Message::Notification(n)).unwrap();
+                        match std::panic::catch_unwind(
+                            std::panic::AssertUnwindSafe(|| handle_notification(notif, &mut state)),
+                        ) {
+                            Ok(notifications) => {
+                                for n in notifications {
+                                    connection.sender.send(Message::Notification(n)).unwrap();
+                                }
+                            }
+                            Err(e) => {
+                                let msg = match e.downcast_ref::<&str>() {
+                                    Some(s) => s.to_string(),
+                                    None => match e.downcast_ref::<String>() {
+                                        Some(s) => s.clone(),
+                                        None => "internal error".to_string(),
+                                    },
+                                };
+                                eprintln!("notification handler panicked: {}", msg);
+                            }
                         }
                     }
                     Message::Response(_) => {}
@@ -586,6 +623,7 @@ fn handle_request(req: Request, state: &ServerState) -> Response {
         "textDocument/foldingRange" => handle_folding_range(id, req, state),
         "textDocument/documentHighlight" => handle_document_highlight(id, req, state),
         "textDocument/inlayHint" => handle_inlay_hint(id, req, state),
+        "textDocument/codeAction" => handle_code_action(id, req, state),
         "textDocument/formatting" => handle_formatting(id, req, state),
         "textDocument/prepareRename" => handle_prepare_rename(id, req, state),
         "textDocument/rename" => handle_rename(id, req, state),
@@ -872,6 +910,24 @@ fn handle_inlay_hint(id: RequestId, req: Request, s: &ServerState) -> Response {
     Response::new_ok(id, serde_json::to_value(result).unwrap())
 }
 
+fn handle_code_action(id: RequestId, req: Request, s: &ServerState) -> Response {
+    let params: lsp_types::CodeActionParams = serde_json::from_value(req.params).unwrap();
+    let uri = &params.text_document.uri;
+    let result: Option<Vec<lsp_types::CodeActionOrCommand>> = (|| {
+        let proj = s.project_for(uri)?;
+        let &fid = proj.url_to_file_id.get(uri.as_str())?;
+        let actions = code_action::code_actions(
+            uri,
+            &params.range,
+            fid,
+            &proj.lint_diagnostics,
+            &proj.phase1.source_map,
+        );
+        if actions.is_empty() { None } else { Some(actions) }
+    })();
+    Response::new_ok(id, serde_json::to_value(result).unwrap())
+}
+
 fn handle_formatting(id: RequestId, req: Request, s: &ServerState) -> Response {
     let params: lsp_types::DocumentFormattingParams = serde_json::from_value(req.params).unwrap();
     let uri = &params.text_document.uri;
@@ -1010,6 +1066,7 @@ fn publish_doc_diagnostics(
 
     // Project-level diagnostics (phase1 + lint) use the project source_map.
     let mut proj_diags: Vec<&crate::error::Diagnostic> = Vec::new();
+    let mut lint_diags: Vec<&crate::lint::LintDiagnostic> = Vec::new();
     let proj_source_map;
 
     if let Some(proj) = project {
@@ -1024,13 +1081,12 @@ fn publish_doc_diagnostics(
             proj_diags.extend(p1_diags);
 
             // Include lint diagnostics for this file.
-            let lint_diags: Vec<_> = proj
+            let file_lint_diags: Vec<_> = proj
                 .lint_diagnostics
                 .iter()
                 .filter(|ld| ld.diagnostic.labels.first().is_some_and(|l| l.span.file_id == fid))
-                .map(|ld| &ld.diagnostic)
                 .collect();
-            proj_diags.extend(lint_diags);
+            lint_diags.extend(file_lint_diags);
         }
         proj_source_map = Some(&proj.phase1.source_map);
     } else {
@@ -1042,6 +1098,7 @@ fn publish_doc_diagnostics(
         &parse_diags,
         &doc.parse_result.source_map,
         &proj_diags,
+        &lint_diags,
         proj_source_map,
     )
 }
@@ -1229,6 +1286,18 @@ fn try_load_hut_project(
     if let Some(&virtual_fid) = proj.phase1.path_to_id.get(&virtual_path) {
         if let Some(virtual_scope) = proj.phase1.symbol_table.scope(virtual_fid).cloned() {
             proj.phase1.symbol_table.scopes.insert(hut_file_id, virtual_scope);
+        }
+    }
+
+    // Rewrite diagnostic labels that point to the virtual entry file so they
+    // are associated with the .hut file and shown to the user.
+    if let Some(&virtual_fid) = proj.phase1.path_to_id.get(&virtual_path) {
+        for diag in &mut proj.phase1.diagnostics.errors {
+            for label in &mut diag.labels {
+                if label.span.file_id == virtual_fid {
+                    label.span.file_id = hut_file_id;
+                }
+            }
         }
     }
 
