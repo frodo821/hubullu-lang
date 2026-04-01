@@ -74,10 +74,19 @@ const ENTIRE_FILE_KEY: usize = 0;
 
 /// Parse `# @suppress next-line: rule1, rule2` and
 /// `# @suppress entire-file: rule1, rule2` comments from source text.
+///
+/// `entire-file` is only recognized in the file header — the contiguous block
+/// of blank lines and comment lines before the first non-comment content.
 fn parse_suppressions(source: &str) -> Suppressions {
     let mut suppressions = Suppressions::new();
+    let mut header_ended = false;
     for (line_idx, line) in source.lines().enumerate() {
         let trimmed = line.trim();
+
+        if !header_ended && !trimmed.is_empty() && !trimmed.starts_with('#') {
+            header_ended = true;
+        }
+
         // Strip leading '#' characters
         let rest = match trimmed.strip_prefix('#') {
             Some(r) => r.trim_start_matches('#').trim_start(),
@@ -94,6 +103,9 @@ fn parse_suppressions(source: &str) -> Suppressions {
             target_line = line_idx + 2;
             r.trim_start()
         } else if let Some(r) = rest.strip_prefix("entire-file") {
+            if header_ended {
+                continue; // entire-file only valid in file header
+            }
             target_line = ENTIRE_FILE_KEY;
             r.trim_start()
         } else {

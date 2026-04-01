@@ -897,8 +897,8 @@ fn test_suppress_entire_file_does_not_affect_other_rules() {
 }
 
 #[test]
-fn test_suppress_entire_file_anywhere_in_file() {
-    // The entire-file comment doesn't have to be at the top
+fn test_suppress_entire_file_after_content_no_effect() {
+    // entire-file after non-comment content should be ignored
     let src = format!(r#"
         {}
         inflection verb for {{tense}} {{
@@ -910,5 +910,5 @@ fn test_suppress_entire_file_anywhere_in_file() {
     "#, TENSE_PREAMBLE);
     let result = lint_source(&src);
     assert_no_compile_errors(&result);
-    assert!(!has_rule(&result, "unused-inflection"));
+    assert!(has_rule(&result, "unused-inflection"));
 }
