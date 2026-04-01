@@ -59,7 +59,9 @@ pub fn run_phase1_virtual(
         let import_path = base_dir.join(&import.path.node);
         if !ctx.reference_visited.contains(&import_path) {
             ctx.reference_visited.insert(import_path.clone());
-            let dep_id = ctx.load_file_recursive(&import_path, false);
+            let dep_id = ctx.load_file_recursive_with_span(
+                &import_path, false, import.path.span,
+            );
             if let Some(dep_id) = dep_id {
                 ctx.register_imports(file_id, dep_id, &import.target, false);
             }
@@ -115,7 +117,29 @@ struct Phase1Ctx {
 }
 
 impl Phase1Ctx {
-    fn load_file_recursive(&mut self, path: &Path, is_use: bool) -> Option<FileId> {
+    fn load_file_recursive(
+        &mut self,
+        path: &Path,
+        is_use: bool,
+    ) -> Option<FileId> {
+        self.load_file_recursive_inner(path, is_use, None)
+    }
+
+    fn load_file_recursive_with_span(
+        &mut self,
+        path: &Path,
+        is_use: bool,
+        import_span: crate::ast::Span,
+    ) -> Option<FileId> {
+        self.load_file_recursive_inner(path, is_use, Some(import_span))
+    }
+
+    fn load_file_recursive_inner(
+        &mut self,
+        path: &Path,
+        is_use: bool,
+        import_span: Option<crate::ast::Span>,
+    ) -> Option<FileId> {
         let path = path
             .canonicalize()
             .unwrap_or_else(|_| path.to_path_buf());
@@ -123,32 +147,36 @@ impl Phase1Ctx {
         // Check if already loaded
         if let Some(&id) = self.path_to_id.get(&path) {
             if is_use && self.use_stack.contains(&path) {
-                self.diagnostics.add(
-                    Diagnostic::error(format!(
-                        "circular @use detected: {}",
-                        self.use_stack
-                            .iter()
-                            .map(|p| p.display().to_string())
-                            .collect::<Vec<_>>()
-                            .join(" -> ")
-                    )),
-                );
-                return None;
-            }
-            return Some(id);
-        }
-
-        if is_use && self.use_stack.contains(&path) {
-            self.diagnostics.add(
-                Diagnostic::error(format!(
+                let mut diag = Diagnostic::error(format!(
                     "circular @use detected: {}",
                     self.use_stack
                         .iter()
                         .map(|p| p.display().to_string())
                         .collect::<Vec<_>>()
                         .join(" -> ")
-                )),
-            );
+                ));
+                if let Some(span) = import_span {
+                    diag = diag.with_label(span, "imported here");
+                }
+                self.diagnostics.add(diag);
+                return None;
+            }
+            return Some(id);
+        }
+
+        if is_use && self.use_stack.contains(&path) {
+            let mut diag = Diagnostic::error(format!(
+                "circular @use detected: {}",
+                self.use_stack
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(" -> ")
+            ));
+            if let Some(span) = import_span {
+                diag = diag.with_label(span, "imported here");
+            }
+            self.diagnostics.add(diag);
             return None;
         }
 
@@ -156,9 +184,13 @@ impl Phase1Ctx {
         let source = match std::fs::read_to_string(&path) {
             Ok(s) => s,
             Err(e) => {
-                self.diagnostics.add(
-                    Diagnostic::error(format!("cannot read file '{}': {}", path.display(), e)),
+                let mut diag = Diagnostic::error(
+                    format!("cannot read file '{}': {}", path.display(), e),
                 );
+                if let Some(span) = import_span {
+                    diag = diag.with_label(span, "referenced here");
+                }
+                self.diagnostics.add(diag);
                 return None;
             }
         };
@@ -228,11 +260,11 @@ impl Phase1Ctx {
         for (is_use_import, import) in imports {
             let import_path = base_dir.join(&import.path.node);
             let dep_id = if is_use_import {
-                self.load_file_recursive(&import_path, true)
+                self.load_file_recursive_with_span(&import_path, true, import.path.span)
             } else {
                 if !self.reference_visited.contains(&import_path) {
                     self.reference_visited.insert(import_path.clone());
-                    self.load_file_recursive(&import_path, false)
+                    self.load_file_recursive_with_span(&import_path, false, import.path.span)
                 } else {
                     self.path_to_id.get(&import_path).copied()
                 }
@@ -379,11 +411,11 @@ impl Phase1Ctx {
             // Form 2: combined import + re-export from file
             let export_path = base_dir.join(&path_lit.node);
             let dep_id = if export.is_use {
-                self.load_file_recursive(&export_path, true)
+                self.load_file_recursive_with_span(&export_path, true, path_lit.span)
             } else {
                 if !self.reference_visited.contains(&export_path) {
                     self.reference_visited.insert(export_path.clone());
-                    self.load_file_recursive(&export_path, false)
+                    self.load_file_recursive_with_span(&export_path, false, path_lit.span)
                 } else {
                     self.path_to_id.get(&export_path).copied()
                 }
