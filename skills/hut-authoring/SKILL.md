@@ -54,9 +54,18 @@ cat                                      # Headword (dictionary form)
 cat[]                                    # Same as above
 cat[number=pl]                           # Specific inflected form
 walk[tense=present, person=3, number=sg] # Multiple tag conditions
+gelmek[$=root]                           # Stem extraction (raw stem value)
 ns.entry_id                              # Namespaced entry
 entry_id#sense                           # Specific meaning sense
 ns.entry_id#sense[case=nom, number=sg]   # Full form
+```
+
+### Stem Reference `[$=name]`
+
+Extract a raw stem value instead of an inflected form. Useful for composing stem + affix manually:
+
+```
+gelmek[$=root]~"iyor"    # → "geliyor" (stem "gel" + "iyor")
 ```
 
 ### Form Specification `[axis=value, ...]`
@@ -73,6 +82,17 @@ ns.entry_id#sense[case=nom, number=sg]   # Full form
 2. Without form spec → headword is returned
 3. With form spec → the inflected form matching all tag conditions is returned
 
+## Newline Marker `//`
+
+Inserts a line break between adjacent tokens:
+
+```
+"first line" // "second line"
+# Renders as: "first line\nsecond line"
+```
+
+`//` replaces the separator with a newline character. If both `~` and `//` apply, `//` takes priority.
+
 ## Glue Marker `~`
 
 Suppresses the separator between adjacent tokens. Used for clitics, compound words, etc.:
@@ -86,6 +106,15 @@ dicere[tense=perfect, person=3, number=sg]~"que"
 "mal"~"bon"~"a" "hundo"
 # Renders as: "malbona hundo"
 ```
+
+# Comments
+
+## Newline and Glue in Token List
+
+| Token | Effect |
+| ----- | ------ |
+| `~` | Suppresses separator (glue adjacent tokens) |
+| `//` | Inserts newline instead of separator |
 
 # Comments
 

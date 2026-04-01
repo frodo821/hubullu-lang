@@ -194,14 +194,16 @@ cognate_entry = entry_ref STRING ;
 example = "example" "{" "tokens" ":" token+ "translation" ":" STRING "}" ;
 
 token = entry_ref ("[" tag_condition_list_plain? "]")?
+      | entry_ref "[$=" IDENT "]"
       | STRING
-      | "~" ;
+      | "~"
+      | "//" ;
 ```
 
 ### Entry References
 
 ```ebnf
-entry_ref = qualified_name ("#" IDENT)? ("[" tag_condition_list_plain "]")? ;
+entry_ref = qualified_name ("#" IDENT)? ( "[" tag_condition_list_plain "]" | "[$=" IDENT "]" )? ;
 
 qualified_name = IDENT ("." IDENT)* ;
 ```
@@ -351,6 +353,19 @@ CREATE TABLE headword_scripts (
 );
 ```
 
+### stems
+
+Stem values for entries (used by `[$=name]` references).
+
+```sql
+CREATE TABLE stems (
+    entry_id INTEGER NOT NULL,
+    stem_name TEXT NOT NULL,
+    stem_value TEXT NOT NULL,
+    FOREIGN KEY (entry_id) REFERENCES entries(id)
+);
+```
+
 ### forms
 
 Inflected forms — the reverse-lookup table.
@@ -451,6 +466,7 @@ Keys: `separator` (default: `" "`), `no_separator_before` (default: `".,;:!?"`).
 
 ```sql
 CREATE INDEX idx_entries_name ON entries(name);
+CREATE INDEX idx_stems_entry ON stems(entry_id);
 CREATE INDEX idx_forms_entry ON forms(entry_id);
 CREATE INDEX idx_forms_form ON forms(form_str);
 CREATE INDEX idx_links_src ON links(src_entry_id);

@@ -259,7 +259,16 @@ Used in etymology and examples:
 entry_id                              # Entry only
 entry_id#sense                        # Specific meaning
 entry_id[tense=present, number=sg]    # Specific form
+entry_id[$=root]                      # Stem extraction
 namespace.entry_id#sense[form_spec]   # Full form
+```
+
+### Stem References `[$=name]`
+
+Extract a raw stem value instead of an inflected form. Useful for manually composing stem + affix:
+
+```
+tokens: gelmek[$=root]~"iyor"    # → "geliyor" (gel + iyor)
 ```
 
 # @render

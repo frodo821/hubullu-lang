@@ -280,6 +280,17 @@ A token list is a sequence of:
    ```
    Without `~`, tokens are joined by the configured separator (default: space). With `~`, the adjacent tokens are concatenated directly. This is useful for attaching punctuation or affixes without a space.
 
+4. **Newline marker `//`** — inserts a line break between adjacent tokens:
+   ```
+   tokens: "line one" // "line two"
+   ```
+
+5. **Stem reference `[$=name]`** — extracts a raw stem value instead of an inflected form:
+   ```
+   tokens: gelmek[$=root]~"iyor"
+   ```
+   This retrieves the value of the `root` stem from entry `gelmek` (e.g., `"gel"`), useful for composing stem + affix structures manually.
+
 Entry references with empty brackets `[]` select the headword form.
 
 If a `[form_spec]` matches multiple forms, it's a compile error — the reference must be unambiguous.
@@ -298,6 +309,7 @@ Anywhere an entry is referenced (etymology, examples, etc.), the full reference 
 
 ```
 [<namespace>.]<entry_id>[#<meaning>][<form_spec>]
+[<namespace>.]<entry_id>[$=<stem_name>]
 ```
 
 | Part | Description | Optional? |
@@ -306,6 +318,7 @@ Anywhere an entry is referenced (etymology, examples, etc.), the full reference 
 | `<entry_id>` | The entry's identifier | No |
 | `#<meaning>` | Selects a specific meaning for polysemous entries | Yes |
 | `[<form_spec>]` | Tag conditions selecting a specific inflected form | Yes |
+| `[$=<stem_name>]` | Extracts a raw stem value (mutually exclusive with form_spec) | Yes |
 
 Examples:
 
@@ -315,6 +328,7 @@ far#motion                                    # with meaning
 faren[tense=present, person=1, number=sg]     # with form spec
 faren#motion[tense=past, number=sg]           # meaning + form
 lat.aqua#liquid[case=nom, number=sg]          # namespaced
+gelmek[$=root]                                # stem extraction
 ```
 
 ## Complete Entry Example

@@ -733,14 +733,18 @@ tokens: <token> (<token>)*
 
 token:
   <ref>            # エントリ参照（form_specで活用形を指定）
+  <ref>[$=<stem>]  # エントリの語幹値を直接取得
   <string_literal> # リンクなしの生文字列（句読点・助詞・接辞など）
   "~"              # グルーマーカー（隣接トークン間のセパレータを抑制）
+  "//"             # 改行マーカー（レンダリング時に改行を挿入）
 ```
 
 - `ref[]` （空のform_spec） → headword形（基本形）を使用
+- `ref[$=stem_name]` → 活用形ではなく、エントリの語幹値を直接取得
 - 綴りが変更されても `tokens` の表示形は自動追従
 - `form_spec` が一意解決できない場合はコンパイルエラー
 - `~` はトークン間に置くと、レンダリング時にセパレータを挿入しない（膠着語の接辞結合など）
+- `//` はトークン間に置くと、レンダリング時にセパレータの代わりに改行を挿入する
 
 ---
 
@@ -782,20 +786,22 @@ lat.aqua[]
 hut_file = reference* token_list ;
 reference = "@reference" import_target "from" string_literal ;
 token_list = token* ;
-token = entry_ref | string_literal | "~" ;
+token = entry_ref | string_literal | "~" | "//" ;
 ```
 
 - `@reference` の構文は `.hu` ファイルの `@reference` と同一
 - 名前空間付きインポート（`* as ns`）で複数辞書を区別可能
 - `~`（グルー）は隣接トークン間のセパレータを抑制
+- `//`（改行）は隣接トークン間に改行を挿入
 
 ### レンダリング処理
 
 1. `@reference` で指定された `.hu` ファイルをコンパイル（mtime ベースのキャッシュあり）
 2. トークン列を左から順に解決
-   - エントリ参照: headword または指定活用形を検索
+   - エントリ参照: headword、指定活用形、または語幹値（`[$=name]`）を検索
    - 文字列リテラル: そのまま出力
    - `~`: 前後のトークン間のセパレータを抑制
+   - `//`: 前後のトークン間に改行を挿入
 3. `@render` 設定に基づいてトークンを結合
 
 ### CLIでの使用
@@ -880,6 +886,7 @@ hubullu render example.hut
 | `entry_tags`          | entry_id, axis, value                            | エントリのタグ（axis=value）                                                                |
 | `entry_meanings`      | entry_id, meaning_id, meaning_text               | 多義エントリの個別意味                                                                      |
 | `headword_scripts`    | entry_id, script_name, script_value              | 複数書記体系のheadword                                                                      |
+| `stems`               | entry_id, stem_name, stem_value                  | エントリの語幹値（`[$=name]`参照で使用）                                                    |
 | `forms`               | id, form_str, entry_id, tags, part               | 活用形の逆引き（tagsはカンマ区切り、partはnullが連続形・非nullが不連続形の部分識別子）      |
 | `links`               | src_entry_id, dst_entry_id, link_type            | エントリ間リンクグラフ（derived_from, cognate, example）                                    |
 | `tagaxis_meta`        | id, axis_name, value_name, display_lang, display_text | タグ軸値の表示名                                                                       |
@@ -894,6 +901,7 @@ hubullu render example.hut
 | インデックス名             | 対象                         |
 | -------------------------- | ---------------------------- |
 | `idx_entries_name`         | entries(name)                |
+| `idx_stems_entry`          | stems(entry_id)              |
 | `idx_forms_entry`          | forms(entry_id)              |
 | `idx_forms_form`           | forms(form_str)              |
 | `idx_links_src`            | links(src_entry_id)          |
