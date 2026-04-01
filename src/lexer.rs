@@ -41,15 +41,20 @@ impl<'a> Lexer<'a> {
             match self.next_token() {
                 Some(tok) => tokens.push(tok),
                 None => {
-                    // Skip unknown byte and continue
-                    let start = self.pos;
-                    self.pos += 1;
-                    self.errors.push(
-                        Diagnostic::error("unexpected character").with_label(
-                            self.span(start, self.pos),
-                            "here",
-                        ),
-                    );
+                    // Skip unknown character and continue.
+                    // Some handlers (e.g. lex_at_directive) advance pos before
+                    // returning None, so we may already be past the offending char.
+                    if self.pos < self.source.len() {
+                        let start = self.pos;
+                        let ch = self.source[self.pos..].chars().next().unwrap();
+                        self.pos += ch.len_utf8();
+                        self.errors.push(
+                            Diagnostic::error("unexpected character").with_label(
+                                self.span(start, self.pos),
+                                "here",
+                            ),
+                        );
+                    }
                 }
             }
         }
@@ -58,13 +63,14 @@ impl<'a> Lexer<'a> {
 
     fn skip_whitespace_and_comments(&mut self) {
         while self.pos < self.source.len() {
-            let b = self.source.as_bytes()[self.pos];
-            if b == b'#' {
+            let ch = self.source[self.pos..].chars().next().unwrap();
+            if ch == '#' {
                 // # is a comment only if preceded by whitespace or at start of input.
                 // After a non-whitespace char (e.g. `faren#motion`), it's a Hash token.
-                if self.pos == 0
-                    || self.source.as_bytes()[self.pos - 1].is_ascii_whitespace()
-                {
+                if self.pos == 0 || {
+                    let prev = self.source[..self.pos].chars().next_back().unwrap();
+                    prev.is_whitespace()
+                } {
                     while self.pos < self.source.len()
                         && self.source.as_bytes()[self.pos] != b'\n'
                     {
@@ -73,8 +79,8 @@ impl<'a> Lexer<'a> {
                 } else {
                     break;
                 }
-            } else if b.is_ascii_whitespace() {
-                self.pos += 1;
+            } else if ch.is_whitespace() {
+                self.pos += ch.len_utf8();
             } else {
                 break;
             }
