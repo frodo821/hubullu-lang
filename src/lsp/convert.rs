@@ -99,6 +99,18 @@ pub fn uri_to_path(uri: &Uri) -> Option<std::path::PathBuf> {
     }
 }
 
+/// Strip leading `./` and `../` components from an import path so that
+/// `ends_with` matching works against canonical absolute paths.
+pub fn normalize_import_suffix(path_str: &str) -> String {
+    use std::path::Component;
+    Path::new(path_str)
+        .components()
+        .filter(|c| matches!(c, Component::Normal(_)))
+        .collect::<std::path::PathBuf>()
+        .to_string_lossy()
+        .into_owned()
+}
+
 /// Get the URI string suitable for use as a filename.
 pub fn uri_to_filename(uri: &Uri) -> String {
     uri_to_path(uri)

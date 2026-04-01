@@ -257,9 +257,12 @@ fn determine_hut_context(tokens: &[Token], file_id: FileId, offset: usize) -> Co
     }
 
     if is_inside_brackets(&preceding) {
-        if let TokenKind::Comma = &preceding[len - 1].node {
-            let entry_name = find_entry_before_open_bracket(&preceding);
-            return Context::TagAxis(entry_name);
+        match &preceding[len - 1].node {
+            TokenKind::Comma | TokenKind::Ident(_) => {
+                let entry_name = find_entry_before_open_bracket(&preceding);
+                return Context::TagAxis(entry_name);
+            }
+            _ => {}
         }
     }
 
@@ -348,9 +351,12 @@ fn determine_hu_context(tokens: &[Token], file_id: FileId, offset: usize) -> Con
     }
 
     if is_inside_brackets(&preceding) {
-        if let TokenKind::Comma = &preceding[len - 1].node {
-            let filter = axis_filter_from_hu_bracket_context(&preceding);
-            return Context::TagAxis(filter);
+        match &preceding[len - 1].node {
+            TokenKind::Comma | TokenKind::Ident(_) => {
+                let filter = axis_filter_from_hu_bracket_context(&preceding);
+                return Context::TagAxis(filter);
+            }
+            _ => {}
         }
     }
 

@@ -90,9 +90,10 @@ fn resolve_import_path(
     phase1: &Phase1Result,
 ) -> Option<GotoDefinitionResponse> {
     if let TokenKind::StringLit(path_str) = &tok.node {
+        let suffix = convert::normalize_import_suffix(path_str);
         for fid in phase1.source_map.file_ids() {
             let file_path = phase1.source_map.path(fid);
-            if file_path.to_string_lossy().ends_with(path_str.as_str()) {
+            if file_path.to_string_lossy().ends_with(&suffix) {
                 let uri = convert::path_to_uri(file_path)?;
                 let range = lsp_types::Range::default();
                 return Some(GotoDefinitionResponse::Scalar(Location { uri, range }));

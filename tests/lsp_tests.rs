@@ -732,6 +732,52 @@ entry cat {
         }
     }
 
+    /// Reproduce: ident[<cursor>] with partial typing inside brackets
+    #[test]
+    fn hut_tagaxis_completion_partial_inside_brackets() {
+        let hu_src = r#"
+tagaxis number { role: inflectional }
+tagaxis case { role: inflectional }
+inflection cat_infl for { number, case } {
+    [number=sg, case=nom] -> `cat`
+}
+entry cat {
+    headword: "cat"
+    meaning: "a cat"
+    inflection_class: cat_infl
+}
+"#;
+        let pr = parse(hu_src);
+        let mut p1 = single_file_phase1(&pr);
+
+        // Test: cat[n<cursor>] — partial axis name typed inside brackets
+        let hut_src = "cat[n]";
+        let cursor_offset = 5; // right after 'n', before ']'
+        let hut_file_id = p1.source_map.add_file("/tmp/test.hut".into(), hut_src.to_string());
+        if let Some(hu_scope) = p1.symbol_table.scope(pr.file_id).cloned() {
+            p1.symbol_table.scopes.insert(hut_file_id, hu_scope);
+        }
+
+        let mut doc_source_map = hubullu::span::SourceMap::new();
+        let doc_file_id = doc_source_map.add_file("/tmp/test.hut".into(), hut_src.to_string());
+        let lexer = hubullu::lexer::Lexer::new(doc_source_map.source(doc_file_id), doc_file_id);
+        let (doc_tokens, _) = lexer.tokenize();
+
+        let resp = hubullu::lsp::completion::complete(
+            doc_file_id, hut_file_id, cursor_offset, &doc_tokens, Some(&p1), true,
+        );
+        match resp {
+            lsp_types::CompletionResponse::List(list) => {
+                let labels: Vec<_> = list.items.iter().map(|i| i.label.as_str()).collect();
+                assert!(labels.contains(&"number"), "should suggest tagaxis 'number' for partial 'n' inside brackets, got: {:?}", labels);
+            }
+            lsp_types::CompletionResponse::Array(items) => {
+                let labels: Vec<_> = items.iter().map(|i| i.label.as_str()).collect();
+                assert!(labels.contains(&"number"), "should suggest tagaxis 'number' for partial 'n' inside brackets, got: {:?}", labels);
+            }
+        }
+    }
+
     #[test]
     fn completion_inside_entry_body() {
         let src = "entry foo {\n  \n}";
@@ -839,6 +885,19 @@ mod document_link_tests {
         let links = hubullu::lsp::document_link::document_links(&pr, Some(&p1));
         assert!(!links.is_empty(), "should produce a link for @use \"profile.hu\"");
         assert!(links[0].target.is_some());
+    }
+
+    #[test]
+    fn document_links_with_relative_path() {
+        let p1 = phase1_fixture("relative_paths/sub");
+        let fid = find_file_id(&p1, "main.hu");
+
+        let source = p1.source_map.source(fid).to_string();
+        let pr = hubullu::parse_source(&source, &p1.source_map.path(fid).to_string_lossy());
+
+        let links = hubullu::lsp::document_link::document_links(&pr, Some(&p1));
+        assert!(!links.is_empty(), "should produce a link for @use \"../shared.hu\"");
+        assert!(links[0].target.is_some(), "link target should resolve despite ../");
     }
 
     #[test]

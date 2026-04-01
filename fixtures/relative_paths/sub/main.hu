@@ -1,0 +1,6 @@
+@use * from "../shared.hu"
+
+entry cat {
+    headword: "cat"
+    meaning: "a cat"
+}
