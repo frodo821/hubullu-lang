@@ -55,6 +55,20 @@ pub fn parse_hut(source: &str, filename: &str) -> Result<HutFile, String> {
 ///
 /// **Limitation:** transitive dependencies (files loaded via `@use`) are not
 /// tracked — only the root `.hu` file's mtime is compared.
+/// Check that a cached .huc file has all required tables.
+fn huc_schema_up_to_date(huc_path: &Path) -> bool {
+    let conn = match rusqlite::Connection::open_with_flags(
+        huc_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    // Check for the `stems` table (added after initial schema).
+    let ok = conn.prepare("SELECT 1 FROM stems LIMIT 0").is_ok();
+    ok
+}
+
 pub fn compile_cached(hu_path: &Path) -> Result<PathBuf, String> {
     let hu_path = hu_path
         .canonicalize()
@@ -73,7 +87,14 @@ pub fn compile_cached(hu_path: &Path) -> Result<PathBuf, String> {
         let cache_mtime = cache_meta
             .modified()
             .map_err(|e| format!("cannot read mtime: {}", e))?;
-        src_mtime > cache_mtime
+        if src_mtime > cache_mtime {
+            true
+        } else {
+            // Schema migration check: if the cached .huc is missing required
+            // tables (e.g. stems added in a newer compiler version), force
+            // a full recompile.
+            !huc_schema_up_to_date(&cache_path)
+        }
     } else {
         true
     };

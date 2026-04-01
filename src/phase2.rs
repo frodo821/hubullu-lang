@@ -71,6 +71,7 @@ pub struct ResolvedEntry {
     pub inflection_class: Option<String>,
     pub meaning: String,
     pub meanings: Vec<(String, String)>,
+    #[cfg_attr(feature = "serialization", serde(default))]
     pub stems: HashMap<String, String>,
     pub forms: Vec<ResolvedForm>,
     pub links: Vec<ResolvedLink>,
