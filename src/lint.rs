@@ -63,14 +63,17 @@ impl LintResult {
 // Suppress comments
 // ---------------------------------------------------------------------------
 
-/// Per-file suppressions: maps 1-based line number → set of suppressed rule names.
+/// Per-file suppressions.
+///
+/// * Line-specific: maps 1-based line number → set of suppressed rule names.
+/// * File-wide (`entire-file`): stored under key `0`.
 type Suppressions = HashMap<usize, HashSet<String>>;
 
-/// Parse `# @suppress next-line: rule1, rule2` comments from source text.
-///
-/// The comment must start with `#` (one or more), followed by `@suppress`,
-/// then `next-line:`, then a comma-separated list of rule names.
-/// The suppression applies to the line immediately following the comment.
+/// Key used for `entire-file` suppressions.
+const ENTIRE_FILE_KEY: usize = 0;
+
+/// Parse `# @suppress next-line: rule1, rule2` and
+/// `# @suppress entire-file: rule1, rule2` comments from source text.
 fn parse_suppressions(source: &str) -> Suppressions {
     let mut suppressions = Suppressions::new();
     for (line_idx, line) in source.lines().enumerate() {
@@ -84,16 +87,23 @@ fn parse_suppressions(source: &str) -> Suppressions {
             Some(r) => r.trim_start(),
             None => continue,
         };
-        let rest = match rest.strip_prefix("next-line") {
-            Some(r) => r.trim_start(),
-            None => continue,
+
+        let target_line;
+        let rest = if let Some(r) = rest.strip_prefix("next-line") {
+            // line_idx is 0-based; the suppressed line is the next one, 1-based
+            target_line = line_idx + 2;
+            r.trim_start()
+        } else if let Some(r) = rest.strip_prefix("entire-file") {
+            target_line = ENTIRE_FILE_KEY;
+            r.trim_start()
+        } else {
+            continue;
         };
+
         let rest = match rest.strip_prefix(':') {
             Some(r) => r,
             None => continue,
         };
-        // line_idx is 0-based; the suppressed line is the next one, 1-based
-        let target_line = line_idx + 2;
         for rule_name in rest.split(',') {
             let rule_name = rule_name.trim();
             if !rule_name.is_empty() {
@@ -120,7 +130,7 @@ fn build_suppressions(p1: &Phase1Result) -> HashMap<FileId, Suppressions> {
     all
 }
 
-/// Check if a lint is suppressed by a `@suppress next-line` comment.
+/// Check if a lint is suppressed by a `@suppress` comment (next-line or entire-file).
 fn is_suppressed(
     lint: &LintDiagnostic,
     file_suppressions: &HashMap<FileId, Suppressions>,
@@ -134,11 +144,13 @@ fn is_suppressed(
         Some(s) => s,
         None => return false,
     };
-    let (line, _) = source_map.line_col(label.span.file_id, label.span.start);
-    match supps.get(&line) {
-        Some(rules) => rules.contains(lint.rule),
-        None => false,
+    // Check entire-file suppression first.
+    if supps.get(&ENTIRE_FILE_KEY).is_some_and(|rules| rules.contains(lint.rule)) {
+        return true;
     }
+    // Then check line-specific suppression.
+    let (line, _) = source_map.line_col(label.span.file_id, label.span.start);
+    supps.get(&line).is_some_and(|rules| rules.contains(lint.rule))
 }
 
 // ---------------------------------------------------------------------------

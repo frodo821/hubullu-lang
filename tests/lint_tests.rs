@@ -837,3 +837,78 @@ fn test_suppress_wrong_line_no_effect() {
     assert_no_compile_errors(&result);
     assert!(has_rule(&result, "unused-inflection"));
 }
+
+#[test]
+fn test_suppress_entire_file() {
+    let src = format!(r#"
+        # @suppress entire-file: unused-inflection
+        {}
+        inflection verb for {{tense}} {{
+            requires stems: root
+            [tense=present] -> `{{root}}s`
+            [_] -> `{{root}}`
+        }}
+    "#, TENSE_PREAMBLE);
+    let result = lint_source(&src);
+    assert_no_compile_errors(&result);
+    assert!(!has_rule(&result, "unused-inflection"));
+}
+
+#[test]
+fn test_suppress_entire_file_multiple_rules() {
+    let src = format!(r#"
+        # @suppress entire-file: unused-inflection, single-meaning-multiple
+        {}
+        inflection verb for {{tense}} {{
+            requires stems: root
+            [tense=present] -> `{{root}}s`
+            [_] -> `{{root}}`
+        }}
+        entry go {{
+            headword: "go"
+            stems {{ root: "go" }}
+            inflection_class: verb
+            meanings {{
+                only_one {{ "to go" }}
+            }}
+        }}
+    "#, TENSE_PREAMBLE);
+    let result = lint_source(&src);
+    assert_no_compile_errors(&result);
+    assert!(!has_rule(&result, "unused-inflection"));
+    assert!(!has_rule(&result, "single-meaning-multiple"));
+}
+
+#[test]
+fn test_suppress_entire_file_does_not_affect_other_rules() {
+    let src = format!(r#"
+        # @suppress entire-file: single-meaning-multiple
+        {}
+        inflection verb for {{tense}} {{
+            requires stems: root
+            [tense=present] -> `{{root}}s`
+            [_] -> `{{root}}`
+        }}
+    "#, TENSE_PREAMBLE);
+    let result = lint_source(&src);
+    assert_no_compile_errors(&result);
+    // unused-inflection should still fire
+    assert!(has_rule(&result, "unused-inflection"));
+}
+
+#[test]
+fn test_suppress_entire_file_anywhere_in_file() {
+    // The entire-file comment doesn't have to be at the top
+    let src = format!(r#"
+        {}
+        inflection verb for {{tense}} {{
+            requires stems: root
+            [tense=present] -> `{{root}}s`
+            [_] -> `{{root}}`
+        }}
+        # @suppress entire-file: unused-inflection
+    "#, TENSE_PREAMBLE);
+    let result = lint_source(&src);
+    assert_no_compile_errors(&result);
+    assert!(!has_rule(&result, "unused-inflection"));
+}

@@ -1,7 +1,7 @@
 //! LSP code actions for hubullu.
 //!
-//! Provides quick-fix actions such as inserting `# @suppress next-line:` comments
-//! to silence lint warnings.
+//! Provides quick-fix actions such as inserting `# @suppress next-line:` or
+//! `# @suppress entire-file:` comments to silence lint warnings.
 
 use lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, Range, TextEdit, Uri,
@@ -38,47 +38,77 @@ pub fn code_actions(
             continue;
         }
 
-        // Build the suppress comment to insert before the diagnostic's line.
-        let (line_1based, _) = source_map.line_col(label.span.file_id, label.span.start);
-        let line_text = source_map.line_text(file_id, line_1based);
+        let lsp_diag = super::diagnostics::lint_to_lsp_diagnostic(ld, uri, source_map);
 
-        // Preserve the indentation of the target line.
-        let indent: String = line_text
-            .chars()
-            .take_while(|c| c.is_whitespace())
-            .collect();
+        // --- Action 1: suppress next-line ---
+        {
+            let (line_1based, _) = source_map.line_col(label.span.file_id, label.span.start);
+            let line_text = source_map.line_text(file_id, line_1based);
 
-        let suppress_line = format!("{}# @suppress next-line: {}\n", indent, ld.rule);
+            let indent: String = line_text
+                .chars()
+                .take_while(|c| c.is_whitespace())
+                .collect();
 
-        // Insert at the beginning of the diagnostic's line (line is 0-based in LSP).
-        let insert_pos = lsp_types::Position {
-            line: (line_1based - 1) as u32,
-            character: 0,
-        };
+            let suppress_line = format!("{}# @suppress next-line: {}\n", indent, ld.rule);
 
-        let edit = TextEdit {
-            range: Range {
-                start: insert_pos,
-                end: insert_pos,
-            },
-            new_text: suppress_line,
-        };
+            let insert_pos = lsp_types::Position {
+                line: (line_1based - 1) as u32,
+                character: 0,
+            };
 
-        let mut changes = HashMap::new();
-        changes.insert(uri.clone(), vec![edit]);
+            let mut changes = HashMap::new();
+            changes.insert(uri.clone(), vec![TextEdit {
+                range: Range { start: insert_pos, end: insert_pos },
+                new_text: suppress_line,
+            }]);
 
-        actions.push(CodeActionOrCommand::CodeAction(CodeAction {
-            title: format!("Suppress `{}`", ld.rule),
-            kind: Some(CodeActionKind::QUICKFIX),
-            diagnostics: Some(vec![super::diagnostics::lint_to_lsp_diagnostic(
-                ld, uri, source_map,
-            )]),
-            edit: Some(WorkspaceEdit {
-                changes: Some(changes),
+            actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                title: format!("Suppress `{}`", ld.rule),
+                kind: Some(CodeActionKind::QUICKFIX),
+                diagnostics: Some(vec![lsp_diag.clone()]),
+                edit: Some(WorkspaceEdit {
+                    changes: Some(changes),
+                    ..Default::default()
+                }),
                 ..Default::default()
-            }),
-            ..Default::default()
-        }));
+            }));
+        }
+
+        // --- Action 2: suppress entire-file ---
+        {
+            let source = source_map.source(file_id);
+            // Check if there is already an entire-file suppress for this rule.
+            let already_suppressed = source.lines().any(|line| {
+                let t = line.trim();
+                t.starts_with('#')
+                    && t.contains("@suppress")
+                    && t.contains("entire-file")
+                    && t.contains(ld.rule)
+            });
+
+            if !already_suppressed {
+                let suppress_line = format!("# @suppress entire-file: {}\n", ld.rule);
+                let insert_pos = lsp_types::Position { line: 0, character: 0 };
+
+                let mut changes = HashMap::new();
+                changes.insert(uri.clone(), vec![TextEdit {
+                    range: Range { start: insert_pos, end: insert_pos },
+                    new_text: suppress_line,
+                }]);
+
+                actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                    title: format!("Suppress `{}` for entire file", ld.rule),
+                    kind: Some(CodeActionKind::QUICKFIX),
+                    diagnostics: Some(vec![lsp_diag]),
+                    edit: Some(WorkspaceEdit {
+                        changes: Some(changes),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }));
+            }
+        }
     }
 
     actions
