@@ -757,33 +757,15 @@ fn add_tag_axes(
     }
 
     // Fallback: if the scope doesn't have tagaxis symbols (e.g. .hut files where
-    // only entries are @referenced), search all files for tagaxis definitions
-    // matching the resolved axis names.
+    // only entries are @referenced), use the resolved axis names directly.
     if !found_any {
         if let Some(allowed) = allowed {
-            add_tag_axes_from_all_files(items, allowed, phase1);
-        }
-    }
-}
-
-/// Fallback: search all files for tagaxis definitions matching the given names.
-fn add_tag_axes_from_all_files(
-    items: &mut Vec<CompletionItem>,
-    allowed: &[String],
-    phase1: &Phase1Result,
-) {
-    for (&fid, file_ast) in &phase1.files {
-        for (idx, item_spanned) in file_ast.items.iter().enumerate() {
-            if let Item::TagAxis(t) = &item_spanned.node {
-                if allowed.iter().any(|n| n == &t.name.node) {
-                    items.push(CompletionItem {
-                        label: t.name.node.clone(),
-                        kind: Some(symbol_kind_to_completion(SymbolKind::TagAxis)),
-                        detail: symbol_detail(fid, idx, phase1),
-                        documentation: symbol_documentation(fid, idx, phase1),
-                        ..Default::default()
-                    });
-                }
+            for name in allowed {
+                items.push(CompletionItem {
+                    label: name.clone(),
+                    kind: Some(symbol_kind_to_completion(SymbolKind::TagAxis)),
+                    ..Default::default()
+                });
             }
         }
     }
