@@ -28,10 +28,8 @@ fn setup_incremental_fixture(
 #[test]
 fn test_simple_compile() {
     let input = fixture_path("simple/main.hu");
-    let output = std::env::temp_dir().join("hubullu_test_simple.sqlite");
-
-    // Clean up any previous output
-    let _ = std::fs::remove_file(&output);
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("simple.huc");
 
     let result = hubullu::compile(&input, &output);
     assert!(result.is_ok(), "compile failed: {:?}", result.err());
@@ -114,22 +112,16 @@ fn test_simple_compile() {
         )
         .unwrap();
     assert!(entry_id > 0, "entry should have a positive integer ID");
-
-    // Clean up
-    let _ = std::fs::remove_file(&output);
 }
 
 #[test]
 fn test_inline_inflection() {
-    let input = fixture_path("inline/main.hu");
-    let output = std::env::temp_dir().join("hubullu_test_inline.sqlite");
-    let _ = std::fs::remove_file(&output);
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("main.hu");
+    let output = dir.path().join("inline.huc");
 
-    // Create fixture
-    let fixture_dir = fixture_path("inline");
-    std::fs::create_dir_all(&fixture_dir).unwrap();
     std::fs::write(
-        fixture_dir.join("main.hu"),
+        &input,
         r#"
 tagaxis tense {
   role: inflectional
@@ -167,8 +159,6 @@ entry sein {
         )
         .unwrap();
     assert_eq!(form_count, 2);
-
-    let _ = std::fs::remove_file(&output);
 }
 
 // ---------------------------------------------------------------------------
