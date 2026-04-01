@@ -728,3 +728,112 @@ fn test_fix_priority_unused_import_over_import_order() {
     assert!(!fixed.contains("@use"), "unused import should be deleted, not moved");
     assert!(fixed.contains("tagaxis pos"), "other items should remain");
 }
+
+// =======================================================================
+// @suppress next-line
+// =======================================================================
+
+#[test]
+fn test_suppress_single_rule() {
+    let src = format!(r#"
+        {}
+        # @suppress next-line: unused-inflection
+        inflection verb for {{tense}} {{
+            requires stems: root
+            [tense=present] -> `{{root}}s`
+            [_] -> `{{root}}`
+        }}
+    "#, TENSE_PREAMBLE);
+    let result = lint_source(&src);
+    assert_no_compile_errors(&result);
+    assert!(!has_rule(&result, "unused-inflection"));
+}
+
+#[test]
+fn test_suppress_does_not_affect_other_rules() {
+    // Suppress unused-inflection on the entry line — should not affect the inflection lint
+    let src = format!(r#"
+        {}
+        inflection verb for {{tense}} {{
+            requires stems: root
+            [tense=present] -> `{{root}}s`
+            [_] -> `{{root}}`
+        }}
+        # @suppress next-line: unused-inflection
+        entry go {{
+            headword: "go"
+            stems {{ root: "go" }}
+            inflection_class: verb
+            meanings {{
+                only_one {{ "to go" }}
+            }}
+        }}
+    "#, TENSE_PREAMBLE);
+    let result = lint_source(&src);
+    assert_no_compile_errors(&result);
+    // unused-inflection is NOT suppressed because the comment is before
+    // the entry, not the inflection definition.
+    assert!(!has_rule(&result, "unused-inflection"));
+    // single-meaning-multiple should still fire (not suppressed)
+    assert!(has_rule(&result, "single-meaning-multiple"));
+}
+
+#[test]
+fn test_suppress_multiple_rules() {
+    let src = format!(r#"
+        {}
+        # @suppress next-line: unused-inflection
+        inflection verb for {{tense}} {{
+            requires stems: root
+            [tense=present] -> `{{root}}s`
+            [_] -> `{{root}}`
+        }}
+        entry go {{
+            headword: "go"
+            stems {{ root: "go" }}
+            inflection_class: verb
+            meanings {{
+                # @suppress next-line: single-meaning-multiple
+                only_one {{ "to go" }}
+            }}
+        }}
+    "#, TENSE_PREAMBLE);
+    let result = lint_source(&src);
+    assert_no_compile_errors(&result);
+    assert!(!has_rule(&result, "unused-inflection"));
+    assert!(!has_rule(&result, "single-meaning-multiple"));
+}
+
+#[test]
+fn test_suppress_with_double_hash() {
+    let src = format!(r#"
+        {}
+        ## @suppress next-line: unused-inflection
+        inflection verb for {{tense}} {{
+            requires stems: root
+            [tense=present] -> `{{root}}s`
+            [_] -> `{{root}}`
+        }}
+    "#, TENSE_PREAMBLE);
+    let result = lint_source(&src);
+    assert_no_compile_errors(&result);
+    assert!(!has_rule(&result, "unused-inflection"));
+}
+
+#[test]
+fn test_suppress_wrong_line_no_effect() {
+    // Suppress comment two lines above (blank line between) — should not take effect
+    let src = format!(r#"
+        {}
+        # @suppress next-line: unused-inflection
+
+        inflection verb for {{tense}} {{
+            requires stems: root
+            [tense=present] -> `{{root}}s`
+            [_] -> `{{root}}`
+        }}
+    "#, TENSE_PREAMBLE);
+    let result = lint_source(&src);
+    assert_no_compile_errors(&result);
+    assert!(has_rule(&result, "unused-inflection"));
+}

@@ -10,7 +10,7 @@ use crate::ast::*;
 use crate::error::{Diagnostic, Diagnostics, Severity};
 use crate::inflection_eval;
 use crate::phase1::{self, Phase1Result};
-use crate::span::FileId;
+use crate::span::{FileId, SourceMap};
 use crate::visit::{self, Visitor};
 
 // ---------------------------------------------------------------------------
@@ -60,6 +60,88 @@ impl LintResult {
 }
 
 // ---------------------------------------------------------------------------
+// Suppress comments
+// ---------------------------------------------------------------------------
+
+/// Per-file suppressions: maps 1-based line number → set of suppressed rule names.
+type Suppressions = HashMap<usize, HashSet<String>>;
+
+/// Parse `# @suppress next-line: rule1, rule2` comments from source text.
+///
+/// The comment must start with `#` (one or more), followed by `@suppress`,
+/// then `next-line:`, then a comma-separated list of rule names.
+/// The suppression applies to the line immediately following the comment.
+fn parse_suppressions(source: &str) -> Suppressions {
+    let mut suppressions = Suppressions::new();
+    for (line_idx, line) in source.lines().enumerate() {
+        let trimmed = line.trim();
+        // Strip leading '#' characters
+        let rest = match trimmed.strip_prefix('#') {
+            Some(r) => r.trim_start_matches('#').trim_start(),
+            None => continue,
+        };
+        let rest = match rest.strip_prefix("@suppress") {
+            Some(r) => r.trim_start(),
+            None => continue,
+        };
+        let rest = match rest.strip_prefix("next-line") {
+            Some(r) => r.trim_start(),
+            None => continue,
+        };
+        let rest = match rest.strip_prefix(':') {
+            Some(r) => r,
+            None => continue,
+        };
+        // line_idx is 0-based; the suppressed line is the next one, 1-based
+        let target_line = line_idx + 2;
+        for rule_name in rest.split(',') {
+            let rule_name = rule_name.trim();
+            if !rule_name.is_empty() {
+                suppressions
+                    .entry(target_line)
+                    .or_default()
+                    .insert(rule_name.to_string());
+            }
+        }
+    }
+    suppressions
+}
+
+/// Build per-file suppressions for all files in the phase1 result.
+fn build_suppressions(p1: &Phase1Result) -> HashMap<FileId, Suppressions> {
+    let mut all = HashMap::new();
+    for &file_id in p1.files.keys() {
+        let source = p1.source_map.source(file_id);
+        let supps = parse_suppressions(source);
+        if !supps.is_empty() {
+            all.insert(file_id, supps);
+        }
+    }
+    all
+}
+
+/// Check if a lint is suppressed by a `@suppress next-line` comment.
+fn is_suppressed(
+    lint: &LintDiagnostic,
+    file_suppressions: &HashMap<FileId, Suppressions>,
+    source_map: &SourceMap,
+) -> bool {
+    let label = match lint.diagnostic.labels.first() {
+        Some(l) => l,
+        None => return false,
+    };
+    let supps = match file_suppressions.get(&label.span.file_id) {
+        Some(s) => s,
+        None => return false,
+    };
+    let (line, _) = source_map.line_col(label.span.file_id, label.span.start);
+    match supps.get(&line) {
+        Some(rules) => rules.contains(lint.rule),
+        None => false,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -79,6 +161,12 @@ pub fn run_lint_from_phase1(p1: &Phase1Result) -> Vec<LintDiagnostic> {
 
     if !p1.diagnostics.has_errors() {
         lint_with_resolved_axes(p1, &mut lints);
+    }
+
+    // Filter suppressed lints
+    let suppressions = build_suppressions(p1);
+    if !suppressions.is_empty() {
+        lints.retain(|lint| !is_suppressed(lint, &suppressions, &p1.source_map));
     }
 
     lints.sort_by(|a, b| {
@@ -109,6 +197,12 @@ pub fn run_lint(entry_path: &Path) -> LintResult {
     // Run lints that need resolved axis values (lightweight, no full phase2)
     if !p1.diagnostics.has_errors() {
         lint_with_resolved_axes(&p1, &mut lints);
+    }
+
+    // Filter suppressed lints
+    let suppressions = build_suppressions(&p1);
+    if !suppressions.is_empty() {
+        lints.retain(|lint| !is_suppressed(lint, &suppressions, &p1.source_map));
     }
 
     // Sort lints by file and position for stable output
