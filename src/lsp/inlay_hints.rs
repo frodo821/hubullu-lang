@@ -132,6 +132,9 @@ fn collect_example_hints(
 fn resolve_ref_form(entry_ref: &EntryRef, phase2: &Phase2Result) -> Option<String> {
     let entry_id = &entry_ref.entry_id.node;
     let resolved = find_resolved_entry(entry_id, phase2)?;
+    if let Some(stem_name) = &entry_ref.stem_spec {
+        return resolved.stems.get(&stem_name.node).cloned();
+    }
     match &entry_ref.form_spec {
         Some(spec) if !spec.conditions.is_empty() => find_matching_form(resolved, spec),
         _ => Some(resolved.headword.clone()),
@@ -174,14 +177,21 @@ fn collect_ref_hint_at(
         None => return,
     };
 
-    let form_str = match &entry_ref.form_spec {
-        Some(spec) if !spec.conditions.is_empty() => {
-            match find_matching_form(resolved, spec) {
-                Some(f) => f,
-                None => return,
-            }
+    let form_str = if let Some(stem_name) = &entry_ref.stem_spec {
+        match resolved.stems.get(&stem_name.node) {
+            Some(v) => v.clone(),
+            None => return,
         }
-        _ => resolved.headword.clone(),
+    } else {
+        match &entry_ref.form_spec {
+            Some(spec) if !spec.conditions.is_empty() => {
+                match find_matching_form(resolved, spec) {
+                    Some(f) => f,
+                    None => return,
+                }
+            }
+            _ => resolved.headword.clone(),
+        }
     };
 
     let position = convert::offset_to_position(file_id, hint_offset, source_map);

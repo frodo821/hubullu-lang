@@ -71,6 +71,7 @@ pub struct ResolvedEntry {
     pub inflection_class: Option<String>,
     pub meaning: String,
     pub meanings: Vec<(String, String)>,
+    pub stems: HashMap<String, String>,
     pub forms: Vec<ResolvedForm>,
     pub links: Vec<ResolvedLink>,
 }
@@ -744,6 +745,7 @@ impl<'a> Phase2Ctx<'a> {
             inflection_class,
             meaning,
             meanings,
+            stems,
             forms,
             links,
         });

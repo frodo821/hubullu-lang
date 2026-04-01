@@ -66,6 +66,13 @@ fn create_schema(conn: &Connection) -> Result<(), Diagnostic> {
             FOREIGN KEY (entry_id) REFERENCES entries(id)
         );
 
+        CREATE TABLE IF NOT EXISTS stems (
+            entry_id INTEGER NOT NULL,
+            stem_name TEXT NOT NULL,
+            stem_value TEXT NOT NULL,
+            FOREIGN KEY (entry_id) REFERENCES entries(id)
+        );
+
         CREATE TABLE IF NOT EXISTS forms (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             form_str TEXT NOT NULL,
@@ -222,6 +229,15 @@ fn insert_data(conn: &Connection, p2: &Phase2Result) -> Result<(), Diagnostic> {
             .map_err(|e| Diagnostic::error(format!("insert headword_scripts failed: {}", e)))?;
         }
 
+        // Stems
+        for (stem_name, stem_value) in &entry.stems {
+            conn.execute(
+                "INSERT INTO stems (entry_id, stem_name, stem_value) VALUES (?1, ?2, ?3)",
+                params![entry_id, stem_name, stem_value],
+            )
+            .map_err(|e| Diagnostic::error(format!("insert stems failed: {}", e)))?;
+        }
+
         // Forms
         for form in &entry.forms {
             let tags_str = form
@@ -364,6 +380,7 @@ fn create_indexes(conn: &Connection, _p2: &Phase2Result) -> Result<(), Diagnosti
         CREATE INDEX IF NOT EXISTS idx_forms_form ON forms(form_str);
         CREATE INDEX IF NOT EXISTS idx_links_src ON links(src_entry_id);
         CREATE INDEX IF NOT EXISTS idx_links_dst ON links(dst_entry_id);
+        CREATE INDEX IF NOT EXISTS idx_stems_entry ON stems(entry_id);
         CREATE INDEX IF NOT EXISTS idx_entry_tags ON entry_tags(entry_id);
         CREATE INDEX IF NOT EXISTS idx_entry_tags_axis ON entry_tags(axis, value);
         CREATE INDEX IF NOT EXISTS idx_inflection_display ON inflection_display(inflection_id);

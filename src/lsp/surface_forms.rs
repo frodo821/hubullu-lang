@@ -210,6 +210,9 @@ pub fn surface_forms_from_tokens(
 fn resolve_ref_form(entry_ref: &EntryRef, phase2: &Phase2Result) -> Option<String> {
     let entry_id = &entry_ref.entry_id.node;
     let resolved = find_resolved_entry(entry_id, phase2)?;
+    if let Some(stem_name) = &entry_ref.stem_spec {
+        return resolved.stems.get(&stem_name.node).cloned();
+    }
     match &entry_ref.form_spec {
         Some(spec) if !spec.conditions.is_empty() => find_matching_form(resolved, spec),
         _ => Some(resolved.headword.clone()),

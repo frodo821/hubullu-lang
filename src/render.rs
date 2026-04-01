@@ -372,7 +372,22 @@ pub fn resolve(
             ast::Token::Ref(entry_ref) => {
                 let local_name = &entry_ref.entry_id.node;
                 let (src, db_name) = ctx.find_entry(&entry_ref.namespace, local_name)?;
-                match &entry_ref.form_spec {
+
+                if let Some(stem_name) = &entry_ref.stem_spec {
+                    let stem_value: String = src
+                        .conn
+                        .query_row(
+                            "SELECT s.stem_value FROM stems s \
+                             JOIN entries e ON s.entry_id = e.id \
+                             WHERE e.name = ?1 AND s.stem_name = ?2",
+                            rusqlite::params![db_name, stem_name.node],
+                            |row| row.get(0),
+                        )
+                        .map_err(|e| {
+                            format!("stem '{}[$={}]' not found: {}", local_name, stem_name.node, e)
+                        })?;
+                    parts.push(ResolvedPart::Text(stem_value));
+                } else { match &entry_ref.form_spec {
                     None => {
                         let headword: String = src
                             .conn
@@ -439,7 +454,7 @@ pub fn resolve(
                         })?;
                         parts.push(ResolvedPart::Text(form_str));
                     }
-                }
+                } }
             }
         }
     }
@@ -585,6 +600,21 @@ mod tests {
         assert_eq!(hut.tokens.len(), 3);
         assert!(matches!(hut.tokens[0], ast::Token::Lit(_)));
         assert!(matches!(hut.tokens[1], ast::Token::Newline));
+        assert!(matches!(hut.tokens[2], ast::Token::Lit(_)));
+    }
+
+    #[test]
+    fn test_parse_hut_stem_spec() {
+        let hut = parse_hut(r#"gelmek[$=root]~"iyor""#, "test.hut").unwrap();
+        assert_eq!(hut.tokens.len(), 3);
+        if let ast::Token::Ref(r) = &hut.tokens[0] {
+            assert_eq!(r.entry_id.node, "gelmek");
+            assert!(r.form_spec.is_none());
+            assert_eq!(r.stem_spec.as_ref().unwrap().node, "root");
+        } else {
+            panic!("expected Ref token");
+        }
+        assert!(matches!(hut.tokens[1], ast::Token::Glue));
         assert!(matches!(hut.tokens[2], ast::Token::Lit(_)));
     }
 

@@ -1558,18 +1558,31 @@ impl Parser {
             None
         };
 
-        // Optional [form_spec]
-        let form_spec = if matches!(self.peek(), TokenKind::LBracket) {
-            Some(self.parse_tag_condition_list()?)
-        } else {
-            None
-        };
+        // Optional [form_spec] or [$=stem_name]
+        let mut form_spec = None;
+        let mut stem_spec = None;
+        if matches!(self.peek(), TokenKind::LBracket) {
+            // Peek ahead: if next token after `[` is `$`, it's a stem spec
+            let is_stem_spec = self.tokens.get(self.pos + 1)
+                .map(|t| matches!(t.node, TokenKind::Dollar))
+                .unwrap_or(false);
+            if is_stem_spec {
+                self.advance(); // [
+                self.advance(); // $
+                self.expect(&TokenKind::Eq)?;
+                stem_spec = Some(self.expect_ident()?);
+                self.expect(&TokenKind::RBracket)?;
+            } else {
+                form_spec = Some(self.parse_tag_condition_list()?);
+            }
+        }
 
         Ok(EntryRef {
             namespace,
             entry_id,
             meaning,
             form_spec,
+            stem_spec,
             span: self.span_from(start),
         })
     }
@@ -1865,6 +1878,42 @@ mod tests {
                 assert_eq!(e.examples.len(), 1);
                 // "mal", Glue, "bona", "hundo" = 4 tokens
                 assert_eq!(e.examples[0].tokens.len(), 4);
+                assert!(matches!(e.examples[0].tokens[1], crate::ast::Token::Glue));
+            }
+            other => panic!("expected Entry, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_entry_ref_stem_spec() {
+        let (file, errors) = parse_str(
+            r#"
+            entry gelmek {
+                headword: "gelmek"
+                tags: [pos=verb]
+                stems { root: "gel" }
+                meaning: "to come"
+                examples {
+                    example {
+                        tokens: gelmek[$=root]~"iyor"
+                        translation: "is coming"
+                    }
+                }
+            }
+            "#,
+        );
+        assert!(errors.is_empty(), "errors: {:?}", errors);
+        match &file.items[0].node {
+            Item::Entry(e) => {
+                assert_eq!(e.examples.len(), 1);
+                // gelmek[$=root], Glue, "iyor" = 3 tokens
+                assert_eq!(e.examples[0].tokens.len(), 3);
+                if let crate::ast::Token::Ref(r) = &e.examples[0].tokens[0] {
+                    assert!(r.form_spec.is_none());
+                    assert_eq!(r.stem_spec.as_ref().unwrap().node, "root");
+                } else {
+                    panic!("expected Ref token");
+                }
                 assert!(matches!(e.examples[0].tokens[1], crate::ast::Token::Glue));
             }
             other => panic!("expected Entry, got {:?}", other),

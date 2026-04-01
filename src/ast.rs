@@ -572,7 +572,7 @@ pub struct HutFile {
 }
 
 /// Fully qualified entry reference:
-/// `(<namespace>.)* <entry_id> (#<meaning>)? ([<form_spec>])?`
+/// `(<namespace>.)* <entry_id> (#<meaning>)? ([<form_spec>])? | ([$=<stem>])?`
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EntryRef {
@@ -580,5 +580,7 @@ pub struct EntryRef {
     pub entry_id: Ident,
     pub meaning: Option<Ident>,
     pub form_spec: Option<TagConditionList>,
+    /// `[$=stem_name]` — extract a raw stem value instead of an inflected form.
+    pub stem_spec: Option<Ident>,
     pub span: Span,
 }
