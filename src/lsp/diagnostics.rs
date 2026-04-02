@@ -43,6 +43,7 @@ pub fn publish_combined_notification(
     proj_diags: &[&Diagnostic],
     lint_diags: &[&crate::lint::LintDiagnostic],
     proj_source_map: Option<&SourceMap>,
+    extra_lsp_diags: &[lsp_types::Diagnostic],
 ) -> Notification {
     let mut lsp_diags: Vec<lsp_types::Diagnostic> = parse_diags
         .iter()
@@ -61,6 +62,8 @@ pub fn publish_combined_notification(
                 .map(|ld| convert_diagnostic(&ld.diagnostic, Some(ld.rule), url, psm)),
         );
     }
+
+    lsp_diags.extend_from_slice(extra_lsp_diags);
 
     Notification::new(
         "textDocument/publishDiagnostics".into(),

@@ -1093,6 +1093,17 @@ fn publish_doc_diagnostics(
         proj_source_map = None;
     }
 
+    let mut hut_diags: Vec<lsp_types::Diagnostic> = Vec::new();
+    if is_hut_uri(uri) {
+        if let Some(proj) = project {
+            if let Some(p2) = &proj.phase2 {
+                if let Some(&fid) = proj.url_to_file_id.get(uri.as_str()) {
+                    hut_diags = validate_hut_refs(fid, proj, p2);
+                }
+            }
+        }
+    }
+
     diagnostics::publish_combined_notification(
         uri,
         &parse_diags,
@@ -1100,7 +1111,88 @@ fn publish_doc_diagnostics(
         &proj_diags,
         &lint_diags,
         proj_source_map,
+        &hut_diags,
     )
+}
+
+/// Validate entry references in a .hut file and produce LSP diagnostics.
+fn validate_hut_refs(
+    file_id: crate::span::FileId,
+    proj: &ProjectState,
+    phase2: &crate::phase2::Phase2Result,
+) -> Vec<lsp_types::Diagnostic> {
+    use crate::lsp::inlay_hints::{find_resolved_entry, find_matching_form};
+
+    let source = proj.phase1.source_map.source(file_id);
+    let hut_file = match crate::render::parse_hut(source, &proj.phase1.source_map.path(file_id).to_string_lossy()) {
+        Ok(h) => h,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut diags = Vec::new();
+    for token in &hut_file.tokens {
+        let entry_ref = match token {
+            crate::ast::Token::Ref(r) => r,
+            _ => continue,
+        };
+
+        let range = convert::span_to_range(&entry_ref.span, &proj.phase1.source_map);
+        let entry_id = &entry_ref.entry_id.node;
+
+        let resolved = match find_resolved_entry(entry_id, phase2) {
+            Some(e) => e,
+            None => {
+                diags.push(lsp_types::Diagnostic {
+                    range,
+                    severity: Some(lsp_types::DiagnosticSeverity::ERROR),
+                    source: Some("hubullu".into()),
+                    message: format!("entry '{}' is not defined", entry_id),
+                    ..Default::default()
+                });
+                continue;
+            }
+        };
+
+        if let Some(stem_name) = &entry_ref.stem_spec {
+            if !resolved.stems.contains_key(&stem_name.node) {
+                let available: Vec<_> = resolved.stems.keys().collect();
+                let msg = if available.is_empty() {
+                    format!("entry '{}' has no stems defined", entry_id)
+                } else {
+                    format!(
+                        "entry '{}' has no stem '{}' (available: {})",
+                        entry_id,
+                        stem_name.node,
+                        available.into_iter().cloned().collect::<Vec<_>>().join(", ")
+                    )
+                };
+                diags.push(lsp_types::Diagnostic {
+                    range,
+                    severity: Some(lsp_types::DiagnosticSeverity::ERROR),
+                    source: Some("hubullu".into()),
+                    message: msg,
+                    ..Default::default()
+                });
+            }
+        } else if let Some(form_spec) = &entry_ref.form_spec {
+            if !form_spec.conditions.is_empty() && find_matching_form(resolved, form_spec).is_none() {
+                let tags_display: String = form_spec
+                    .conditions
+                    .iter()
+                    .map(|c| format!("{}={}", c.axis.node, c.value.node))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                diags.push(lsp_types::Diagnostic {
+                    range,
+                    severity: Some(lsp_types::DiagnosticSeverity::ERROR),
+                    source: Some("hubullu".into()),
+                    message: format!("entry '{}' has no form matching [{}]", entry_id, tags_display),
+                    ..Default::default()
+                });
+            }
+        }
+    }
+    diags
 }
 
 fn workspace_root(init_params: &InitializeParams) -> Option<PathBuf> {
