@@ -1123,11 +1123,13 @@ fn validate_hut_refs(
 ) -> Vec<lsp_types::Diagnostic> {
     use crate::lsp::inlay_hints::{find_resolved_entry, find_matching_form};
 
-    let source = proj.phase1.source_map.source(file_id);
-    let hut_file = match crate::render::parse_hut(source, &proj.phase1.source_map.path(file_id).to_string_lossy()) {
-        Ok(h) => h,
-        Err(_) => return Vec::new(),
+    // Parse using the project's token cache so spans have the correct file_id.
+    let tokens = match proj.token_cache.get(&file_id) {
+        Some(t) => t,
+        None => return Vec::new(),
     };
+    let parser = crate::parser::Parser::new(tokens.clone(), file_id);
+    let (hut_file, _) = parser.parse_token_list_to_eof();
 
     let mut diags = Vec::new();
     for token in &hut_file.tokens {
