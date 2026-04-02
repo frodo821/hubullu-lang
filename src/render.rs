@@ -405,7 +405,18 @@ pub fn resolve(
                 let local_name = &entry_ref.entry_id.node;
                 let (src, db_name) = ctx.find_entry(&entry_ref.namespace, local_name)?;
 
+                // Verify the entry exists and get its headword.
+                let headword: String = src
+                    .conn
+                    .query_row(
+                        "SELECT headword FROM entries WHERE name = ?1",
+                        [db_name],
+                        |row| row.get(0),
+                    )
+                    .map_err(|_| format!("entry '{}' is not defined", local_name))?;
+
                 if let Some(stem_name) = &entry_ref.stem_spec {
+                    // Check stem existence with a clear message.
                     let stem_value: String = src
                         .conn
                         .query_row(
@@ -415,20 +426,24 @@ pub fn resolve(
                             rusqlite::params![db_name, stem_name.node],
                             |row| row.get(0),
                         )
-                        .map_err(|e| {
-                            format!("stem '{}[$={}]' not found: {}", local_name, stem_name.node, e)
+                        .map_err(|_| {
+                            // List available stems for a helpful message.
+                            let available = list_stems(src, db_name);
+                            if available.is_empty() {
+                                format!(
+                                    "entry '{}' has no stems defined (requested [$={}])",
+                                    local_name, stem_name.node
+                                )
+                            } else {
+                                format!(
+                                    "entry '{}' has no stem '{}' (available: {})",
+                                    local_name, stem_name.node, available.join(", ")
+                                )
+                            }
                         })?;
                     parts.push(ResolvedPart::Text(stem_value));
                 } else { match &entry_ref.form_spec {
                     None => {
-                        let headword: String = src
-                            .conn
-                            .query_row(
-                                "SELECT headword FROM entries WHERE name = ?1",
-                                [db_name],
-                                |row| row.get(0),
-                            )
-                            .map_err(|e| format!("entry '{}' not found: {}", local_name, e))?;
                         parts.push(ResolvedPart::Text(headword));
                     }
                     Some(form_spec) => {
@@ -482,7 +497,10 @@ pub fn resolve(
                                 .map(|c| format!("{}={}", c.axis.node, c.value.node))
                                 .collect::<Vec<_>>()
                                 .join(", ");
-                            format!("form '{}[{}]' not found", local_name, tags_display)
+                            format!(
+                                "entry '{}' has no form matching [{}]",
+                                local_name, tags_display
+                            )
                         })?;
                         parts.push(ResolvedPart::Text(form_str));
                     }
@@ -491,6 +509,23 @@ pub fn resolve(
         }
     }
     Ok(parts)
+}
+
+/// List available stem names for an entry (for error messages).
+fn list_stems(src: &EntrySource, db_name: &str) -> Vec<String> {
+    let mut stmt = match src.conn.prepare(
+        "SELECT s.stem_name FROM stems s \
+         JOIN entries e ON s.entry_id = e.id \
+         WHERE e.name = ?1 ORDER BY s.stem_name",
+    ) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let rows = match stmt.query_map([db_name], |row| row.get::<_, String>(0)) {
+        Ok(r) => r,
+        Err(_) => return Vec::new(),
+    };
+    rows.flatten().collect()
 }
 
 /// Read render config from the first available `.huc` source in the context,
