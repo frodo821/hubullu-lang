@@ -88,23 +88,23 @@ pub fn compile_cached(hu_path: &Path) -> Result<PathBuf, String> {
     );
 
     let needs_compile = if cache_path.exists() {
-        let src_meta = std::fs::metadata(&hu_path)
-            .map_err(|e| format!("cannot stat '{}': {}", hu_path.display(), e))?;
-        let cache_meta = std::fs::metadata(&cache_path)
-            .map_err(|e| format!("cannot stat '{}': {}", cache_path.display(), e))?;
-        let src_mtime = src_meta
-            .modified()
-            .map_err(|e| format!("cannot read mtime: {}", e))?;
-        let cache_mtime = cache_meta
-            .modified()
-            .map_err(|e| format!("cannot read mtime: {}", e))?;
-        if src_mtime > cache_mtime {
+        if !huc_schema_up_to_date(&cache_path) {
             true
         } else {
-            // Schema migration check: if the cached .huc is missing required
-            // tables (e.g. stems added in a newer compiler version), force
-            // a full recompile.
-            !huc_schema_up_to_date(&cache_path)
+            // Run phase1 to discover all transitive source files, then
+            // check if any of them is newer than the cached .huc.
+            let cache_mtime = std::fs::metadata(&cache_path)
+                .and_then(|m| m.modified())
+                .map_err(|e| format!("cannot stat '{}': {}", cache_path.display(), e))?;
+
+            let p1 = crate::phase1::run_phase1(&hu_path);
+            let any_newer = p1.path_to_id.keys().any(|src_path| {
+                std::fs::metadata(src_path)
+                    .and_then(|m| m.modified())
+                    .map(|t| t > cache_mtime)
+                    .unwrap_or(true) // if we can't stat it, assume stale
+            });
+            any_newer
         }
     } else {
         true
@@ -370,6 +370,82 @@ impl ResolveContext {
             }
         }
     }
+
+    /// Query display texts for tag axes and values.
+    ///
+    /// Returns a map from `(axis_name, value_name)` to `display_text`,
+    /// plus a map from `axis_name` to its own display text (first row's lang).
+    /// Searches all sources and merges results.
+    pub fn query_tag_display(&self) -> (HashMap<String, String>, HashMap<(String, String), String>) {
+        let mut axis_display: HashMap<String, String> = HashMap::new();
+        let mut value_display: HashMap<(String, String), String> = HashMap::new();
+        let all_sources = self.default_sources.iter()
+            .chain(self.namespaced.values());
+        for src in all_sources {
+            let mut stmt = match src.conn.prepare(
+                "SELECT axis_name, value_name, display_text FROM tagaxis_meta",
+            ) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let rows = match stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            }) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            for row in rows.flatten() {
+                let (axis, value, display) = row;
+                // Use the value display text for axis display if not yet set
+                // (axis_name itself doesn't have a separate display row,
+                // but we capitalize the axis name as fallback).
+                axis_display.entry(axis.clone()).or_insert_with(|| {
+                    let mut c = axis.chars();
+                    match c.next() {
+                        Some(first) => first.to_uppercase().to_string() + c.as_str(),
+                        None => axis.clone(),
+                    }
+                });
+                value_display.entry((axis, value)).or_insert(display);
+            }
+        }
+        (axis_display, value_display)
+    }
+
+    /// Query all forms for a given entry name.
+    ///
+    /// Returns a list of `(form_string, tags_string)` pairs, where `tags_string`
+    /// is comma-separated `axis=value` pairs (e.g. `"case=nom,number=sg"`).
+    /// Searches default sources first, then namespaced sources.
+    pub fn query_forms(&self, entry_name: &str) -> Vec<(String, String)> {
+        let all_sources = self.default_sources.iter()
+            .chain(self.namespaced.values());
+        for src in all_sources {
+            let mut stmt = match src.conn.prepare(
+                "SELECT f.form_str, f.tags FROM forms f \
+                 JOIN entries e ON f.entry_id = e.id \
+                 WHERE e.name = ?1 ORDER BY f.tags",
+            ) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let rows = match stmt.query_map([entry_name], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            }) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let forms: Vec<(String, String)> = rows.flatten().collect();
+            if !forms.is_empty() {
+                return forms;
+            }
+        }
+        Vec::new()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -380,6 +456,30 @@ impl ResolveContext {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolvedPart {
     Text(String),
+    Glue,
+    Newline,
+}
+
+/// Metadata about a resolved entry reference (for annotated rendering).
+#[derive(Debug, Clone)]
+pub struct EntryAnnotation {
+    /// Entry name (identifier in the .hu file).
+    pub entry_name: String,
+    /// The headword of the entry.
+    pub headword: String,
+    /// The meaning field of the entry.
+    pub meaning: String,
+    /// Form tags if a specific form was requested, e.g. "tense=present, number=sg".
+    pub form_tags: Option<String>,
+}
+
+/// A resolved piece with optional entry annotation.
+#[derive(Debug, Clone)]
+pub enum AnnotatedPart {
+    /// Literal text (no entry reference).
+    Lit(String),
+    /// Text resolved from a dictionary entry, with metadata.
+    Entry { text: String, annotation: EntryAnnotation },
     Glue,
     Newline,
 }
@@ -505,6 +605,160 @@ pub fn resolve(
                         parts.push(ResolvedPart::Text(form_str));
                     }
                 } }
+            }
+        }
+    }
+    Ok(parts)
+}
+
+/// Resolve a list of AST tokens with entry annotations (for HTML rendering).
+pub fn resolve_annotated(
+    tokens: &[ast::Token],
+    ctx: &ResolveContext,
+) -> Result<Vec<AnnotatedPart>, String> {
+    let mut parts = Vec::new();
+    for token in tokens {
+        match token {
+            ast::Token::Glue => {
+                parts.push(AnnotatedPart::Glue);
+            }
+            ast::Token::Newline => {
+                parts.push(AnnotatedPart::Newline);
+            }
+            ast::Token::Lit(s) => {
+                parts.push(AnnotatedPart::Lit(s.node.clone()));
+            }
+            ast::Token::Ref(entry_ref) => {
+                let local_name = &entry_ref.entry_id.node;
+                let (src, db_name) = ctx.find_entry(&entry_ref.namespace, local_name)?;
+
+                let (headword, meaning): (String, String) = src
+                    .conn
+                    .query_row(
+                        "SELECT headword, meaning FROM entries WHERE name = ?1",
+                        [db_name],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .map_err(|_| format!("entry '{}' is not defined", local_name))?;
+
+                if let Some(stem_name) = &entry_ref.stem_spec {
+                    let stem_value: String = src
+                        .conn
+                        .query_row(
+                            "SELECT s.stem_value FROM stems s \
+                             JOIN entries e ON s.entry_id = e.id \
+                             WHERE e.name = ?1 AND s.stem_name = ?2",
+                            rusqlite::params![db_name, stem_name.node],
+                            |row| row.get(0),
+                        )
+                        .map_err(|_| {
+                            let available = list_stems(src, db_name);
+                            if available.is_empty() {
+                                format!(
+                                    "entry '{}' has no stems defined (requested [$={}])",
+                                    local_name, stem_name.node
+                                )
+                            } else {
+                                format!(
+                                    "entry '{}' has no stem '{}' (available: {})",
+                                    local_name, stem_name.node, available.join(", ")
+                                )
+                            }
+                        })?;
+                    parts.push(AnnotatedPart::Entry {
+                        text: stem_value,
+                        annotation: EntryAnnotation {
+                            entry_name: db_name.to_string(),
+                            headword: headword.clone(),
+                            meaning: meaning.clone(),
+                            form_tags: Some(format!("$={}", stem_name.node)),
+                        },
+                    });
+                } else {
+                    match &entry_ref.form_spec {
+                        None => {
+                            parts.push(AnnotatedPart::Entry {
+                                text: headword.clone(),
+                                annotation: EntryAnnotation {
+                                    entry_name: db_name.to_string(),
+                                    headword,
+                                    meaning,
+                                    form_tags: None,
+                                },
+                            });
+                        }
+                        Some(form_spec) => {
+                            let mut requested: Vec<(String, String)> = form_spec
+                                .conditions
+                                .iter()
+                                .map(|c| (c.axis.node.clone(), c.value.node.clone()))
+                                .collect();
+                            requested.sort();
+
+                            let mut stmt = src
+                                .conn
+                                .prepare(
+                                    "SELECT f.form_str, f.tags FROM forms f \
+                                     JOIN entries e ON f.entry_id = e.id \
+                                     WHERE e.name = ?1",
+                                )
+                                .map_err(|e| format!("query failed: {}", e))?;
+                            let mut rows = stmt
+                                .query([db_name])
+                                .map_err(|e| format!("query failed: {}", e))?;
+
+                            let mut found = None;
+                            while let Some(row) = rows
+                                .next()
+                                .map_err(|e| format!("query failed: {}", e))?
+                            {
+                                let form_str: String =
+                                    row.get(0).map_err(|e| format!("read failed: {}", e))?;
+                                let tags_str: String =
+                                    row.get(1).map_err(|e| format!("read failed: {}", e))?;
+                                let mut stored: Vec<(String, String)> = tags_str
+                                    .split(',')
+                                    .filter(|s| !s.is_empty())
+                                    .filter_map(|pair| {
+                                        let mut parts = pair.splitn(2, '=');
+                                        Some((
+                                            parts.next()?.to_string(),
+                                            parts.next()?.to_string(),
+                                        ))
+                                    })
+                                    .collect();
+                                stored.sort();
+                                if stored == requested {
+                                    found = Some(form_str);
+                                    break;
+                                }
+                            }
+
+                            let tags_display = form_spec
+                                .conditions
+                                .iter()
+                                .map(|c| format!("{}={}", c.axis.node, c.value.node))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+
+                            let form_str = found.ok_or_else(|| {
+                                format!(
+                                    "entry '{}' has no form matching [{}]",
+                                    local_name, tags_display
+                                )
+                            })?;
+                            parts.push(AnnotatedPart::Entry {
+                                text: form_str,
+                                annotation: EntryAnnotation {
+                                    entry_name: db_name.to_string(),
+                                    headword,
+                                    meaning,
+                                    form_tags: Some(tags_display),
+                                },
+                            });
+                        }
+                    }
+                }
             }
         }
     }

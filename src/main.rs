@@ -23,8 +23,16 @@ enum Command {
     },
     /// Render a .hut token list
     Render {
-        /// Input .hut file
-        input: PathBuf,
+        /// Input .hut file (single-file mode)
+        input: Option<PathBuf>,
+
+        /// Directory of .hut files to render as a static HTML site
+        #[clap(long, short = 'd')]
+        dir: Option<PathBuf>,
+
+        /// Output directory for HTML site (required with --dir)
+        #[clap(long, short = 'o')]
+        outdir: Option<PathBuf>,
 
         /// Pre-compiled .huc file to use for resolution (skips .hu compilation)
         #[clap(long)]
@@ -135,65 +143,91 @@ fn main() {
                 process::exit(1);
             }
         }
-        Command::Render { input, huc } => {
-            let source = match std::fs::read_to_string(&input) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("cannot read '{}': {}", input.display(), e);
-                    process::exit(1);
-                }
-            };
-
-            let hut_file = match hubullu::render::parse_hut(&source, &input.to_string_lossy()) {
-                Ok(h) => h,
-                Err(msg) => {
-                    eprintln!("{}", msg);
-                    process::exit(1);
-                }
-            };
-
-            let hut_dir = input
-                .canonicalize()
-                .ok()
-                .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-
-            let ctx = if let Some(huc_path) = huc {
-                match hubullu::render::ResolveContext::from_huc(
-                    &hut_file.references,
-                    &hut_dir,
-                    &huc_path,
+        Command::Render { input, dir, outdir, huc } => {
+            if let Some(dir) = dir {
+                // Site mode: render all .hut files under dir to HTML.
+                let outdir = match outdir {
+                    Some(o) => o,
+                    None => {
+                        eprintln!("error: --outdir is required with --dir");
+                        process::exit(1);
+                    }
+                };
+                match hubullu::render_html::render_site(
+                    &dir,
+                    &outdir,
+                    huc.as_deref(),
                 ) {
-                    Ok(c) => c,
+                    Ok(()) => {}
                     Err(msg) => {
                         eprintln!("{}", msg);
                         process::exit(1);
                     }
                 }
+            } else if let Some(input) = input {
+                // Single-file mode: render to stdout (existing behavior).
+                let source = match std::fs::read_to_string(&input) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("cannot read '{}': {}", input.display(), e);
+                        process::exit(1);
+                    }
+                };
+
+                let hut_file = match hubullu::render::parse_hut(&source, &input.to_string_lossy()) {
+                    Ok(h) => h,
+                    Err(msg) => {
+                        eprintln!("{}", msg);
+                        process::exit(1);
+                    }
+                };
+
+                let hut_dir = input
+                    .canonicalize()
+                    .ok()
+                    .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+
+                let ctx = if let Some(huc_path) = huc {
+                    match hubullu::render::ResolveContext::from_huc(
+                        &hut_file.references,
+                        &hut_dir,
+                        &huc_path,
+                    ) {
+                        Ok(c) => c,
+                        Err(msg) => {
+                            eprintln!("{}", msg);
+                            process::exit(1);
+                        }
+                    }
+                } else {
+                    match hubullu::render::ResolveContext::from_references(
+                        &hut_file.references,
+                        &hut_dir,
+                    ) {
+                        Ok(c) => c,
+                        Err(msg) => {
+                            eprintln!("{}", msg);
+                            process::exit(1);
+                        }
+                    }
+                };
+
+                let parts = match hubullu::render::resolve(&hut_file.tokens, &ctx) {
+                    Ok(p) => p,
+                    Err(msg) => {
+                        eprintln!("{}", msg);
+                        process::exit(1);
+                    }
+                };
+
+                let (separator, no_sep_before) = hubullu::render::read_render_config(&ctx);
+                let output = hubullu::render::smart_join(&parts, &separator, &no_sep_before);
+                println!("{}", output);
             } else {
-                match hubullu::render::ResolveContext::from_references(
-                    &hut_file.references,
-                    &hut_dir,
-                ) {
-                    Ok(c) => c,
-                    Err(msg) => {
-                        eprintln!("{}", msg);
-                        process::exit(1);
-                    }
-                }
-            };
-
-            let parts = match hubullu::render::resolve(&hut_file.tokens, &ctx) {
-                Ok(p) => p,
-                Err(msg) => {
-                    eprintln!("{}", msg);
-                    process::exit(1);
-                }
-            };
-
-            let (separator, no_sep_before) = hubullu::render::read_render_config(&ctx);
-            let output = hubullu::render::smart_join(&parts, &separator, &no_sep_before);
-            println!("{}", output);
+                eprintln!("error: provide an input .hut file or use --dir");
+                process::exit(1);
+            }
         }
         #[cfg(feature = "lsp")]
         Command::Lsp => {

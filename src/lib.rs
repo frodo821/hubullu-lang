@@ -36,6 +36,9 @@ pub mod emit_sqlite;
 /// `.hut` file rendering — resolves token lists against a compiled `.huc` file.
 #[cfg(feature = "sqlite")]
 pub mod render;
+/// Static HTML site generation from `.hut` files.
+#[cfg(feature = "sqlite")]
+pub mod render_html;
 /// Diagnostic types for error/warning reporting with source locations.
 pub mod error;
 /// Inflection paradigm evaluator — cartesian expansion, rule matching, compose, delegation.
