@@ -42,7 +42,9 @@ fn create_schema(conn: &Connection) -> Result<(), Diagnostic> {
             name TEXT NOT NULL,
             headword TEXT NOT NULL,
             meaning TEXT NOT NULL,
-            inflection_class_id INTEGER
+            inflection_class_id INTEGER,
+            etymology_proto TEXT,
+            etymology_note TEXT
         );
 
         CREATE TABLE IF NOT EXISTS entry_tags (
@@ -190,8 +192,8 @@ fn insert_data(conn: &Connection, p2: &Phase2Result) -> Result<(), Diagnostic> {
             .and_then(|name| inflection_ids.get(name).copied());
 
         conn.execute(
-            "INSERT INTO entries (name, headword, meaning, inflection_class_id) VALUES (?1, ?2, ?3, ?4)",
-            params![entry.name, entry.headword, entry.meaning, infl_class_id],
+            "INSERT INTO entries (name, headword, meaning, inflection_class_id, etymology_proto, etymology_note) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![entry.name, entry.headword, entry.meaning, infl_class_id, entry.etymology_proto, entry.etymology_note],
         )
         .map_err(|e| {
             Diagnostic::error(format!(

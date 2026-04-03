@@ -182,6 +182,51 @@ h1 {
   margin: 0 0 0.8rem;
   font-style: italic;
 }
+.entry-card .meanings {
+  margin: 0 0 0.8rem;
+  padding: 0;
+  list-style: none;
+}
+.entry-card .meanings li {
+  color: #555;
+  font-style: italic;
+  margin: 0.15rem 0;
+}
+.entry-card .meanings li .meaning-id {
+  font-style: normal;
+  font-weight: 600;
+  color: #777;
+  font-size: 0.85rem;
+}
+.entry-card .tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin: 0.3rem 0 0.6rem;
+}
+.entry-card .tag {
+  display: inline-block;
+  background: #eef1f5;
+  color: #556;
+  font-size: 0.78rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: 3px;
+}
+.entry-card .etymology {
+  color: #666;
+  font-size: 0.9rem;
+  margin: 0.4rem 0 0.8rem;
+}
+.entry-card .etymology .proto {
+  font-family: "Georgia", serif;
+  font-style: italic;
+}
+.entry-card .etymology .etym-note {
+  margin-left: 0.3rem;
+}
+.entry-card .etymology .etym-links {
+  margin-top: 0.2rem;
+}
 .entry-card table {
   border-collapse: collapse;
   font-size: 0.9rem;
@@ -198,6 +243,10 @@ h1 {
   font-weight: 600;
   font-size: 0.85rem;
   color: #444;
+  vertical-align: middle;
+}
+.entry-card th[rowspan] {
+  border-right: 2px solid #ccc;
 }
 .entry-card td {
   font-family: "Georgia", serif;
@@ -397,18 +446,24 @@ fn parse_tags(tags: &str) -> Vec<(String, String)> {
 /// A parsed form: the surface string and its tag key-value pairs.
 type ParsedForm = (String, Vec<(String, String)>);
 
+/// Maximum values per axis shown in a single table section.
+const MAX_ROW_GROUP: usize = 6;
+const MAX_COL_GROUP: usize = 6;
+
 /// Build inflection table(s) for a set of forms.
 ///
 /// Strategy for N-dimensional paradigms:
 ///   1. Collect all axes and their distinct values.
 ///   2. Pick one axis for **columns** (fewest values, preferring "number"/"gender").
-///   3. Pick one or two axes for **rows** (next fewest values).
-///   4. Any remaining axes become **split axes** — each combination of their
-///      values produces a separate sub-table with an `<h3>` heading.
-///
-/// This keeps every table readable (≤ ~20 columns, manageable row count)
-/// regardless of how many axes the paradigm has.
-fn build_inflection_table(forms: &[(String, String)], dm: &DisplayMap) -> Option<String> {
+///   3. Remaining axes become **rows** (most-valued outermost, with `rowspan`
+///      merging), or **split axes** (if more than 2 row axes).
+///   4. Primary row values are chunked at [`MAX_ROW_GROUP`] (6), column
+///      values at [`MAX_COL_GROUP`] (6); excess produces sub-tables.
+fn build_inflection_table(
+    forms: &[(String, String)],
+    dm: &DisplayMap,
+    def_order: &HashMap<String, Vec<String>>,
+) -> Option<String> {
     if forms.is_empty() { return None; }
 
     let parsed: Vec<ParsedForm> = forms
@@ -417,6 +472,8 @@ fn build_inflection_table(forms: &[(String, String)], dm: &DisplayMap) -> Option
         .collect();
 
     // Collect axes → ordered distinct values.
+    // Use definition order from tagaxis_meta when available, then append
+    // any values not covered by the definition (fallback to data order).
     let mut axis_values: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for (_, tags) in &parsed {
         for (k, v) in tags {
@@ -426,13 +483,25 @@ fn build_inflection_table(forms: &[(String, String)], dm: &DisplayMap) -> Option
             }
         }
     }
+    // Re-sort values according to definition order.
+    for (axis, vals) in axis_values.iter_mut() {
+        if let Some(order) = def_order.get(axis) {
+            vals.sort_by_key(|v| {
+                order.iter().position(|o| o == v).unwrap_or(usize::MAX)
+            });
+        }
+    }
 
     if axis_values.is_empty() { return None; }
 
-    // 1-axis: simple two-column table.
+    // 1-axis: simple two-column table (chunked at MAX_ROW_GROUP).
     if axis_values.len() == 1 {
         let (axis, vals) = axis_values.iter().next().unwrap();
-        return Some(render_single_axis_table(axis, vals, &parsed, dm));
+        let mut html = String::new();
+        for chunk in vals.chunks(MAX_ROW_GROUP) {
+            html.push_str(&render_single_axis_table(axis, chunk, &parsed, dm));
+        }
+        return Some(html);
     }
 
     // Classify axes into column, row, and split roles.
@@ -464,33 +533,110 @@ fn build_inflection_table(forms: &[(String, String)], dm: &DisplayMap) -> Option
             })
             .collect();
 
-        // Build distinct row keys.
-        let row_keys = enumerate_row_keys(&subset, &row_axes, &axis_values);
+        // Chunk primary row axis values (≤ MAX_ROW_GROUP per sub-table).
+        let primary_row_chunks: Vec<Vec<String>> = if !row_axes.is_empty() {
+            axis_values[&row_axes[0]]
+                .chunks(MAX_ROW_GROUP)
+                .map(|c| c.to_vec())
+                .collect()
+        } else {
+            vec![Vec::new()]
+        };
 
-        html.push_str("<table>\n<thead><tr><th></th>");
-        for cv in col_vals {
-            html.push_str(&format!("<th>{}</th>", html_escape(dm.value_name(&col_axis, cv))));
-        }
-        html.push_str("</tr></thead>\n<tbody>\n");
+        // Chunk column values (≤ MAX_COL_GROUP per sub-table).
+        let col_chunks: Vec<&[String]> = col_vals.chunks(MAX_COL_GROUP).collect();
+        let need_chunk_heading = primary_row_chunks.len() > 1 || col_chunks.len() > 1;
 
-        for row_key in &row_keys {
-            let row_label: String = row_key.iter()
-                .map(|(k, v)| dm.value_name(k, v))
-                .collect::<Vec<_>>()
-                .join(" ");
-            html.push_str(&format!("<tr><th>{}</th>", html_escape(&row_label)));
-            for cv in col_vals {
-                let mut lookup: Vec<(&str, &str)> = row_key.iter()
-                    .map(|(k, v)| (k.as_str(), v.as_str()))
-                    .collect();
-                lookup.extend(split_key.iter().map(|(k, v)| (k.as_str(), v.as_str())));
-                lookup.push((col_axis.as_str(), cv.as_str()));
-                let form = find_form(&subset, &lookup);
-                html.push_str(&format!("<td>{}</td>", html_escape(&form)));
+        for row_chunk in &primary_row_chunks {
+            for col_chunk in &col_chunks {
+                // Sub-heading when chunking produces multiple tables.
+                if need_chunk_heading {
+                    let mut parts = Vec::new();
+                    if primary_row_chunks.len() > 1 && !row_chunk.is_empty() {
+                        let first = dm.value_name(&row_axes[0], &row_chunk[0]);
+                        let last = dm.value_name(&row_axes[0], row_chunk.last().unwrap());
+                        if first == last {
+                            parts.push(first.to_string());
+                        } else {
+                            parts.push(format!("{} – {}", first, last));
+                        }
+                    }
+                    if col_chunks.len() > 1 {
+                        let first = dm.value_name(&col_axis, &col_chunk[0]);
+                        let last = dm.value_name(&col_axis, col_chunk.last().unwrap());
+                        if first == last {
+                            parts.push(first.to_string());
+                        } else {
+                            parts.push(format!("{} – {}", first, last));
+                        }
+                    }
+                    if !parts.is_empty() {
+                        html.push_str(&format!("<h3>{}</h3>\n", html_escape(&parts.join(" / "))));
+                    }
+                }
+
+                // Build full cartesian-product row keys, scoped to this chunk.
+                let mut chunk_av = axis_values.clone();
+                if !row_axes.is_empty() {
+                    chunk_av.insert(row_axes[0].clone(), row_chunk.clone());
+                }
+                let row_keys = enumerate_row_keys_full(&row_axes, &chunk_av);
+
+                let num_row_th = row_axes.len();
+
+                // ---- thead ----
+                html.push_str("<table>\n<thead><tr>");
+                if num_row_th > 0 {
+                    html.push_str(&format!("<th colspan=\"{}\"></th>", num_row_th));
+                }
+                for cv in *col_chunk {
+                    html.push_str(&format!("<th>{}</th>",
+                        html_escape(dm.value_name(&col_axis, cv))));
+                }
+                html.push_str("</tr></thead>\n<tbody>\n");
+
+                // ---- tbody with rowspan ----
+                for (i, row_key) in row_keys.iter().enumerate() {
+                    html.push_str("<tr>");
+
+                    // Row header cells — merge consecutive identical prefixes.
+                    for (axis_idx, (axis, value)) in row_key.iter().enumerate() {
+                        let is_first = i == 0
+                            || row_keys[i][..=axis_idx] != row_keys[i - 1][..=axis_idx];
+                        if is_first {
+                            let span = row_keys[i..].iter()
+                                .take_while(|rk| rk[..=axis_idx] == row_key[..=axis_idx])
+                                .count();
+                            if span > 1 {
+                                html.push_str(&format!(
+                                    "<th rowspan=\"{}\">{}</th>",
+                                    span,
+                                    html_escape(dm.value_name(axis, value)),
+                                ));
+                            } else {
+                                html.push_str(&format!(
+                                    "<th>{}</th>",
+                                    html_escape(dm.value_name(axis, value)),
+                                ));
+                            }
+                        }
+                    }
+
+                    // Data cells.
+                    for cv in *col_chunk {
+                        let mut lookup: Vec<(&str, &str)> = row_key.iter()
+                            .map(|(k, v)| (k.as_str(), v.as_str()))
+                            .collect();
+                        lookup.extend(split_key.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+                        lookup.push((col_axis.as_str(), cv.as_str()));
+                        let form = find_form(&subset, &lookup);
+                        html.push_str(&format!("<td>{}</td>", html_escape(&form)));
+                    }
+                    html.push_str("</tr>\n");
+                }
+                html.push_str("</tbody></table>\n");
             }
-            html.push_str("</tr>\n");
         }
-        html.push_str("</tbody></table>\n");
     }
 
     Some(html)
@@ -515,7 +661,8 @@ fn render_single_axis_table(axis: &str, vals: &[String], parsed: &[ParsedForm], 
 /// Decide which axes are columns, rows, and split axes.
 ///
 /// - **Column axis** (1): fewest distinct values, preferring "number"/"gender".
-/// - **Row axes** (up to 2): next fewest, so the table stays compact.
+/// - **Row axes** (up to 2): most-valued outermost, with `rowspan` merging.
+///   Prefers "case"/"tense"/"person".
 /// - **Split axes** (rest): each combination gets its own sub-table.
 fn assign_axis_roles(
     axis_values: &BTreeMap<String, Vec<String>>,
@@ -523,7 +670,7 @@ fn assign_axis_roles(
     // Axes that prefer to be columns.
     const COL_PREFER: &[&str] = &["number", "gender"];
     // Axes that prefer to be row (inner, not split).
-    const ROW_PREFER: &[&str] = &["person", "case", "tense"];
+    const ROW_PREFER: &[&str] = &["case", "tense", "person"];
 
     // Sort axes by number of distinct values (ascending).
     let mut sorted: Vec<(String, usize)> = axis_values.iter()
@@ -531,7 +678,7 @@ fn assign_axis_roles(
         .collect();
     sorted.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
 
-    // Pick column axis.
+    // Pick column axis: prefer COL_PREFER, then fewest values.
     let col_axis = COL_PREFER.iter()
         .find(|&&p| axis_values.contains_key(p))
         .map(|&s| s.to_string())
@@ -542,17 +689,17 @@ fn assign_axis_roles(
         .collect();
 
     if remaining.len() <= 2 {
-        // Everything fits in one table: all remaining axes become rows.
-        let row_axes: Vec<String> = remaining.into_iter().map(|(k, _)| k).collect();
+        let mut row_axes: Vec<String> = remaining.into_iter().map(|(k, _)| k).collect();
+        // Most values first → outermost row axis.
+        row_axes.sort_by_key(|k| std::cmp::Reverse(axis_values[k].len()));
         return (col_axis, row_axes, Vec::new());
     }
 
     // More than 2 remaining axes — need to split.
-    // Pick up to 2 row axes (prefer ROW_PREFER, then fewest values).
+    // Pick up to 2 row axes (prefer ROW_PREFER, then most values).
     let mut row_axes = Vec::new();
     let mut split_axes = Vec::new();
 
-    // First pass: grab preferred row axes.
     let mut unassigned: Vec<(String, usize)> = remaining;
     for &pref in ROW_PREFER {
         if row_axes.len() >= 2 { break; }
@@ -560,14 +707,19 @@ fn assign_axis_roles(
             row_axes.push(unassigned.remove(idx).0);
         }
     }
-    // Fill remaining row slots with fewest-valued axes.
     while row_axes.len() < 2 && !unassigned.is_empty() {
-        row_axes.push(unassigned.remove(0).0);
+        // Pick the axis with the most values from the remaining.
+        let idx = unassigned.iter().enumerate()
+            .max_by_key(|(_, (_, n))| *n)
+            .map(|(i, _)| i)
+            .unwrap();
+        row_axes.push(unassigned.remove(idx).0);
     }
-    // Everything left is a split axis.
     for (k, _) in unassigned {
         split_axes.push(k);
     }
+    // Most values first → outermost row axis.
+    row_axes.sort_by_key(|k| std::cmp::Reverse(axis_values[k].len()));
 
     (col_axis, row_axes, split_axes)
 }
@@ -607,17 +759,17 @@ fn enumerate_split_keys(
     combos
 }
 
-/// Enumerate distinct row keys from a form subset, preserving
-/// the order values appear in `axis_values`.
-fn enumerate_row_keys(
-    subset: &[&ParsedForm],
+/// Enumerate full cartesian-product row keys from axis values.
+///
+/// Unlike split keys, row keys are **not** filtered — empty combinations
+/// render as "—" cells, keeping the table regular for `rowspan` merging.
+fn enumerate_row_keys_full(
     row_axes: &[String],
     axis_values: &BTreeMap<String, Vec<String>>,
 ) -> Vec<Vec<(String, String)>> {
     if row_axes.is_empty() {
         return vec![Vec::new()];
     }
-    // Cartesian product of row axis values, in order.
     let mut combos: Vec<Vec<(String, String)>> = vec![Vec::new()];
     for axis in row_axes {
         let vals = &axis_values[axis];
@@ -631,14 +783,6 @@ fn enumerate_row_keys(
         }
         combos = next;
     }
-    // Filter to only combos that have at least one form.
-    combos.retain(|combo| {
-        subset.iter().any(|(_, tags)| {
-            combo.iter().all(|(ck, cv)| {
-                tags.iter().any(|(k, v)| k == ck && v == cv)
-            })
-        })
-    });
     combos
 }
 
@@ -683,15 +827,119 @@ fn render_glossary_page(
     }
     let dm = DisplayMap { axis: axis_display, value: value_display };
 
+    // Build axis value definition order from all contexts.
+    let mut axis_value_order: HashMap<String, Vec<String>> = HashMap::new();
+    for ctx in contexts {
+        for (axis, vals) in ctx.query_axis_value_order() {
+            let entry = axis_value_order.entry(axis).or_default();
+            for v in vals {
+                if !entry.contains(&v) {
+                    entry.push(v);
+                }
+            }
+        }
+    }
+
     let mut body = String::new();
 
     for (_, ann) in entries {
         body.push_str(&format!(
-            "<div class=\"entry-card\" id=\"entry-{}\">\n<h2>{}</h2>\n<p class=\"meaning\">{}</p>\n",
+            "<div class=\"entry-card\" id=\"entry-{}\">\n<h2>{}</h2>\n",
             html_escape(&ann.entry_name),
             html_escape(&ann.headword),
-            html_escape(&ann.meaning),
         ));
+
+        // Tags
+        let mut tags = Vec::new();
+        for ctx in contexts {
+            tags = ctx.query_entry_tags(&ann.entry_name);
+            if !tags.is_empty() { break; }
+        }
+        if !tags.is_empty() {
+            body.push_str("<div class=\"tags\">");
+            for (axis, value) in &tags {
+                let display_val = dm.value_name(axis, value);
+                body.push_str(&format!(
+                    "<span class=\"tag\">{}</span>",
+                    html_escape(display_val),
+                ));
+            }
+            body.push_str("</div>\n");
+        }
+
+        // Meanings
+        let mut meanings = Vec::new();
+        for ctx in contexts {
+            meanings = ctx.query_meanings(&ann.entry_name);
+            if !meanings.is_empty() { break; }
+        }
+        if meanings.is_empty() {
+            // Single meaning
+            body.push_str(&format!(
+                "<p class=\"meaning\">{}</p>\n",
+                html_escape(&ann.meaning),
+            ));
+        } else {
+            body.push_str("<ul class=\"meanings\">\n");
+            for (mid, mtext) in &meanings {
+                body.push_str(&format!(
+                    "<li><span class=\"meaning-id\">{}</span> {}</li>\n",
+                    html_escape(mid),
+                    html_escape(mtext),
+                ));
+            }
+            body.push_str("</ul>\n");
+        }
+
+        // Etymology
+        let mut etymology = (None, None);
+        let mut etym_links = Vec::new();
+        for ctx in contexts {
+            let ety = ctx.query_etymology(&ann.entry_name);
+            if ety.0.is_some() || ety.1.is_some() {
+                etymology = ety;
+                break;
+            }
+        }
+        for ctx in contexts {
+            let links = ctx.query_links(&ann.entry_name);
+            let filtered: Vec<_> = links.into_iter()
+                .filter(|(_, lt)| lt == "derived_from" || lt == "cognate")
+                .collect();
+            if !filtered.is_empty() {
+                etym_links = filtered;
+                break;
+            }
+        }
+        if etymology.0.is_some() || etymology.1.is_some() || !etym_links.is_empty() {
+            body.push_str("<div class=\"etymology\">");
+            if let Some(proto) = &etymology.0 {
+                body.push_str(&format!(
+                    "<span class=\"proto\">{}</span>",
+                    html_escape(proto),
+                ));
+            }
+            if let Some(note) = &etymology.1 {
+                body.push_str(&format!(
+                    "<span class=\"etym-note\">{}</span>",
+                    html_escape(note),
+                ));
+            }
+            if !etym_links.is_empty() {
+                body.push_str("<div class=\"etym-links\">");
+                for (dst_name, link_type) in &etym_links {
+                    let label = if link_type == "derived_from" { "← " } else { "cf. " };
+                    body.push_str(&format!(
+                        "{}<a href=\"#entry-{}\">{}</a> ",
+                        label,
+                        html_escape(dst_name),
+                        html_escape(dst_name),
+                    ));
+                }
+                body.push_str("</div>");
+            }
+            body.push_str("</div>\n");
+        }
 
         // Query forms from any available context.
         let mut forms = Vec::new();
@@ -700,7 +948,7 @@ fn render_glossary_page(
             if !forms.is_empty() { break; }
         }
 
-        if let Some(table_html) = build_inflection_table(&forms, &dm) {
+        if let Some(table_html) = build_inflection_table(&forms, &dm, &axis_value_order) {
             body.push_str(&table_html);
         }
 

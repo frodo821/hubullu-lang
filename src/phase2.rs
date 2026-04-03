@@ -75,6 +75,8 @@ pub struct ResolvedEntry {
     pub stems: HashMap<String, String>,
     pub forms: Vec<ResolvedForm>,
     pub links: Vec<ResolvedLink>,
+    pub etymology_proto: Option<String>,
+    pub etymology_note: Option<String>,
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
@@ -710,7 +712,10 @@ impl<'a> Phase2Ctx<'a> {
             _ => None,
         };
 
-        // Collect links
+        // Collect etymology text and links
+        let etymology_proto = entry.etymology.as_ref().and_then(|e| e.proto.as_ref().map(|s| s.node.clone()));
+        let etymology_note = entry.etymology.as_ref().and_then(|e| e.note.as_ref().map(|s| s.node.clone()));
+
         let mut links = Vec::new();
         if let Some(ety) = &entry.etymology {
             if let Some(derived) = &ety.derived_from {
@@ -749,6 +754,8 @@ impl<'a> Phase2Ctx<'a> {
             stems,
             forms,
             links,
+            etymology_proto,
+            etymology_note,
         });
     }
 

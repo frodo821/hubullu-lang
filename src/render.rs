@@ -64,8 +64,9 @@ fn huc_schema_up_to_date(huc_path: &Path) -> bool {
         Ok(c) => c,
         Err(_) => return false,
     };
-    // Check for the `stems` table (added after initial schema).
-    let ok = conn.prepare("SELECT 1 FROM stems LIMIT 0").is_ok();
+    // Check for the `stems` table and `etymology_proto` column (added after initial schema).
+    let ok = conn.prepare("SELECT 1 FROM stems LIMIT 0").is_ok()
+        && conn.prepare("SELECT etymology_proto FROM entries LIMIT 0").is_ok();
     ok
 }
 
@@ -442,6 +443,148 @@ impl ResolveContext {
             let forms: Vec<(String, String)> = rows.flatten().collect();
             if !forms.is_empty() {
                 return forms;
+            }
+        }
+        Vec::new()
+    }
+
+    /// Query all meanings for a given entry name.
+    ///
+    /// Returns a list of `(meaning_id, meaning_text)` pairs from `entry_meanings`.
+    /// If the entry uses a single meaning (no `entry_meanings` rows), returns empty.
+    pub fn query_meanings(&self, entry_name: &str) -> Vec<(String, String)> {
+        let all_sources = self.default_sources.iter()
+            .chain(self.namespaced.values());
+        for src in all_sources {
+            let mut stmt = match src.conn.prepare(
+                "SELECT m.meaning_id, m.meaning_text FROM entry_meanings m \
+                 JOIN entries e ON m.entry_id = e.id \
+                 WHERE e.name = ?1 ORDER BY m.rowid",
+            ) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let rows = match stmt.query_map([entry_name], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            }) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let meanings: Vec<(String, String)> = rows.flatten().collect();
+            if !meanings.is_empty() {
+                return meanings;
+            }
+        }
+        Vec::new()
+    }
+
+    /// Query classificatory tags for a given entry name.
+    ///
+    /// Returns a list of `(axis, value)` pairs from `entry_tags`.
+    pub fn query_entry_tags(&self, entry_name: &str) -> Vec<(String, String)> {
+        let all_sources = self.default_sources.iter()
+            .chain(self.namespaced.values());
+        for src in all_sources {
+            let mut stmt = match src.conn.prepare(
+                "SELECT t.axis, t.value FROM entry_tags t \
+                 JOIN entries e ON t.entry_id = e.id \
+                 WHERE e.name = ?1 ORDER BY t.axis, t.value",
+            ) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let rows = match stmt.query_map([entry_name], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            }) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let tags: Vec<(String, String)> = rows.flatten().collect();
+            if !tags.is_empty() {
+                return tags;
+            }
+        }
+        Vec::new()
+    }
+
+    /// Query etymology information for a given entry name.
+    ///
+    /// Returns `(etymology_proto, etymology_note)` — both optional.
+    pub fn query_etymology(&self, entry_name: &str) -> (Option<String>, Option<String>) {
+        let all_sources = self.default_sources.iter()
+            .chain(self.namespaced.values());
+        for src in all_sources {
+            let result = src.conn.query_row(
+                "SELECT etymology_proto, etymology_note FROM entries WHERE name = ?1",
+                [entry_name],
+                |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?)),
+            );
+            if let Ok((proto, note)) = result {
+                if proto.is_some() || note.is_some() {
+                    return (proto, note);
+                }
+            }
+        }
+        (None, None)
+    }
+
+    /// Query the definition order of tag axis values.
+    ///
+    /// Returns a map from `axis_name` to an ordered list of `value_name`s,
+    /// preserving the order they appear in `tagaxis_meta` (by rowid).
+    pub fn query_axis_value_order(&self) -> HashMap<String, Vec<String>> {
+        let mut result: HashMap<String, Vec<String>> = HashMap::new();
+        let all_sources = self.default_sources.iter()
+            .chain(self.namespaced.values());
+        for src in all_sources {
+            let mut stmt = match src.conn.prepare(
+                "SELECT DISTINCT axis_name, value_name FROM tagaxis_meta ORDER BY id",
+            ) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let rows = match stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            }) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            for row in rows.flatten() {
+                let (axis, value) = row;
+                let vals = result.entry(axis).or_default();
+                if !vals.contains(&value) {
+                    vals.push(value);
+                }
+            }
+        }
+        result
+    }
+
+    /// Query linked entry names by link type for a given entry name.
+    ///
+    /// Returns a list of `(dst_entry_name, link_type)` pairs.
+    pub fn query_links(&self, entry_name: &str) -> Vec<(String, String)> {
+        let all_sources = self.default_sources.iter()
+            .chain(self.namespaced.values());
+        for src in all_sources {
+            let mut stmt = match src.conn.prepare(
+                "SELECT e2.name, l.link_type FROM links l \
+                 JOIN entries e1 ON l.src_entry_id = e1.id \
+                 JOIN entries e2 ON l.dst_entry_id = e2.id \
+                 WHERE e1.name = ?1 ORDER BY l.link_type, e2.name",
+            ) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let rows = match stmt.query_map([entry_name], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            }) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let links: Vec<(String, String)> = rows.flatten().collect();
+            if !links.is_empty() {
+                return links;
             }
         }
         Vec::new()
