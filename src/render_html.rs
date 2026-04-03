@@ -184,15 +184,15 @@ h1 {
 }
 .entry-card .meanings {
   margin: 0 0 0.8rem;
-  padding: 0;
-  list-style: none;
+  padding: 0 0 0 1.4rem;
+  list-style: decimal;
 }
 .entry-card .meanings li {
   color: #555;
   font-style: italic;
   margin: 0.15rem 0;
 }
-.entry-card .meanings li .meaning-id {
+.entry-card .meanings li::marker {
   font-style: normal;
   font-weight: 600;
   color: #777;
@@ -926,15 +926,14 @@ fn render_glossary_page(
                 html_escape(&ann.meaning),
             ));
         } else {
-            body.push_str("<ul class=\"meanings\">\n");
-            for (mid, mtext) in &meanings {
+            body.push_str("<ol class=\"meanings\">\n");
+            for (_mid, mtext) in &meanings {
                 body.push_str(&format!(
-                    "<li><span class=\"meaning-id\">{}</span> {}</li>\n",
-                    html_escape(mid),
+                    "<li>{}</li>\n",
                     html_escape(mtext),
                 ));
             }
-            body.push_str("</ul>\n");
+            body.push_str("</ol>\n");
         }
 
         // Etymology
