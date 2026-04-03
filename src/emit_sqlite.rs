@@ -143,14 +143,18 @@ fn create_schema(conn: &Connection) -> Result<(), Diagnostic> {
 }
 
 fn insert_data(conn: &Connection, p2: &Phase2Result) -> Result<(), Diagnostic> {
-    // Insert axis metadata
+    // Insert axis metadata — iterate axis.values (definition order) rather
+    // than axis.display (HashMap, non-deterministic) so that tagaxis_meta
+    // rowids reflect the order values were defined in the source.
     for (axis_name, axis) in &p2.axes {
-        for (value_name, displays) in &axis.display {
-            for (lang, text) in displays {
-                conn.execute(
-                    "INSERT INTO tagaxis_meta (axis_name, value_name, display_lang, display_text) VALUES (?1, ?2, ?3, ?4)",
-                    params![axis_name, value_name, lang, text],
-                ).map_err(|e| Diagnostic::error(format!("insert tagaxis_meta failed: {}", e)))?;
+        for value_name in &axis.values {
+            if let Some(displays) = axis.display.get(value_name) {
+                for (lang, text) in displays {
+                    conn.execute(
+                        "INSERT INTO tagaxis_meta (axis_name, value_name, display_lang, display_text) VALUES (?1, ?2, ?3, ?4)",
+                        params![axis_name, value_name, lang, text],
+                    ).map_err(|e| Diagnostic::error(format!("insert tagaxis_meta failed: {}", e)))?;
+                }
             }
         }
     }
