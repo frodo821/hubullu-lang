@@ -446,19 +446,22 @@ fn parse_tags(tags: &str) -> Vec<(String, String)> {
 /// A parsed form: the surface string and its tag key-value pairs.
 type ParsedForm = (String, Vec<(String, String)>);
 
-/// Maximum values per axis shown in a single table section.
-const MAX_ROW_GROUP: usize = 6;
-const MAX_COL_GROUP: usize = 6;
+/// Maximum product of column-axis values in a single table.
+const MAX_COL_PRODUCT: usize = 6;
+
+/// Maximum product of inner (secondary) row-axis values per primary row group.
+const MAX_INNER_ROW_PRODUCT: usize = 6;
 
 /// Build inflection table(s) for a set of forms.
 ///
 /// Strategy for N-dimensional paradigms:
 ///   1. Collect all axes and their distinct values.
-///   2. Pick one axis for **columns** (fewest values, preferring "number"/"gender").
-///   3. Remaining axes become **rows** (most-valued outermost, with `rowspan`
-///      merging), or **split axes** (if more than 2 row axes).
-///   4. Primary row values are chunked at [`MAX_ROW_GROUP`] (6), column
-///      values at [`MAX_COL_GROUP`] (6); excess produces sub-tables.
+///   2. The axis with the most values becomes the **primary row axis**.
+///   3. Remaining axes are merged into **columns** (product ≤ 6, with
+///      `colspan` headers) or **inner rows** (product ≤ 6, with `rowspan`
+///      merging on the outer axis).
+///   4. Any axes that exceed these limits become **split axes** — each
+///      combination of their values produces a separate sub-table.
 fn build_inflection_table(
     forms: &[(String, String)],
     dm: &DisplayMap,
@@ -494,20 +497,17 @@ fn build_inflection_table(
 
     if axis_values.is_empty() { return None; }
 
-    // 1-axis: simple two-column table (chunked at MAX_ROW_GROUP).
+    // 1-axis: simple two-column table.
     if axis_values.len() == 1 {
         let (axis, vals) = axis_values.iter().next().unwrap();
-        let mut html = String::new();
-        for chunk in vals.chunks(MAX_ROW_GROUP) {
-            html.push_str(&render_single_axis_table(axis, chunk, &parsed, dm));
-        }
-        return Some(html);
+        return Some(render_single_axis_table(axis, vals, &parsed, dm));
     }
 
-    // Classify axes into column, row, and split roles.
-    let (col_axis, row_axes, split_axes) = assign_axis_roles(&axis_values);
+    // Classify axes into row, column, and split roles.
+    let (row_axes, col_axes, split_axes) = assign_axis_roles(&axis_values);
 
-    let col_vals = &axis_values[&col_axis];
+    // Enumerate column keys (cartesian product of column axes).
+    let col_keys = enumerate_keys(&col_axes, &axis_values);
 
     // Enumerate distinct split-key combinations.
     let split_keys = enumerate_split_keys(&parsed, &split_axes, &axis_values);
@@ -533,110 +533,58 @@ fn build_inflection_table(
             })
             .collect();
 
-        // Chunk primary row axis values (≤ MAX_ROW_GROUP per sub-table).
-        let primary_row_chunks: Vec<Vec<String>> = if !row_axes.is_empty() {
-            axis_values[&row_axes[0]]
-                .chunks(MAX_ROW_GROUP)
-                .map(|c| c.to_vec())
-                .collect()
-        } else {
-            vec![Vec::new()]
-        };
+        // Full cartesian-product row keys.
+        let row_keys = enumerate_keys(&row_axes, &axis_values);
 
-        // Chunk column values (≤ MAX_COL_GROUP per sub-table).
-        let col_chunks: Vec<&[String]> = col_vals.chunks(MAX_COL_GROUP).collect();
-        let need_chunk_heading = primary_row_chunks.len() > 1 || col_chunks.len() > 1;
+        let num_row_th = row_axes.len();
 
-        for row_chunk in &primary_row_chunks {
-            for col_chunk in &col_chunks {
-                // Sub-heading when chunking produces multiple tables.
-                if need_chunk_heading {
-                    let mut parts = Vec::new();
-                    if primary_row_chunks.len() > 1 && !row_chunk.is_empty() {
-                        let first = dm.value_name(&row_axes[0], &row_chunk[0]);
-                        let last = dm.value_name(&row_axes[0], row_chunk.last().unwrap());
-                        if first == last {
-                            parts.push(first.to_string());
-                        } else {
-                            parts.push(format!("{} – {}", first, last));
-                        }
-                    }
-                    if col_chunks.len() > 1 {
-                        let first = dm.value_name(&col_axis, &col_chunk[0]);
-                        let last = dm.value_name(&col_axis, col_chunk.last().unwrap());
-                        if first == last {
-                            parts.push(first.to_string());
-                        } else {
-                            parts.push(format!("{} – {}", first, last));
-                        }
-                    }
-                    if !parts.is_empty() {
-                        html.push_str(&format!("<h3>{}</h3>\n", html_escape(&parts.join(" / "))));
+        // ---- table ----
+        html.push_str("<table>\n");
+
+        // ---- thead: multi-level column headers with colspan ----
+        html.push_str(&render_col_header(&col_axes, &axis_values, dm, num_row_th));
+
+        // ---- tbody: rows with rowspan merging ----
+        html.push_str("<tbody>\n");
+        for (i, row_key) in row_keys.iter().enumerate() {
+            html.push_str("<tr>");
+
+            // Row header cells — merge consecutive identical prefixes.
+            for (axis_idx, (axis, value)) in row_key.iter().enumerate() {
+                let is_first = i == 0
+                    || row_keys[i][..=axis_idx] != row_keys[i - 1][..=axis_idx];
+                if is_first {
+                    let span = row_keys[i..].iter()
+                        .take_while(|rk| rk[..=axis_idx] == row_key[..=axis_idx])
+                        .count();
+                    if span > 1 {
+                        html.push_str(&format!(
+                            "<th rowspan=\"{}\">{}</th>",
+                            span,
+                            html_escape(dm.value_name(axis, value)),
+                        ));
+                    } else {
+                        html.push_str(&format!(
+                            "<th>{}</th>",
+                            html_escape(dm.value_name(axis, value)),
+                        ));
                     }
                 }
-
-                // Build full cartesian-product row keys, scoped to this chunk.
-                let mut chunk_av = axis_values.clone();
-                if !row_axes.is_empty() {
-                    chunk_av.insert(row_axes[0].clone(), row_chunk.clone());
-                }
-                let row_keys = enumerate_row_keys_full(&row_axes, &chunk_av);
-
-                let num_row_th = row_axes.len();
-
-                // ---- thead ----
-                html.push_str("<table>\n<thead><tr>");
-                if num_row_th > 0 {
-                    html.push_str(&format!("<th colspan=\"{}\"></th>", num_row_th));
-                }
-                for cv in *col_chunk {
-                    html.push_str(&format!("<th>{}</th>",
-                        html_escape(dm.value_name(&col_axis, cv))));
-                }
-                html.push_str("</tr></thead>\n<tbody>\n");
-
-                // ---- tbody with rowspan ----
-                for (i, row_key) in row_keys.iter().enumerate() {
-                    html.push_str("<tr>");
-
-                    // Row header cells — merge consecutive identical prefixes.
-                    for (axis_idx, (axis, value)) in row_key.iter().enumerate() {
-                        let is_first = i == 0
-                            || row_keys[i][..=axis_idx] != row_keys[i - 1][..=axis_idx];
-                        if is_first {
-                            let span = row_keys[i..].iter()
-                                .take_while(|rk| rk[..=axis_idx] == row_key[..=axis_idx])
-                                .count();
-                            if span > 1 {
-                                html.push_str(&format!(
-                                    "<th rowspan=\"{}\">{}</th>",
-                                    span,
-                                    html_escape(dm.value_name(axis, value)),
-                                ));
-                            } else {
-                                html.push_str(&format!(
-                                    "<th>{}</th>",
-                                    html_escape(dm.value_name(axis, value)),
-                                ));
-                            }
-                        }
-                    }
-
-                    // Data cells.
-                    for cv in *col_chunk {
-                        let mut lookup: Vec<(&str, &str)> = row_key.iter()
-                            .map(|(k, v)| (k.as_str(), v.as_str()))
-                            .collect();
-                        lookup.extend(split_key.iter().map(|(k, v)| (k.as_str(), v.as_str())));
-                        lookup.push((col_axis.as_str(), cv.as_str()));
-                        let form = find_form(&subset, &lookup);
-                        html.push_str(&format!("<td>{}</td>", html_escape(&form)));
-                    }
-                    html.push_str("</tr>\n");
-                }
-                html.push_str("</tbody></table>\n");
             }
+
+            // Data cells.
+            for col_key in &col_keys {
+                let mut lookup: Vec<(&str, &str)> = row_key.iter()
+                    .map(|(k, v)| (k.as_str(), v.as_str()))
+                    .collect();
+                lookup.extend(split_key.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+                lookup.extend(col_key.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+                let form = find_form(&subset, &lookup);
+                html.push_str(&format!("<td>{}</td>", html_escape(&form)));
+            }
+            html.push_str("</tr>\n");
         }
+        html.push_str("</tbody></table>\n");
     }
 
     Some(html)
@@ -658,70 +606,170 @@ fn render_single_axis_table(axis: &str, vals: &[String], parsed: &[ParsedForm], 
     html
 }
 
-/// Decide which axes are columns, rows, and split axes.
+/// Render multi-level `<thead>` for column axes with `colspan`.
 ///
-/// - **Column axis** (1): fewest distinct values, preferring "number"/"gender".
-/// - **Row axes** (up to 2): most-valued outermost, with `rowspan` merging.
-///   Prefers "case"/"tense"/"person".
-/// - **Split axes** (rest): each combination gets its own sub-table.
+/// Each column axis occupies one header row.  Outer axes span inner-axis
+/// value counts with `colspan`; inner axes repeat across outer groups.
+/// A corner cell covers the row-header columns with `colspan`/`rowspan`.
+fn render_col_header(
+    col_axes: &[String],
+    axis_values: &BTreeMap<String, Vec<String>>,
+    dm: &DisplayMap,
+    num_row_th: usize,
+) -> String {
+    let num_levels = col_axes.len();
+    let mut html = String::from("<thead>\n");
+
+    for (level, axis) in col_axes.iter().enumerate() {
+        html.push_str("<tr>");
+
+        // Corner cell (only in the first header row).
+        if level == 0 && num_row_th > 0 {
+            if num_levels > 1 {
+                html.push_str(&format!(
+                    "<th colspan=\"{}\" rowspan=\"{}\"></th>",
+                    num_row_th, num_levels,
+                ));
+            } else {
+                html.push_str(&format!("<th colspan=\"{}\"></th>", num_row_th));
+            }
+        }
+
+        // Inner span = product of value counts for column axes below this level.
+        let inner_span: usize = col_axes[level + 1..]
+            .iter()
+            .map(|a| axis_values[a].len())
+            .product::<usize>()
+            .max(1);
+
+        // Outer repeat = product of value counts for column axes above this level.
+        let outer_repeat: usize = col_axes[..level]
+            .iter()
+            .map(|a| axis_values[a].len())
+            .product::<usize>()
+            .max(1);
+
+        let vals = &axis_values[axis];
+        for _ in 0..outer_repeat {
+            for v in vals {
+                if inner_span > 1 {
+                    html.push_str(&format!(
+                        "<th colspan=\"{}\">{}</th>",
+                        inner_span,
+                        html_escape(dm.value_name(axis, v)),
+                    ));
+                } else {
+                    html.push_str(&format!(
+                        "<th>{}</th>",
+                        html_escape(dm.value_name(axis, v)),
+                    ));
+                }
+            }
+        }
+
+        html.push_str("</tr>\n");
+    }
+
+    html.push_str("</thead>\n");
+    html
+}
+
+/// Decide which axes are rows, columns, and split axes.
+///
+/// 1. **Primary row axis**: the axis with the most distinct values.
+/// 2. **Column axes**: remaining axes merged until product ≤ 6.
+///    Prefers "number"/"gender".
+/// 3. **Inner row axes**: remaining axes merged until product ≤ 6.
+///    Prefers "case"/"tense"/"person".
+/// 4. **Split axes** (rest): each combination gets its own sub-table.
+///
+/// Row axes are ordered outermost-first (most values → rowspan).
+/// Column axes are ordered COL_PREFER-first (outermost → colspan).
 fn assign_axis_roles(
     axis_values: &BTreeMap<String, Vec<String>>,
-) -> (String, Vec<String>, Vec<String>) {
-    // Axes that prefer to be columns.
+) -> (Vec<String>, Vec<String>, Vec<String>) {
     const COL_PREFER: &[&str] = &["number", "gender"];
-    // Axes that prefer to be row (inner, not split).
     const ROW_PREFER: &[&str] = &["case", "tense", "person"];
 
-    // Sort axes by number of distinct values (ascending).
+    // Sort axes by value count descending.
     let mut sorted: Vec<(String, usize)> = axis_values.iter()
         .map(|(k, v)| (k.clone(), v.len()))
         .collect();
-    sorted.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+    sorted.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
-    // Pick column axis: prefer COL_PREFER, then fewest values.
-    let col_axis = COL_PREFER.iter()
-        .find(|&&p| axis_values.contains_key(p))
-        .map(|&s| s.to_string())
-        .unwrap_or_else(|| sorted[0].0.clone());
+    // Primary row axis = most values.
+    let primary_row = sorted.remove(0).0;
 
-    let remaining: Vec<(String, usize)> = sorted.into_iter()
-        .filter(|(k, _)| *k != col_axis)
-        .collect();
+    let mut col_axes: Vec<String> = Vec::new();
+    let mut col_product: usize = 1;
+    let mut inner_row_axes: Vec<String> = Vec::new();
+    let mut inner_row_product: usize = 1;
+    let mut split_axes: Vec<String> = Vec::new();
 
-    if remaining.len() <= 2 {
-        let mut row_axes: Vec<String> = remaining.into_iter().map(|(k, _)| k).collect();
-        // Most values first → outermost row axis.
-        row_axes.sort_by_key(|k| std::cmp::Reverse(axis_values[k].len()));
-        return (col_axis, row_axes, Vec::new());
-    }
-
-    // More than 2 remaining axes — need to split.
-    // Pick up to 2 row axes (prefer ROW_PREFER, then most values).
-    let mut row_axes = Vec::new();
-    let mut split_axes = Vec::new();
-
-    let mut unassigned: Vec<(String, usize)> = remaining;
-    for &pref in ROW_PREFER {
-        if row_axes.len() >= 2 { break; }
-        if let Some(idx) = unassigned.iter().position(|(k, _)| k == pref) {
-            row_axes.push(unassigned.remove(idx).0);
+    // First pass: assign COL_PREFER axes to columns.
+    let mut remaining = Vec::new();
+    for (name, count) in sorted {
+        if COL_PREFER.contains(&name.as_str()) && col_product * count <= MAX_COL_PRODUCT {
+            col_product *= count;
+            col_axes.push(name);
+        } else {
+            remaining.push((name, count));
         }
     }
-    while row_axes.len() < 2 && !unassigned.is_empty() {
-        // Pick the axis with the most values from the remaining.
-        let idx = unassigned.iter().enumerate()
-            .max_by_key(|(_, (_, n))| *n)
-            .map(|(i, _)| i)
-            .unwrap();
-        row_axes.push(unassigned.remove(idx).0);
-    }
-    for (k, _) in unassigned {
-        split_axes.push(k);
-    }
-    // Most values first → outermost row axis.
-    row_axes.sort_by_key(|k| std::cmp::Reverse(axis_values[k].len()));
 
-    (col_axis, row_axes, split_axes)
+    // Second pass: assign ROW_PREFER axes to inner rows.
+    let mut still_remaining = Vec::new();
+    for (name, count) in remaining {
+        if ROW_PREFER.contains(&name.as_str())
+            && inner_row_product * count <= MAX_INNER_ROW_PRODUCT
+        {
+            inner_row_product *= count;
+            inner_row_axes.push(name);
+        } else {
+            still_remaining.push((name, count));
+        }
+    }
+
+    // Third pass: fit remaining into columns or inner rows; excess → split.
+    for (name, count) in still_remaining {
+        if col_product * count <= MAX_COL_PRODUCT {
+            col_product *= count;
+            col_axes.push(name);
+        } else if inner_row_product * count <= MAX_INNER_ROW_PRODUCT {
+            inner_row_product *= count;
+            inner_row_axes.push(name);
+        } else {
+            split_axes.push(name);
+        }
+    }
+
+    // Ensure at least one column axis.
+    if col_axes.is_empty() {
+        if let Some(pos) = inner_row_axes
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, k)| axis_values[k.as_str()].len())
+            .map(|(i, _)| i)
+        {
+            col_axes.push(inner_row_axes.remove(pos));
+        } else if !split_axes.is_empty() {
+            col_axes.push(split_axes.remove(0));
+        }
+    }
+
+    // Order row axes: primary first, then inner sorted most-values-first.
+    inner_row_axes.sort_by_key(|k| std::cmp::Reverse(axis_values[k].len()));
+    let mut row_axes = vec![primary_row];
+    row_axes.extend(inner_row_axes);
+
+    // Order col axes: COL_PREFER first, then by value count ascending
+    // (fewest-valued outermost → larger colspan groups).
+    col_axes.sort_by_key(|k| {
+        let pref = COL_PREFER.iter().position(|&p| p == k.as_str()).unwrap_or(usize::MAX);
+        (pref, axis_values[k].len())
+    });
+
+    (row_axes, col_axes, split_axes)
 }
 
 /// Enumerate distinct combinations of split-axis values, preserving
@@ -759,19 +807,17 @@ fn enumerate_split_keys(
     combos
 }
 
-/// Enumerate full cartesian-product row keys from axis values.
+/// Enumerate full cartesian-product keys from axis values.
 ///
-/// Unlike split keys, row keys are **not** filtered — empty combinations
-/// render as "—" cells, keeping the table regular for `rowspan` merging.
-fn enumerate_row_keys_full(
-    row_axes: &[String],
+/// Used for both row keys and column keys.  Row keys are **not** filtered
+/// — empty combinations render as "—" cells, keeping the table regular
+/// for `rowspan` merging.
+fn enumerate_keys(
+    axes: &[String],
     axis_values: &BTreeMap<String, Vec<String>>,
 ) -> Vec<Vec<(String, String)>> {
-    if row_axes.is_empty() {
-        return vec![Vec::new()];
-    }
-    let mut combos: Vec<Vec<(String, String)>> = vec![Vec::new()];
-    for axis in row_axes {
+    let mut combos = vec![Vec::new()];
+    for axis in axes {
         let vals = &axis_values[axis];
         let mut next = Vec::new();
         for combo in &combos {
