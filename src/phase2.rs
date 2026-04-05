@@ -455,7 +455,6 @@ impl<'a> Phase2Ctx<'a> {
     }
 
     fn find_phonrule(&self, name: &str, file_id: FileId) -> Option<&PhonRule> {
-        // Search via symbol table
         if let Some(scope) = self.p1.symbol_table.scope(file_id) {
             let resolved = scope.resolve(name);
             for sym in resolved {
@@ -466,17 +465,6 @@ impl<'a> Phase2Ctx<'a> {
                                 return Some(pr);
                             }
                         }
-                    }
-                }
-            }
-        }
-
-        // Fallback: search all files
-        for (_, file) in &self.p1.files {
-            for item in &file.items {
-                if let Item::PhonRule(pr) = &item.node {
-                    if pr.name.node == name {
-                        return Some(pr);
                     }
                 }
             }
@@ -803,7 +791,6 @@ impl<'a> Phase2Ctx<'a> {
     }
 
     fn find_inflection(&self, name: &str, file_id: FileId) -> Option<&Inflection> {
-        // Search in local file first, then imports
         if let Some(scope) = self.p1.symbol_table.scope(file_id) {
             let resolved = scope.resolve(name);
             for sym in resolved {
@@ -814,17 +801,6 @@ impl<'a> Phase2Ctx<'a> {
                                 return Some(infl);
                             }
                         }
-                    }
-                }
-            }
-        }
-
-        // Fallback: search all files
-        for (_, file) in &self.p1.files {
-            for item in &file.items {
-                if let Item::Inflection(infl) = &item.node {
-                    if infl.name.node == name {
-                        return Some(infl);
                     }
                 }
             }

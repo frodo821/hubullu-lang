@@ -802,3 +802,72 @@ mod tests {
         assert!(matches!(classify_import_path("http://example.com/foo.hu"), ImportSource::UnsupportedScheme(_)));
     }
 }
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+
+    #[test]
+    fn transitive_use_does_not_leak() {
+        let dir = tempfile::tempdir().unwrap();
+        
+        // c.hu defines c_infl
+        let c_path = dir.path().join("c.hu");
+        std::fs::write(&c_path, r#"
+tagaxis number {
+  role: inflectional
+}
+@extend number_vals for tagaxis number {
+  sg {}
+  pl {}
+}
+inflection c_infl for {number} {
+  requires stems: root
+  [number=sg] -> `{root}`
+  [number=pl] -> `{root}s`
+}
+"#).unwrap();
+
+        // b.hu @use c.hu (no @export)
+        let b_path = dir.path().join("b.hu");
+        std::fs::write(&b_path, r#"
+@use * from "c.hu"
+inflection b_infl for {number} {
+  requires stems: root
+  [number=sg] -> `{root}`
+  [number=pl] -> `{root}en`
+}
+"#).unwrap();
+
+        // a.hu @use b.hu
+        let a_path = dir.path().join("a.hu");
+        std::fs::write(&a_path, r#"
+@use * from "b.hu"
+entry test_word {
+  headword: "test"
+  stems { root: "test" }
+  inflection_class: b_infl
+  meaning: "test"
+}
+"#).unwrap();
+
+        let result = run_phase1(&a_path);
+        assert!(!result.diagnostics.has_errors(), "phase1 should have no errors");
+
+        // Find a.hu's file_id
+        let a_fid = result.path_to_id[&a_path.canonicalize().unwrap()];
+        let scope = result.symbol_table.scope(a_fid).unwrap();
+
+        // b_infl should be visible (direct @use from b.hu)
+        let b_infl = scope.resolve("b_infl");
+        assert!(!b_infl.is_empty(), "b_infl should be visible in a.hu");
+
+        // c_infl should NOT be visible (transitive, not exported)
+        let c_infl = scope.resolve("c_infl");
+        assert!(c_infl.is_empty(), "c_infl should NOT be visible in a.hu (transitive leak)");
+
+        // number tagaxis should NOT be visible (transitive)
+        let number = scope.resolve("number");
+        assert!(number.is_empty(), "tagaxis 'number' should NOT be visible in a.hu (transitive leak)");
+    }
+}
