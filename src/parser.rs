@@ -627,7 +627,31 @@ impl Parser {
         if self.at_ident("compose") {
             Ok(InflectionBody::Compose(self.parse_compose_body()?))
         } else {
-            Ok(InflectionBody::Rules(self.parse_rule_list()?))
+            let apply = if self.at_ident("apply") {
+                self.advance(); // consume "apply"
+                Some(self.parse_apply_expr()?)
+            } else {
+                None
+            };
+            let rules = self.parse_rule_list()?;
+            Ok(InflectionBody::Rules(RulesBody { apply, rules }))
+        }
+    }
+
+    /// Parse an apply expression: `harmony(elision(cell))` or `cell`.
+    fn parse_apply_expr(&mut self) -> Result<ApplyExpr, Diagnostic> {
+        if self.at_ident("cell") {
+            self.advance();
+            Ok(ApplyExpr::Cell)
+        } else if let TokenKind::Ident(_) = self.peek() {
+            let rule = self.expect_ident()?;
+            self.expect(&TokenKind::LParen)?;
+            let inner = self.parse_apply_expr()?;
+            self.expect(&TokenKind::RParen)?;
+            Ok(ApplyExpr::PhonApply { rule, inner: Box::new(inner) })
+        } else {
+            Err(Diagnostic::error("expected phonrule name or 'cell' in apply expression")
+                .with_label(self.current_span(), "expected phonrule name or 'cell'"))
         }
     }
 
@@ -1843,10 +1867,11 @@ mod tests {
                 assert_eq!(infl.axes.len(), 3);
                 assert_eq!(infl.required_stems.len(), 2);
                 match &infl.body {
-                    InflectionBody::Rules(rules) => {
-                        assert_eq!(rules.len(), 2);
-                        assert!(!rules[0].condition.wildcard);
-                        assert!(rules[1].condition.wildcard);
+                    InflectionBody::Rules(body) => {
+                        assert!(body.apply.is_none());
+                        assert_eq!(body.rules.len(), 2);
+                        assert!(!body.rules[0].condition.wildcard);
+                        assert!(body.rules[1].condition.wildcard);
                     }
                     _ => panic!("expected Rules body"),
                 }
@@ -1911,9 +1936,9 @@ mod tests {
         assert!(errors.is_empty(), "errors: {:?}", errors);
         match &file.items[0].node {
             Item::Inflection(infl) => match &infl.body {
-                InflectionBody::Rules(rules) => {
-                    assert_eq!(rules.len(), 2);
-                    match &rules[0].rhs.node {
+                InflectionBody::Rules(body) => {
+                    assert_eq!(body.rules.len(), 2);
+                    match &body.rules[0].rhs.node {
                         RuleRhs::Delegate(d) => {
                             assert_eq!(d.target.node, "first_decl");
                             assert_eq!(d.tags.len(), 2);

@@ -155,7 +155,7 @@ pub fn evaluate_rules(
     resolver: &dyn DelegateResolver,
     phon_resolver: &dyn PhonRuleResolver,
 ) -> Result<ExpandedParadigm, Vec<Diagnostic>> {
-    evaluate_rules_with_overrides(rules, &[], cells, stems, struct_stems, resolver, phon_resolver)
+    evaluate_rules_with_overrides(rules, &[], None, cells, stems, struct_stems, resolver, phon_resolver)
 }
 
 /// Evaluate a rule-based paradigm with 2-pass override logic.
@@ -163,9 +163,13 @@ pub fn evaluate_rules(
 /// Per cell: try `overrides` first; if matched, use it. Otherwise fall back to `rules`.
 /// Ambiguity checking stays intact **within** each tier. Overrides always win regardless
 /// of specificity.
+///
+/// If `apply` is `Some`, the phonrule expression is applied to every non-delegate cell
+/// after per-cell evaluation.
 pub fn evaluate_rules_with_overrides(
     rules: &[InflectionRule],
     overrides: &[InflectionRule],
+    apply: Option<&ApplyExpr>,
     cells: &[Cell],
     stems: &HashMap<String, String>,
     struct_stems: &HashMap<String, HashMap<String, String>>,
@@ -179,7 +183,7 @@ pub fn evaluate_rules_with_overrides(
         // Tier 1: try overrides
         match find_best_match(overrides, cell) {
             Ok(Some(rule)) => {
-                match apply_rule(rule, cell, stems, struct_stems, resolver, phon_resolver) {
+                match apply_rule_with_apply(rule, cell, stems, struct_stems, resolver, phon_resolver, apply) {
                     Ok(result) => forms.push((cell.clone(), result)),
                     Err(e) => errors.push(e),
                 }
@@ -195,7 +199,7 @@ pub fn evaluate_rules_with_overrides(
         // Tier 2: class rules
         match find_best_match(rules, cell) {
             Ok(Some(rule)) => {
-                match apply_rule(rule, cell, stems, struct_stems, resolver, phon_resolver) {
+                match apply_rule_with_apply(rule, cell, stems, struct_stems, resolver, phon_resolver, apply) {
                     Ok(result) => forms.push((cell.clone(), result)),
                     Err(e) => errors.push(e),
                 }
@@ -238,6 +242,50 @@ fn apply_rule(
         CellResult::Form(s) => CellResult::Form(strip_boundaries(&s)),
         other => other,
     })
+}
+
+/// Apply a matched rule, then apply the inflection-level `apply` expression if present.
+/// Delegate cells are skipped (the apply expression is not applied to them).
+fn apply_rule_with_apply(
+    rule: &InflectionRule,
+    cell: &Cell,
+    stems: &HashMap<String, String>,
+    struct_stems: &HashMap<String, HashMap<String, String>>,
+    resolver: &dyn DelegateResolver,
+    phon_resolver: &dyn PhonRuleResolver,
+    apply: Option<&ApplyExpr>,
+) -> Result<CellResult, Diagnostic> {
+    let result = apply_rule(rule, cell, stems, struct_stems, resolver, phon_resolver)?;
+    match (apply, &result) {
+        (Some(expr), CellResult::Form(_)) if !matches!(rule.rhs.node, RuleRhs::Delegate(_)) => {
+            eval_apply_expr(expr, result, phon_resolver)
+        }
+        _ => Ok(result),
+    }
+}
+
+/// Evaluate an `ApplyExpr` tree, applying phonrules from inner to outer.
+fn eval_apply_expr(
+    expr: &ApplyExpr,
+    result: CellResult,
+    phon_resolver: &dyn PhonRuleResolver,
+) -> Result<CellResult, Diagnostic> {
+    match expr {
+        ApplyExpr::Cell => Ok(result),
+        ApplyExpr::PhonApply { rule, inner } => {
+            let inner_result = eval_apply_expr(inner, result, phon_resolver)?;
+            match inner_result {
+                CellResult::Form(s) => {
+                    let pr = phon_resolver.resolve(&rule.node).ok_or_else(|| {
+                        Diagnostic::error(format!("phonrule '{}' not found", rule.node))
+                            .with_label(rule.span, "not found")
+                    })?;
+                    Ok(CellResult::Form(apply_phonrule(&s, pr)))
+                }
+                CellResult::Null => Ok(CellResult::Null),
+            }
+        }
+    }
 }
 
 /// Evaluate a rule RHS, potentially producing boundary-marked strings.
@@ -327,8 +375,8 @@ fn resolve_delegate(
     // Evaluate the target body for this single cell
     let cells = vec![delegate_cell];
     let result = match &target_body {
-        InflectionBody::Rules(rules) => {
-            evaluate_rules(rules, &cells, &delegate_stems, &delegate_struct_stems, resolver, phon_resolver)
+        InflectionBody::Rules(body) => {
+            evaluate_rules(&body.rules, &cells, &delegate_stems, &delegate_struct_stems, resolver, phon_resolver)
         }
         InflectionBody::Compose(comp) => {
             evaluate_compose(comp, &[], &cells, &delegate_stems, &delegate_struct_stems, phon_resolver)
@@ -689,7 +737,7 @@ mod tests {
         let struct_stems = HashMap::new();
 
         let result = evaluate_rules_with_overrides(
-            &class_rules, &overrides, &cells, &stems, &struct_stems, &NullResolver, &NullPhonResolver,
+            &class_rules, &overrides, None, &cells, &stems, &struct_stems, &NullResolver, &NullPhonResolver,
         ).unwrap();
         assert_eq!(result.forms.len(), 1);
         assert!(matches!(&result.forms[0].1, CellResult::Form(s) if s == "override_form"));
@@ -715,7 +763,7 @@ mod tests {
         let struct_stems = HashMap::new();
 
         let result = evaluate_rules_with_overrides(
-            &class_rules, &overrides, &cells, &stems, &struct_stems, &NullResolver, &NullPhonResolver,
+            &class_rules, &overrides, None, &cells, &stems, &struct_stems, &NullResolver, &NullPhonResolver,
         ).unwrap();
         assert_eq!(result.forms.len(), 1);
         assert!(matches!(&result.forms[0].1, CellResult::Form(s) if s == "override_form"));
@@ -735,7 +783,7 @@ mod tests {
         let struct_stems = HashMap::new();
 
         let result = evaluate_rules_with_overrides(
-            &class_rules, &[], &cells, &stems, &struct_stems, &NullResolver, &NullPhonResolver,
+            &class_rules, &[], None, &cells, &stems, &struct_stems, &NullResolver, &NullPhonResolver,
         );
         assert!(result.is_err());
     }
@@ -757,8 +805,220 @@ mod tests {
         let struct_stems = HashMap::new();
 
         let result = evaluate_rules_with_overrides(
-            &class_rules, &overrides, &cells, &stems, &struct_stems, &NullResolver, &NullPhonResolver,
+            &class_rules, &overrides, None, &cells, &stems, &struct_stems, &NullResolver, &NullPhonResolver,
         );
         assert!(result.is_err());
+    }
+
+    /// Build a simple phonrule that replaces a literal with another literal (no context).
+    fn make_simple_phonrule(name: &str, from: &str, to: &str) -> PhonRule {
+        let span = make_span();
+        PhonRule {
+            name: make_ident(name),
+            classes: vec![],
+            maps: vec![],
+            rules: vec![PhonRewriteRule {
+                from: PhonPattern::Literal(Spanned::new(from.to_string(), span)),
+                to: PhonReplacement::Literal(Spanned::new(to.to_string(), span)),
+                context: None,
+                span,
+            }],
+            span,
+        }
+    }
+
+    /// PhonRuleResolver that holds named phonrules.
+    struct TestPhonResolver {
+        rules: Vec<PhonRule>,
+    }
+    impl PhonRuleResolver for TestPhonResolver {
+        fn resolve(&self, name: &str) -> Option<&PhonRule> {
+            self.rules.iter().find(|r| r.name.node == name)
+        }
+    }
+
+    /// DelegateResolver that returns a fixed inflection body for a target name.
+    struct TestDelegateResolver {
+        target_name: String,
+        body: InflectionBody,
+    }
+    impl DelegateResolver for TestDelegateResolver {
+        fn resolve(&self, name: &str) -> Option<(Vec<String>, InflectionBody)> {
+            if name == self.target_name {
+                Some((vec!["tense".to_string()], self.body.clone()))
+            } else {
+                None
+            }
+        }
+        fn axis_values(&self, _axis: &str) -> Vec<String> {
+            Vec::new()
+        }
+    }
+
+    #[test]
+    fn test_apply_skips_delegate_cells() {
+        let span = make_span();
+        // phonrule: "x" → "z"
+        let phon_resolver = TestPhonResolver {
+            rules: vec![make_simple_phonrule("rule1", "x", "z")],
+        };
+        let apply = ApplyExpr::PhonApply {
+            rule: make_ident("rule1"),
+            inner: Box::new(ApplyExpr::Cell),
+        };
+
+        // Delegate target: returns "delegate_x" (contains "x")
+        let delegate_resolver = TestDelegateResolver {
+            target_name: "target".to_string(),
+            body: InflectionBody::Rules(RulesBody {
+                apply: None,
+                rules: vec![make_rule(&[("tense", "past")], true, "delegate_x")],
+            }),
+        };
+
+        // Cell 1 (present): template "fox" → should become "foz" via apply
+        // Cell 2 (past): delegate → should stay "delegate_x" (apply skipped)
+        let rules = vec![
+            make_rule(&[("tense", "present")], true, "fox"),
+            InflectionRule {
+                condition: TagConditionList {
+                    conditions: vec![TagCondition {
+                        axis: make_ident("tense"),
+                        value: make_ident("past"),
+                    }],
+                    wildcard: true,
+                    span,
+                },
+                rhs: Spanned::new(
+                    RuleRhs::Delegate(Delegate {
+                        target: make_ident("target"),
+                        tags: vec![DelegateTag::Fixed(TagCondition {
+                            axis: make_ident("tense"),
+                            value: make_ident("past"),
+                        })],
+                        stem_mapping: vec![],
+                    }),
+                    span,
+                ),
+            },
+        ];
+        let cells = vec![
+            Cell { tags: [("tense".to_string(), "present".to_string())].into() },
+            Cell { tags: [("tense".to_string(), "past".to_string())].into() },
+        ];
+        let stems = HashMap::new();
+        let struct_stems = HashMap::new();
+
+        let result = evaluate_rules_with_overrides(
+            &rules, &[], Some(&apply), &cells, &stems, &struct_stems,
+            &delegate_resolver, &phon_resolver,
+        ).unwrap();
+
+        assert_eq!(result.forms.len(), 2);
+        // Template cell: "fox" → "foz" (phonrule applied)
+        assert!(matches!(&result.forms[0].1, CellResult::Form(s) if s == "foz"),
+            "expected 'foz', got {:?}", result.forms[0].1);
+        // Delegate cell: "delegate_x" unchanged (phonrule NOT applied)
+        assert!(matches!(&result.forms[1].1, CellResult::Form(s) if s == "delegate_x"),
+            "expected 'delegate_x', got {:?}", result.forms[1].1);
+    }
+
+    #[test]
+    fn test_apply_chains_after_cell_phonapply() {
+        let span = make_span();
+        // cell_rule: "x" → "y",  infl_rule: "y" → "z"
+        // Order matters: cell first (x→y), then inflection (y→z).
+        // If reversed, inflection (y→z) on "fax" would be a no-op, then cell (x→y) → "fay".
+        let phon_resolver = TestPhonResolver {
+            rules: vec![
+                make_simple_phonrule("cell_rule", "x", "y"),
+                make_simple_phonrule("infl_rule", "y", "z"),
+            ],
+        };
+
+        // Inflection-level apply: infl_rule(cell)
+        let apply = ApplyExpr::PhonApply {
+            rule: make_ident("infl_rule"),
+            inner: Box::new(ApplyExpr::Cell),
+        };
+
+        // Cell rule: cell_rule(`fax`)  → "x"→"y" → "fay"
+        //            then inflection-level infl_rule "y"→"z" → "faz"
+        let rules = vec![InflectionRule {
+            condition: TagConditionList {
+                conditions: vec![TagCondition {
+                    axis: make_ident("tense"),
+                    value: make_ident("present"),
+                }],
+                wildcard: true,
+                span,
+            },
+            rhs: Spanned::new(
+                RuleRhs::PhonApply {
+                    rule: make_ident("cell_rule"),
+                    inner: Box::new(Spanned::new(
+                        RuleRhs::Template(Template {
+                            segments: vec![TemplateSegment::Lit("fax".to_string())],
+                            span,
+                        }),
+                        span,
+                    )),
+                },
+                span,
+            ),
+        }];
+        let cells = vec![
+            Cell { tags: [("tense".to_string(), "present".to_string())].into() },
+        ];
+        let stems = HashMap::new();
+        let struct_stems = HashMap::new();
+
+        let result = evaluate_rules_with_overrides(
+            &rules, &[], Some(&apply), &cells, &stems, &struct_stems,
+            &NullResolver, &phon_resolver,
+        ).unwrap();
+
+        assert_eq!(result.forms.len(), 1);
+        // "fax" → cell_rule("x"→"y") → "fay" → infl_rule("y"→"z") → "faz"
+        assert!(matches!(&result.forms[0].1, CellResult::Form(s) if s == "faz"),
+            "expected 'faz', got {:?}", result.forms[0].1);
+    }
+
+    #[test]
+    fn test_apply_nested_phonrule_chain() {
+        let span = make_span();
+        // rule1: "x" → "a",  rule2: "a" → "o"
+        // apply rule2(rule1(cell)): first rule1 (x→a), then rule2 (a→o)
+        let phon_resolver = TestPhonResolver {
+            rules: vec![
+                make_simple_phonrule("rule1", "x", "a"),
+                make_simple_phonrule("rule2", "a", "o"),
+            ],
+        };
+
+        let apply = ApplyExpr::PhonApply {
+            rule: make_ident("rule2"),
+            inner: Box::new(ApplyExpr::PhonApply {
+                rule: make_ident("rule1"),
+                inner: Box::new(ApplyExpr::Cell),
+            }),
+        };
+
+        let rules = vec![make_rule(&[("tense", "present")], true, "fox")];
+        let cells = vec![
+            Cell { tags: [("tense".to_string(), "present".to_string())].into() },
+        ];
+        let stems = HashMap::new();
+        let struct_stems = HashMap::new();
+
+        let result = evaluate_rules_with_overrides(
+            &rules, &[], Some(&apply), &cells, &stems, &struct_stems,
+            &NullResolver, &phon_resolver,
+        ).unwrap();
+
+        assert_eq!(result.forms.len(), 1);
+        // "fox" → rule1("x"→"a") → "foa" → rule2("a"→"o") → "foo"
+        assert!(matches!(&result.forms[0].1, CellResult::Form(s) if s == "foo"),
+            "expected 'foo', got {:?}", result.forms[0].1);
     }
 }

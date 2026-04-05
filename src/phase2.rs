@@ -285,8 +285,8 @@ impl<'a> Phase2Ctx<'a> {
         infl_name: &str,
     ) {
         match body {
-            InflectionBody::Rules(rules) => {
-                for rule in rules {
+            InflectionBody::Rules(body) => {
+                for rule in &body.rules {
                     self.validate_rule_axes(rule, declared, infl_name);
                 }
             }
@@ -662,9 +662,9 @@ impl<'a> Phase2Ctx<'a> {
                         let resolver = Phase2Resolver { ctx: self, file_id };
                         let phon_resolver = Phase2PhonResolver { ctx: self, file_id };
                         let result = match &body {
-                            InflectionBody::Rules(rules) => {
+                            InflectionBody::Rules(body) => {
                                 evaluate_rules_with_overrides(
-                                    rules, &entry.forms_override, &cells, &stems, &struct_stems, &resolver, &phon_resolver,
+                                    &body.rules, &entry.forms_override, body.apply.as_ref(), &cells, &stems, &struct_stems, &resolver, &phon_resolver,
                                 )
                             }
                             InflectionBody::Compose(comp) => {
