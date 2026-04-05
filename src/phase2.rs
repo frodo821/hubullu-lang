@@ -110,6 +110,7 @@ pub fn run_phase2(p1: &Phase1Result) -> Phase2Result {
         inflections: Vec::new(),
         entries: Vec::new(),
         diagnostics: Diagnostics::new(),
+        deferred_infl_errors: Vec::new(),
     };
 
     ctx.resolve_extends();
@@ -117,6 +118,7 @@ pub fn run_phase2(p1: &Phase1Result) -> Phase2Result {
     ctx.validate_inflections();
     ctx.collect_inflections();
     ctx.resolve_entries();
+    ctx.flush_deferred_infl_errors();
     ctx.check_dag();
 
     let render_config = ctx.collect_render_config();
@@ -146,6 +148,7 @@ pub fn run_phase2_incremental(
         inflections: Vec::new(),
         entries: Vec::new(),
         diagnostics: Diagnostics::new(),
+        deferred_infl_errors: Vec::new(),
     };
 
     ctx.resolve_extends();
@@ -153,6 +156,7 @@ pub fn run_phase2_incremental(
     ctx.validate_inflections();
     ctx.collect_inflections();
     ctx.resolve_entries_selective(files_to_resolve, cached_entries);
+    ctx.flush_deferred_infl_errors();
     ctx.check_dag();
 
     let render_config = ctx.collect_render_config();
@@ -172,6 +176,9 @@ struct Phase2Ctx<'a> {
     inflections: Vec<ResolvedInflection>,
     entries: Vec<ResolvedEntry>,
     diagnostics: Diagnostics,
+    /// Inflection errors deferred for grouping by (message, infl_span).
+    /// Each element: (base diagnostic, inflection def span, entry name ident).
+    deferred_infl_errors: Vec<(Diagnostic, Option<Span>, Ident)>,
 }
 
 impl<'a> Phase2Ctx<'a> {
@@ -587,13 +594,13 @@ impl<'a> Phase2Ctx<'a> {
         let mut forms = Vec::new();
 
         if let Some(infl) = &entry.inflection {
-            let (axes, body, stem_reqs) = match infl {
+            let (axes, body, stem_reqs, infl_span) = match infl {
                 EntryInflection::Class(class_name) => {
                     // Find the inflection class
                     if let Some(infl_def) = self.find_inflection(&class_name.node, file_id) {
                         let axes: Vec<String> =
                             infl_def.axes.iter().map(|a| a.node.clone()).collect();
-                        (axes, Some(infl_def.body.clone()), infl_def.required_stems.clone())
+                        (axes, Some(infl_def.body.clone()), infl_def.required_stems.clone(), Some(infl_def.name.span))
                     } else {
                         self.diagnostics.add(
                             Diagnostic::error(format!(
@@ -602,13 +609,13 @@ impl<'a> Phase2Ctx<'a> {
                             ))
                             .with_label(class_name.span, "not found"),
                         );
-                        (Vec::new(), None, Vec::new())
+                        (Vec::new(), None, Vec::new(), None)
                     }
                 }
                 EntryInflection::Inline(inline) => {
                     let axes: Vec<String> =
                         inline.axes.iter().map(|a| a.node.clone()).collect();
-                    (axes, Some(inline.body.clone()), Vec::new())
+                    (axes, Some(inline.body.clone()), Vec::new(), None)
                 }
             };
 
@@ -686,15 +693,17 @@ impl<'a> Phase2Ctx<'a> {
                                 }
                             }
                             Err(errors) => {
-                                for mut e in errors {
-                                    e.message = format!(
-                                        "entry '{}': {}", entry.name.node, e.message,
-                                    );
-                                    // Point to the entry definition if no label present.
+                                for e in errors {
                                     if e.labels.is_empty() {
-                                        e = e.with_label(entry.name.span, "defined here");
+                                        // Defer label-less errors for grouping across entries.
+                                        self.deferred_infl_errors.push((e, infl_span, entry.name.clone()));
+                                    } else {
+                                        let mut e = e;
+                                        e.message = format!(
+                                            "entry '{}': {}", entry.name.node, e.message,
+                                        );
+                                        self.diagnostics.add(e);
                                     }
-                                    self.diagnostics.add(e);
                                 }
                             }
                         }
@@ -757,6 +766,38 @@ impl<'a> Phase2Ctx<'a> {
             etymology_proto,
             etymology_note,
         });
+    }
+
+    /// Emit deferred inflection errors, grouping identical errors across entries.
+    ///
+    /// Each unique error message (with its inflection span) is emitted once,
+    /// with up to 10 "required by this entry" labels. If more than 10 entries
+    /// triggered the same error, the remainder is summarised as "and N more".
+    fn flush_deferred_infl_errors(&mut self) {
+        // Group by (message, infl_span) → Vec<entry Ident>
+        let mut groups: Vec<(String, Option<Span>, Vec<Ident>)> = Vec::new();
+        for (diag, ispan, entry_name) in std::mem::take(&mut self.deferred_infl_errors) {
+            if let Some(group) = groups.iter_mut().find(|(m, s, _)| *m == diag.message && *s == ispan) {
+                group.2.push(entry_name);
+            } else {
+                groups.push((diag.message, ispan, vec![entry_name]));
+            }
+        }
+
+        const MAX_ENTRIES: usize = 10;
+        for (message, ispan, entries) in groups {
+            let mut diag = Diagnostic::error(&message);
+            if let Some(ispan) = ispan {
+                diag = diag.with_label(ispan, "in this inflection class");
+            }
+            for entry_name in entries.iter().take(MAX_ENTRIES) {
+                diag = diag.with_label(entry_name.span, format!("required by '{}'", entry_name.node));
+            }
+            if entries.len() > MAX_ENTRIES {
+                diag.message = format!("{} (and {} more entries)", diag.message, entries.len() - MAX_ENTRIES);
+            }
+            self.diagnostics.add(diag);
+        }
     }
 
     fn find_inflection(&self, name: &str, file_id: FileId) -> Option<&Inflection> {
