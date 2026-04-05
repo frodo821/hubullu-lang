@@ -28,6 +28,49 @@ impl DisplayMap {
 }
 
 // ---------------------------------------------------------------------------
+// Comment directives (`# @key value`)
+// ---------------------------------------------------------------------------
+
+/// Extract `# @key value` directives from the source text.
+///
+/// A directive line matches `#\s*@<key>\s+<value>` where `<value>` runs to the
+/// end of the line (trimmed).  Only lines that appear before any non-blank,
+/// non-comment, non-`@reference` line are considered, so directives cannot
+/// appear in the middle of body text.
+fn parse_comment_directives(source: &str) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("@reference") {
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix('#') {
+            let rest = rest.trim_start();
+            if let Some(directive) = rest.strip_prefix('@') {
+                if let Some((key, value)) = directive.split_once(|c: char| c.is_ascii_whitespace()) {
+                    let value = value.trim();
+                    if !key.is_empty() && !value.is_empty() {
+                        map.insert(key.to_string(), value.to_string());
+                    }
+                }
+            }
+            continue;
+        }
+        // Non-blank, non-comment, non-@reference line → stop scanning.
+        break;
+    }
+    map
+}
+
+/// Read `"title"` from `_config.json` in the given directory, if it exists.
+fn read_config_title(dir: &Path) -> Option<String> {
+    let config_path = dir.join("_config.json");
+    let content = std::fs::read_to_string(config_path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&content).ok()?;
+    value.get("title")?.as_str().map(|s| s.to_string())
+}
+
+// ---------------------------------------------------------------------------
 // Navigation
 // ---------------------------------------------------------------------------
 
@@ -271,9 +314,9 @@ h1 {
 }
 "#;
 
-fn nav_html(nav: &[NavEntry], current_rel: &str) -> String {
+fn nav_html(nav: &[NavEntry], current_rel: &str, site_title: &str) -> String {
     let mut html = String::new();
-    html.push_str("<nav>\n<a href=\"index.html\">Index</a>\n<ul>\n");
+    html.push_str(&format!("<nav>\n<a href=\"index.html\">{}</a>\n<ul>\n", html_escape(site_title)));
     // glossary link
     if current_rel == "glossary.html" {
         html.push_str("<li class=\"current\">Glossary</li>\n");
@@ -298,7 +341,7 @@ fn nav_html(nav: &[NavEntry], current_rel: &str) -> String {
     html
 }
 
-fn wrap_page(title: &str, body_html: &str, nav: &[NavEntry], current_rel: &str) -> String {
+fn wrap_page(title: &str, body_html: &str, nav: &[NavEntry], current_rel: &str, site_title: &str) -> String {
     format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -320,7 +363,7 @@ fn wrap_page(title: &str, body_html: &str, nav: &[NavEntry], current_rel: &str) 
 </html>"#,
         title = html_escape(title),
         css = PAGE_CSS,
-        nav = nav_html(nav, current_rel),
+        nav = nav_html(nav, current_rel, site_title),
         body = body_html,
     )
 }
@@ -862,6 +905,7 @@ fn render_glossary_page(
     entries: &BTreeMap<String, EntryAnnotation>,
     contexts: &[&ResolveContext],
     nav: &[NavEntry],
+    site_title: &str,
 ) -> String {
     // Build display map from all contexts.
     let mut axis_display = HashMap::new();
@@ -1000,14 +1044,14 @@ fn render_glossary_page(
         body.push_str("</div>\n");
     }
 
-    wrap_page("Glossary", &body, nav, "glossary.html")
+    wrap_page("Glossary", &body, nav, "glossary.html", site_title)
 }
 
 // ---------------------------------------------------------------------------
 // Index page
 // ---------------------------------------------------------------------------
 
-fn render_index(nav: &[NavEntry]) -> String {
+fn render_index(nav: &[NavEntry], site_title: &str) -> String {
     let mut list_html = String::new();
     list_html.push_str("<li><a href=\"glossary.html\">Glossary</a></li>\n");
     for entry in nav {
@@ -1024,7 +1068,7 @@ fn render_index(nav: &[NavEntry]) -> String {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Dictionary</title>
+<title>{title}</title>
 <style>
 body {{
   margin: 2rem auto;
@@ -1041,12 +1085,13 @@ a:hover {{ text-decoration: underline; }}
 </style>
 </head>
 <body>
-<h1>Dictionary</h1>
+<h1>{title}</h1>
 <ul>
 {list_html}
 </ul>
 </body>
 </html>"#,
+        title = html_escape(site_title),
         list_html = list_html,
     )
 }
@@ -1056,24 +1101,47 @@ a:hover {{ text-decoration: underline; }}
 // ---------------------------------------------------------------------------
 
 /// Render all `.hut` files under `dir` to HTML pages in `outdir`.
-pub fn render_site(dir: &Path, outdir: &Path, huc: Option<&Path>) -> Result<(), String> {
+pub fn render_site(dir: &Path, outdir: &Path, huc: Option<&Path>, site_title: Option<&str>) -> Result<(), String> {
     let dir = dir
         .canonicalize()
         .map_err(|e| format!("cannot resolve '{}': {}", dir.display(), e))?;
+
+    // Site title priority: CLI --title > _config.json "title" > "Dictionary".
+    let config_title = if site_title.is_none() {
+        read_config_title(&dir)
+    } else {
+        None
+    };
+    let site_title = site_title
+        .or(config_title.as_deref())
+        .unwrap_or("Dictionary");
 
     let hut_files = find_hut_files(&dir)?;
     if hut_files.is_empty() {
         return Err(format!("no .hut files found under '{}'", dir.display()));
     }
 
-    // Build navigation entries.
-    let nav: Vec<NavEntry> = hut_files
+    // Read sources and build navigation entries.
+    // Titles default to the file stem but can be overridden by `# @title`.
+    let sources: Vec<String> = hut_files
         .iter()
         .map(|p| {
+            std::fs::read_to_string(p)
+                .map_err(|e| format!("cannot read '{}': {}", p.display(), e))
+        })
+        .collect::<Result<_, _>>()?;
+
+    let nav: Vec<NavEntry> = hut_files
+        .iter()
+        .zip(sources.iter())
+        .map(|(p, source)| {
             let rel = p.strip_prefix(&dir).unwrap_or(p);
             let html_rel = rel.with_extension("html");
+            let directives = parse_comment_directives(source);
+            let title = directives.get("title").cloned()
+                .unwrap_or_else(|| title_from_path(rel));
             NavEntry {
-                title: title_from_path(rel),
+                title,
                 rel_path: html_rel.to_string_lossy().into_owned(),
             }
         })
@@ -1086,11 +1154,8 @@ pub fn render_site(dir: &Path, outdir: &Path, huc: Option<&Path>) -> Result<(), 
     let mut all_entries: BTreeMap<String, EntryAnnotation> = BTreeMap::new();
     let mut all_contexts: Vec<ResolveContext> = Vec::new();
 
-    for (hut_path, nav_entry) in hut_files.iter().zip(nav.iter()) {
-        let source = std::fs::read_to_string(hut_path)
-            .map_err(|e| format!("cannot read '{}': {}", hut_path.display(), e))?;
-
-        let hut_file = render::parse_hut(&source, &hut_path.to_string_lossy())?;
+    for ((hut_path, source), nav_entry) in hut_files.iter().zip(sources.iter()).zip(nav.iter()) {
+        let hut_file = render::parse_hut(source, &hut_path.to_string_lossy())?;
 
         let hut_dir = hut_path.parent().unwrap_or(Path::new("."));
 
@@ -1104,7 +1169,7 @@ pub fn render_site(dir: &Path, outdir: &Path, huc: Option<&Path>) -> Result<(), 
         let (separator, no_sep_before) = render::read_render_config(&ctx);
 
         let body_html = annotated_to_body_html(&parts, &separator, &no_sep_before);
-        let page_html = wrap_page(&nav_entry.title, &body_html, &nav, &nav_entry.rel_path);
+        let page_html = wrap_page(&nav_entry.title, &body_html, &nav, &nav_entry.rel_path, site_title);
 
         let out_path = outdir.join(&nav_entry.rel_path);
         if let Some(parent) = out_path.parent() {
@@ -1125,14 +1190,14 @@ pub fn render_site(dir: &Path, outdir: &Path, huc: Option<&Path>) -> Result<(), 
 
     // Write glossary page.
     let ctx_refs: Vec<&ResolveContext> = all_contexts.iter().collect();
-    let glossary_html = render_glossary_page(&all_entries, &ctx_refs, &nav);
+    let glossary_html = render_glossary_page(&all_entries, &ctx_refs, &nav, site_title);
     let glossary_path = outdir.join("glossary.html");
     std::fs::write(&glossary_path, glossary_html)
         .map_err(|e| format!("cannot write '{}': {}", glossary_path.display(), e))?;
     eprintln!("  glossary.html");
 
     // Write index.
-    let index_html = render_index(&nav);
+    let index_html = render_index(&nav, site_title);
     let index_path = outdir.join("index.html");
     std::fs::write(&index_path, index_html)
         .map_err(|e| format!("cannot write '{}': {}", index_path.display(), e))?;

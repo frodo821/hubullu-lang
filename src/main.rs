@@ -37,6 +37,10 @@ enum Command {
         /// Pre-compiled .huc file to use for resolution (skips .hu compilation)
         #[clap(long)]
         huc: Option<PathBuf>,
+
+        /// Site title (used for index.html page title and navigation label)
+        #[clap(long)]
+        title: Option<String>,
     },
     /// Lint .hu files for warnings and style issues
     Lint {
@@ -143,7 +147,7 @@ fn main() {
                 process::exit(1);
             }
         }
-        Command::Render { input, dir, outdir, huc } => {
+        Command::Render { input, dir, outdir, huc, title } => {
             if let Some(dir) = dir {
                 // Site mode: render all .hut files under dir to HTML.
                 let outdir = match outdir {
@@ -157,6 +161,7 @@ fn main() {
                     &dir,
                     &outdir,
                     huc.as_deref(),
+                    title.as_deref(),
                 ) {
                     Ok(()) => {}
                     Err(msg) => {
