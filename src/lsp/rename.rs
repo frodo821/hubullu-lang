@@ -1,6 +1,7 @@
 //! Rename handler — rename a symbol across all files.
 
 use std::collections::HashMap;
+use std::path::Path;
 
 use lsp_types::{PrepareRenameResponse, TextEdit, Uri, WorkspaceEdit};
 
@@ -94,6 +95,58 @@ pub fn rename(
         changes: Some(changes),
         ..Default::default()
     })
+}
+
+/// Collect rename edits in an external project by matching the definition's source path.
+///
+/// Used to rename occurrences in `.hut` files when the primary rename originates from
+/// a `.hu` file's project.
+pub fn rename_cross_project(
+    target_name: &str,
+    def_source_path: &Path,
+    new_name: &str,
+    phase1: &Phase1Result,
+    token_cache: &HashMap<FileId, Vec<Token>>,
+    scan_file_id: FileId,
+) -> HashMap<Uri, Vec<TextEdit>> {
+    let mut changes: HashMap<Uri, Vec<TextEdit>> = HashMap::new();
+
+    let file_tokens = match token_cache.get(&scan_file_id) {
+        Some(t) => t,
+        None => return changes,
+    };
+    let file_uri = match convert::path_to_uri(phase1.source_map.path(scan_file_id)) {
+        Some(u) => u,
+        None => return changes,
+    };
+    let file_scope = phase1.symbol_table.scope(scan_file_id);
+
+    for tok in file_tokens {
+        if let TokenKind::Ident(name) = &tok.node {
+            if name == target_name {
+                let is_match = if let Some(scope) = file_scope {
+                    scope.resolve(name).iter().any(|r| {
+                        phase1.source_map.path(r.file_id) == def_source_path
+                    })
+                } else {
+                    false
+                };
+
+                if is_match {
+                    let range = convert::span_to_range(&tok.span, &phase1.source_map);
+                    changes
+                        .entry(file_uri.clone())
+                        .or_default()
+                        .push(TextEdit {
+                            range,
+                            new_text: new_name.to_string(),
+                        });
+                }
+            }
+        }
+    }
+
+    changes
 }
 
 fn find_ident_at(tokens: &[Token], file_id: FileId, offset: usize) -> Option<&Token> {

@@ -35,7 +35,7 @@ use crate::lint::LintDiagnostic;
 use crate::phase1::Phase1Result;
 use crate::phase2::Phase2Result;
 use crate::span::FileId;
-use crate::token::Token;
+use crate::token::{Token, TokenKind};
 
 use document::DocumentStore;
 
@@ -815,10 +815,47 @@ fn handle_references(id: RequestId, req: Request, s: &ServerState) -> Response {
             &params.text_document_position.position, file_id, &proj.phase1.source_map,
         )?;
         let tokens = proj.token_cache.get(&file_id)?;
-        Some(references::find_references(
+        let mut locs = references::find_references(
             file_id, offset, tokens, &proj.phase1,
             &proj.token_cache, params.context.include_declaration,
-        ))
+        );
+
+        // Cross-project: scan open .hut files for additional references.
+        let def_info: Option<(String, std::path::PathBuf)> = (|| {
+            let scope = proj.phase1.symbol_table.scope(file_id)?;
+            let target_name = tokens.iter().find_map(|t| {
+                if t.span.file_id == file_id
+                    && t.span.start <= offset
+                    && offset < t.span.end
+                {
+                    if let TokenKind::Ident(n) = &t.node { Some(n.clone()) } else { None }
+                } else {
+                    None
+                }
+            })?;
+            let def = scope.resolve(&target_name).into_iter().next()?;
+            Some((def.name, proj.phase1.source_map.path(def.file_id).to_path_buf()))
+        })();
+        if let Some((def_name, def_path)) = def_info {
+            let current_uri = uri.as_str();
+            for (hut_uri_str, hut_proj) in &s.hut_projects {
+                if hut_uri_str == current_uri {
+                    continue;
+                }
+                if let Some(&hut_fid) = hut_proj.url_to_file_id.get(hut_uri_str.as_str()) {
+                    for loc in references::find_references_cross_project(
+                        &def_name, &def_path, &hut_proj.phase1,
+                        &hut_proj.token_cache, hut_fid,
+                    ) {
+                        if !locs.contains(&loc) {
+                            locs.push(loc);
+                        }
+                    }
+                }
+            }
+        }
+
+        Some(locs)
     })();
     Response::new_ok(id, serde_json::to_value(result).unwrap())
 }
@@ -961,10 +998,46 @@ fn handle_rename(id: RequestId, req: Request, s: &ServerState) -> Response {
             &params.text_document_position.position, file_id, &proj.phase1.source_map,
         )?;
         let tokens = proj.token_cache.get(&file_id)?;
-        rename::rename(
+        let mut edit = rename::rename(
             file_id, offset, &params.new_name, tokens,
             &proj.phase1, &proj.token_cache,
-        )
+        )?;
+
+        // Cross-project: also rename in open .hut files.
+        let def_info: Option<(String, std::path::PathBuf)> = (|| {
+            let scope = proj.phase1.symbol_table.scope(file_id)?;
+            let target_name = tokens.iter().find_map(|t| {
+                if t.span.file_id == file_id
+                    && t.span.start <= offset
+                    && offset < t.span.end
+                {
+                    if let TokenKind::Ident(n) = &t.node { Some(n.clone()) } else { None }
+                } else {
+                    None
+                }
+            })?;
+            let def = scope.resolve(&target_name).into_iter().next()?;
+            Some((def.name, proj.phase1.source_map.path(def.file_id).to_path_buf()))
+        })();
+        if let Some((def_name, def_path)) = def_info {
+            let current_uri = uri.as_str();
+            let changes = edit.changes.get_or_insert_with(Default::default);
+            for (hut_uri_str, hut_proj) in &s.hut_projects {
+                if hut_uri_str == current_uri {
+                    continue;
+                }
+                if let Some(&hut_fid) = hut_proj.url_to_file_id.get(hut_uri_str.as_str()) {
+                    for (uri, edits) in rename::rename_cross_project(
+                        &def_name, &def_path, &params.new_name,
+                        &hut_proj.phase1, &hut_proj.token_cache, hut_fid,
+                    ) {
+                        changes.entry(uri).or_default().extend(edits);
+                    }
+                }
+            }
+        }
+
+        Some(edit)
     })();
     Response::new_ok(id, serde_json::to_value(result).unwrap())
 }

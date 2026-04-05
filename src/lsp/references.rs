@@ -1,6 +1,7 @@
 //! Find references handler.
 
 use std::collections::HashMap;
+use std::path::Path;
 
 use lsp_types::Location;
 
@@ -95,6 +96,54 @@ pub fn find_references(
                                 locations.push(loc);
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    locations
+}
+
+/// Find references to a symbol in an external project by matching the definition's source path.
+///
+/// Used to discover references in `.hut` files when the primary lookup originates from
+/// a `.hu` file's project (where `.hut` files are not present).
+pub fn find_references_cross_project(
+    target_name: &str,
+    def_source_path: &Path,
+    phase1: &Phase1Result,
+    token_cache: &HashMap<FileId, Vec<Token>>,
+    scan_file_id: FileId,
+) -> Vec<Location> {
+    let mut locations = Vec::new();
+
+    let file_tokens = match token_cache.get(&scan_file_id) {
+        Some(t) => t,
+        None => return locations,
+    };
+    let file_uri = match convert::path_to_uri(phase1.source_map.path(scan_file_id)) {
+        Some(u) => u,
+        None => return locations,
+    };
+    let file_scope = phase1.symbol_table.scope(scan_file_id);
+
+    for tok in file_tokens {
+        if let TokenKind::Ident(name) = &tok.node {
+            if name == target_name {
+                let is_match = if let Some(scope) = file_scope {
+                    scope.resolve(name).iter().any(|r| {
+                        phase1.source_map.path(r.file_id) == def_source_path
+                    })
+                } else {
+                    false
+                };
+
+                if is_match {
+                    let range = convert::span_to_range(&tok.span, &phase1.source_map);
+                    let loc = Location { uri: file_uri.clone(), range };
+                    if !locations.contains(&loc) {
+                        locations.push(loc);
                     }
                 }
             }
