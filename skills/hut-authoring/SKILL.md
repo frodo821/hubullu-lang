@@ -9,18 +9,31 @@ hubullu renders `.hut` files by resolving dictionary entry references against co
 
 # .hut File Structure
 
-A `.hut` file has two sections:
+A `.hut` file has these sections:
 
-1. **@reference directives** (optional, at the beginning)
-2. **Token list** (the content to render)
+1. **Comment directives** (optional, before everything else)
+2. **@reference directives** (optional, at the beginning)
+3. **Token list** (the content to render)
 
 ```
+# @title My Page Title
 @reference * from "main.hu"
 
 "The" cat walk[tense=present, person=3, number=sg] "."
 ```
 
 Running `hubullu render file.hut` compiles referenced `.hu` files (with caching), resolves tokens, and outputs the rendered text.
+
+# Comment Directives
+
+Lines matching `# @key value` at the top of the file (before any body tokens) are parsed as directives. They must appear before or interleaved with `@reference` lines:
+
+```
+# @title My Page Title
+```
+
+Currently supported directives:
+- `# @title <text>` — sets the page title (used in HTML output for `<title>` and navigation). Overridden by `_config.json` title or CLI `--title` option.
 
 # @reference Directives
 
@@ -82,6 +95,49 @@ gelmek[$=root]~"iyor"    # → "geliyor" (stem "gel" + "iyor")
 2. Without form spec → headword is returned
 3. With form spec → the inflected form matching all tag conditions is returned
 
+## XML-like Tags
+
+Tags wrap tokens with markup, passed through to HTML output (stripped in plain text):
+
+```
+<em>walk[tense=present, person=3, number=sg]</em>
+<strong>"important"</strong>
+<a href="http://example.com">"link text"</a>
+```
+
+### Attributes
+
+Tags can have `key="value"` attributes:
+
+```
+<span class="highlight">cat[number=pl]</span>
+```
+
+### Self-closing Tags
+
+```
+<br/>
+<hr/>
+<img src="image.jpg"/>
+```
+
+### Custom Elements (Hyphenated Names)
+
+Tag names can contain hyphens for custom elements:
+
+```
+<ruby-text>"漢字"</ruby-text>
+<my-annotation type="gloss">"word"</my-annotation>
+```
+
+### Nesting
+
+Tags can be nested and can wrap multiple tokens:
+
+```
+<div class="verse"><em>"In the beginning"</em> "," create[tense=past, person=3, number=sg] "."</div>
+```
+
 ## Newline Marker `//`
 
 Inserts a line break between adjacent tokens:
@@ -107,14 +163,14 @@ dicere[tense=perfect, person=3, number=sg]~"que"
 # Renders as: "malbona hundo"
 ```
 
-# Comments
-
-## Newline and Glue in Token List
+# Special Tokens
 
 | Token | Effect |
 | ----- | ------ |
 | `~` | Suppresses separator (glue adjacent tokens) |
 | `//` | Inserts newline instead of separator |
+| `<tag>...</tag>` | XML-like tag wrapping child tokens |
+| `<tag/>` | Self-closing tag |
 
 # Comments
 
@@ -196,6 +252,17 @@ en.cat[number=pl] "=" la.feles[case=nom, number=pl]
 # → cats = feles
 ```
 
+## XML Tags with Entry References
+
+```
+# @title Genesis 1:1
+@reference * from "genesis_words.hu"
+
+<em>bara[tense=perfect, person=3, number=sg]</em> "Elohim" <strong>"et"</strong> "ha-shamayim" "."
+# HTML → <em>bara</em> Elohim <strong>et</strong> ha-shamayim.
+# Text → bara Elohim et ha-shamayim.
+```
+
 # Common Errors to Avoid
 
 - Referencing an entry that doesn't exist in any `@reference`'d database
@@ -203,3 +270,5 @@ en.cat[number=pl] "=" la.feles[case=nom, number=pl]
 - Form spec that matches zero or multiple forms (must be unambiguous)
 - Forgetting `@reference` directive (no database to look up entries from)
 - Using `~` without adjacent tokens on both sides
+- Mismatched XML tags (opening tag without matching closing tag)
+- Using non-hyphenated multi-word tag names (use `my-tag`, not `my tag`)

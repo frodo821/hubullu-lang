@@ -1,10 +1,10 @@
 ---
 name: hu-authoring
-description: Assist with writing and editing .hu (LexDSL) dictionary files. Trigger when editing .hu files or asking about hubullu syntax.
+description: Assist with writing and editing .hu (hubullu) dictionary files. Trigger when editing .hu files or asking about hubullu syntax.
 allowed-tools: Read, Grep, Glob, Bash(hubullu compile *)
 ---
 
-You are assisting with `.hu` file authoring for the hubullu LexDSL compiler.
+You are assisting with `.hu` file authoring for the hubullu compiler.
 hubullu compiles `.hu` dictionary definition files into SQLite databases.
 
 # .hu File Structure
@@ -14,6 +14,8 @@ A `.hu` file contains these top-level constructs (order-independent except impor
 ```
 @use ... from "path.hu"           # Import declarations (must be at top)
 @reference ... from "path.hu"     # Import entries (must be at top)
+@export use ...                   # Re-export declarations (must be at top)
+@export reference ...             # Re-export entries (must be at top)
 @render { ... }                   # Rendering config (optional)
 tagaxis NAME { ... }              # Grammatical axis definition
 @extend NAME for tagaxis AXIS { ... }  # Add values to an axis
@@ -47,6 +49,15 @@ Imports tagaxis, @extend, and inflection from another file. Does NOT import entr
 @use tense, aspect from "core/tags.hu"  # Named imports
 ```
 
+### Standard Library (`std:` scheme)
+
+Built-in modules can be imported via the `std:` URL scheme. No file I/O — modules are embedded in the compiler.
+
+```
+@use * from "std:_test"                  # Import built-in test module
+@use * as stdlib from "std:module_name"  # Namespaced std import
+```
+
 Circular `@use` is a compile error.
 
 ## @reference (Entries)
@@ -60,6 +71,22 @@ Imports entries from another file. Does NOT import declarations.
 ```
 
 Circular `@reference` is allowed (entries are resolved in phase 2).
+
+## @export (Re-exports)
+
+Re-exports symbols transitively so downstream files receive them too.
+
+```
+@export use * from "core/tags.hu"         # Re-export all declarations from file
+@export use tense from "core/tags.hu"     # Re-export named declarations from file
+@export use *                             # Re-export everything this file @use'd
+@export reference * from "entries.hu"     # Re-export entries from file
+@export reference *                       # Re-export everything this file @reference'd
+```
+
+Two forms:
+- **Form 1** (`@export use/reference <target>`) — re-exports what this file already imported
+- **Form 2** (`@export use/reference <target> from "file"`) — imports and re-exports in one step
 
 # tagaxis
 
@@ -104,6 +131,7 @@ Define inflection paradigms with tag conditions mapping to forms:
 
 ```
 inflection strong_verb for {tense, person, number} {
+  display: { en: "Strong Verb", ja: "強変化動詞" }  # Optional display name
   requires stems: pres, past
 
   [tense=present, person=1, number=sg] -> `{pres}e`
@@ -135,6 +163,14 @@ For structural stems with slots:
 requires stems: root[root_type=triliteral]
 
 [person=3, number=sg] -> `{root.C1}a{root.C2}a{root.C3}a`
+```
+
+## Phonological Rule Application in Rules
+
+Apply a phonrule directly to a template in the RHS:
+
+```
+[case=nom, number=sg] -> harmony(`{root}ler`)
 ```
 
 ## Delegation
