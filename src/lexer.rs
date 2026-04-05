@@ -198,13 +198,22 @@ impl<'a> Lexer<'a> {
                 self.advance();
                 Some(self.make_token(TokenKind::Dollar, start, self.pos))
             }
+            '<' => {
+                self.advance();
+                Some(self.make_token(TokenKind::Lt, start, self.pos))
+            }
+            '>' => {
+                self.advance();
+                Some(self.make_token(TokenKind::Gt, start, self.pos))
+            }
             '-' => {
                 if self.peek_at(1) == Some('>') {
                     self.advance();
                     self.advance();
                     Some(self.make_token(TokenKind::Arrow, start, self.pos))
                 } else {
-                    None
+                    self.advance();
+                    Some(self.make_token(TokenKind::Minus, start, self.pos))
                 }
             }
             '#' => {

@@ -1467,9 +1467,71 @@ impl Parser {
             }
         }
 
-        // Parse token list
+        let tokens = self.parse_hut_tokens(None);
+        (crate::ast::HutFile { references, tokens }, self.errors)
+    }
+
+    /// Parse hut tokens. If `inside_tag` is Some, stop at the matching `</name>`;
+    /// otherwise parse until EOF.
+    fn parse_hut_tokens(&mut self, inside_tag: Option<&str>) -> Vec<crate::ast::Token> {
         let mut tokens = Vec::new();
-        while !self.at_eof() {
+        loop {
+            if self.at_eof() {
+                if let Some(tag) = inside_tag {
+                    self.errors.push(self.error(format!(
+                        "unclosed tag <{}>: expected </{}>",
+                        tag, tag
+                    )));
+                }
+                break;
+            }
+
+            // Check for closing tag </name>
+            if matches!(self.peek(), TokenKind::Lt) {
+                if self.tokens.get(self.pos + 1)
+                    .map(|t| matches!(t.node, TokenKind::Slash))
+                    .unwrap_or(false)
+                {
+                    // Consume < and /
+                    self.advance(); // <
+                    self.advance(); // /
+                    let close_name = if matches!(self.peek(), TokenKind::Ident(_)) {
+                        self.parse_hyphenated_name()
+                    } else {
+                        "?".to_string()
+                    };
+                    if let Some(tag) = inside_tag {
+                        if close_name == tag {
+                            if matches!(self.peek(), TokenKind::Gt) {
+                                self.advance(); // >
+                            } else {
+                                self.errors.push(self.error(format!(
+                                    "expected '>' after </{}>",
+                                    tag
+                                )));
+                            }
+                            break;
+                        } else {
+                            self.errors.push(self.error(format!(
+                                "mismatched closing tag: expected </{}>, found </{}>",
+                                tag, close_name
+                            )));
+                            if matches!(self.peek(), TokenKind::Gt) {
+                                self.advance(); // >
+                            }
+                            continue;
+                        }
+                    } else {
+                        self.errors.push(self.error(format!(
+                            "unexpected closing tag </{}> without matching opening tag",
+                            close_name
+                        )));
+                        if matches!(self.peek(), TokenKind::Gt) { self.advance(); }
+                        continue;
+                    }
+                }
+            }
+
             match self.peek() {
                 TokenKind::StringLit(_) => {
                     let s = self.expect_string().unwrap();
@@ -1492,6 +1554,58 @@ impl Parser {
                     self.advance();
                     tokens.push(crate::ast::Token::Newline);
                 }
+                TokenKind::Lt => {
+                    let start = self.current_span().start;
+                    self.advance(); // <
+                    // Expect tag name (Ident(-Ident)* for custom elements)
+                    match self.peek() {
+                        TokenKind::Ident(_) => {
+                            let tag_name = self.parse_hyphenated_name();
+                            let attrs = self.parse_tag_attrs();
+                            match self.peek() {
+                                TokenKind::Slash => {
+                                    // Self-closing: <name attrs/>
+                                    self.advance(); // /
+                                    if matches!(self.peek(), TokenKind::Gt) {
+                                        self.advance(); // >
+                                    } else {
+                                        self.errors.push(self.error(format!(
+                                            "expected '>' after <{}/>",
+                                            tag_name
+                                        )));
+                                    }
+                                    tokens.push(crate::ast::Token::SelfClosingTag {
+                                        name: tag_name,
+                                        attrs,
+                                        span: self.span_from(start),
+                                    });
+                                }
+                                TokenKind::Gt => {
+                                    // Open tag: <name attrs> ... </name>
+                                    self.advance(); // >
+                                    let children = self.parse_hut_tokens(Some(&tag_name));
+                                    tokens.push(crate::ast::Token::Tag {
+                                        name: tag_name,
+                                        attrs,
+                                        children,
+                                        span: self.span_from(start),
+                                    });
+                                }
+                                _ => {
+                                    self.errors.push(self.error(format!(
+                                        "expected '>' or '/>' after <{}",
+                                        tag_name
+                                    )));
+                                }
+                            }
+                        }
+                        _ => {
+                            self.errors.push(self.error(
+                                "expected tag name after '<'".to_string()
+                            ));
+                        }
+                    }
+                }
                 _ => {
                     self.errors.push(self.error(format!(
                         "unexpected token in .hut file: {:?}",
@@ -1501,7 +1615,7 @@ impl Parser {
                 }
             }
         }
-        (crate::ast::HutFile { references, tokens }, self.errors)
+        tokens
     }
 
     fn parse_render_config(&mut self) -> Result<RenderConfig, Diagnostic> {
@@ -1529,6 +1643,55 @@ impl Parser {
             separator,
             no_separator_before,
         })
+    }
+
+    // -----------------------------------------------------------------------
+    // Tag helpers
+    // -----------------------------------------------------------------------
+
+    /// Parse a hyphenated tag name: `Ident ( - Ident )*` → `"my-custom-elem"`.
+    fn parse_hyphenated_name(&mut self) -> String {
+        let mut name = self.expect_ident().unwrap().node;
+        while matches!(self.peek(), TokenKind::Minus) {
+            self.advance(); // -
+            if matches!(self.peek(), TokenKind::Ident(_)) {
+                name.push('-');
+                name.push_str(&self.expect_ident().unwrap().node);
+            } else {
+                // Trailing `-` without ident — include it and stop
+                name.push('-');
+                break;
+            }
+        }
+        name
+    }
+
+    /// Parse tag attributes: `( Ident = StringLit )*` until `>` or `/>`.
+    fn parse_tag_attrs(&mut self) -> Vec<(String, String)> {
+        let mut attrs = Vec::new();
+        while matches!(self.peek(), TokenKind::Ident(_)) {
+            let attr_name = self.parse_hyphenated_name();
+            if matches!(self.peek(), TokenKind::Eq) {
+                self.advance(); // =
+                match self.peek() {
+                    TokenKind::StringLit(_) => {
+                        let value = self.expect_string().unwrap().node;
+                        attrs.push((attr_name, value));
+                    }
+                    _ => {
+                        self.errors.push(self.error(format!(
+                            "expected string value for attribute '{}'",
+                            attr_name
+                        )));
+                        break;
+                    }
+                }
+            } else {
+                // Boolean attribute (no value), e.g. <input disabled>
+                attrs.push((attr_name, String::new()));
+            }
+        }
+        attrs
     }
 
     // -----------------------------------------------------------------------

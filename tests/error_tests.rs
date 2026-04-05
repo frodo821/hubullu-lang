@@ -87,9 +87,9 @@ fn test_unknown_directive() {
 
 #[test]
 fn test_unexpected_character() {
-    // bare `-` is not a valid token (only `->` is)
+    // bare `-` is now lexed as Minus, but rejected by the parser at top level
     let errors = parse_errors("- foo");
-    assert_error_contains(&errors, "unexpected character");
+    assert_error_contains(&errors, "expected top-level item");
 }
 
 // =========================================================================

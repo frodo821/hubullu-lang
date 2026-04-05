@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
-use crate::render::{self, AnnotatedPart, EntryAnnotation, ResolveContext};
+use crate::render::{self, AnnotatedPart, EntryAnnotation, PartRenderer, ResolveContext};
 
 /// Display name lookup: maps raw axis/value names to human-readable text.
 struct DisplayMap {
@@ -372,77 +372,125 @@ fn wrap_page(title: &str, body_html: &str, nav: &[NavEntry], current_rel: &str, 
 // Text pages (annotated .hut → HTML)
 // ---------------------------------------------------------------------------
 
-fn annotated_to_body_html(
-    parts: &[AnnotatedPart],
-    separator: &str,
-    no_sep_before: &str,
-) -> String {
-    let mut lines: Vec<Vec<HtmlSegment>> = vec![Vec::new()];
-    let mut glue_next = false;
+/// HTML renderer: converts [`AnnotatedPart`]s into HTML with entry links,
+/// paragraph wrapping, and tag passthrough.
+///
+/// Implements [`PartRenderer`] so it can be used as a pluggable output format.
+pub struct HtmlRenderer;
 
-    for part in parts {
-        match part {
-            AnnotatedPart::Glue => {
-                glue_next = true;
-            }
-            AnnotatedPart::Newline => {
-                lines.push(Vec::new());
-                glue_next = false;
-            }
-            AnnotatedPart::Lit(text) => {
-                let need_sep = needs_separator(
-                    lines.last().map(|l| !l.is_empty()).unwrap_or(false),
-                    glue_next, text, separator, no_sep_before,
-                );
-                let line = lines.last_mut().unwrap();
-                if need_sep { line.push(HtmlSegment::Sep); }
-                line.push(HtmlSegment::Lit(text.clone()));
-                glue_next = false;
-            }
-            AnnotatedPart::Entry { text, annotation } => {
-                let need_sep = needs_separator(
-                    lines.last().map(|l| !l.is_empty()).unwrap_or(false),
-                    glue_next, text, separator, no_sep_before,
-                );
-                let line = lines.last_mut().unwrap();
-                if need_sep { line.push(HtmlSegment::Sep); }
-                line.push(HtmlSegment::Entry {
-                    text: text.clone(),
-                    annotation: annotation.clone(),
-                });
-                glue_next = false;
-            }
-        }
-    }
+impl PartRenderer for HtmlRenderer {
+    fn render(&self, parts: &[AnnotatedPart], separator: &str, no_sep_before: &str) -> String {
+        let mut lines: Vec<Vec<HtmlSegment>> = vec![Vec::new()];
+        let mut glue_next = false;
+        let mut has_content = false;
 
-    let mut html = String::new();
-    for line in &lines {
-        if line.is_empty() { continue; }
-        html.push_str("<p>");
-        for seg in line {
-            match seg {
-                HtmlSegment::Sep => html.push_str(&html_escape(separator)),
-                HtmlSegment::Lit(t) => html.push_str(&html_escape(t)),
-                HtmlSegment::Entry { text, annotation } => {
-                    let tip = tooltip_text(annotation);
-                    html.push_str(&format!(
-                        "<a href=\"glossary.html#entry-{}\" class=\"word\" title=\"{}\">{}</a>",
-                        html_escape(&annotation.entry_name),
-                        html_escape(&tip),
-                        html_escape(text),
-                    ));
+        for part in parts {
+            match part {
+                AnnotatedPart::Glue => {
+                    glue_next = true;
+                }
+                AnnotatedPart::Newline => {
+                    lines.push(Vec::new());
+                    glue_next = false;
+                    has_content = false;
+                }
+                AnnotatedPart::Lit(text) => {
+                    let need_sep = needs_separator(
+                        has_content, glue_next, text, separator, no_sep_before,
+                    );
+                    let line = lines.last_mut().unwrap();
+                    if need_sep { line.push(HtmlSegment::Sep); }
+                    line.push(HtmlSegment::Lit(text.clone()));
+                    glue_next = false;
+                    has_content = true;
+                }
+                AnnotatedPart::Entry { text, annotation } => {
+                    let need_sep = needs_separator(
+                        has_content, glue_next, text, separator, no_sep_before,
+                    );
+                    let line = lines.last_mut().unwrap();
+                    if need_sep { line.push(HtmlSegment::Sep); }
+                    line.push(HtmlSegment::Entry {
+                        text: text.clone(),
+                        annotation: annotation.clone(),
+                    });
+                    glue_next = false;
+                    has_content = true;
+                }
+                AnnotatedPart::TagOpen(name, attrs) => {
+                    let line = lines.last_mut().unwrap();
+                    line.push(HtmlSegment::TagOpen(name.clone(), attrs.clone()));
+                }
+                AnnotatedPart::TagClose(name) => {
+                    let line = lines.last_mut().unwrap();
+                    line.push(HtmlSegment::TagClose(name.clone()));
+                }
+                AnnotatedPart::SelfClosingTag(name, attrs) => {
+                    let line = lines.last_mut().unwrap();
+                    line.push(HtmlSegment::SelfClosingTag(name.clone(), attrs.clone()));
                 }
             }
         }
-        html.push_str("</p>\n");
+
+        let mut html = String::new();
+        for line in &lines {
+            if line.is_empty() { continue; }
+            html.push_str("<p>");
+            for seg in line {
+                match seg {
+                    HtmlSegment::Sep => html.push_str(&html_escape(separator)),
+                    HtmlSegment::Lit(t) => html.push_str(&html_escape(t)),
+                    HtmlSegment::Entry { text, annotation } => {
+                        let tip = tooltip_text(annotation);
+                        html.push_str(&format!(
+                            "<a href=\"glossary.html#entry-{}\" class=\"word\" title=\"{}\">{}</a>",
+                            html_escape(&annotation.entry_name),
+                            html_escape(&tip),
+                            html_escape(text),
+                        ));
+                    }
+                    HtmlSegment::TagOpen(name, attrs) => {
+                        html.push('<');
+                        html.push_str(&html_escape(name));
+                        for (k, v) in attrs {
+                            if v.is_empty() {
+                                html.push_str(&format!(" {}", html_escape(k)));
+                            } else {
+                                html.push_str(&format!(" {}=\"{}\"", html_escape(k), html_escape(v)));
+                            }
+                        }
+                        html.push('>');
+                    }
+                    HtmlSegment::TagClose(name) => {
+                        html.push_str(&format!("</{}>", html_escape(name)));
+                    }
+                    HtmlSegment::SelfClosingTag(name, attrs) => {
+                        html.push('<');
+                        html.push_str(&html_escape(name));
+                        for (k, v) in attrs {
+                            if v.is_empty() {
+                                html.push_str(&format!(" {}", html_escape(k)));
+                            } else {
+                                html.push_str(&format!(" {}=\"{}\"", html_escape(k), html_escape(v)));
+                            }
+                        }
+                        html.push_str("/>");
+                    }
+                }
+            }
+            html.push_str("</p>\n");
+        }
+        html
     }
-    html
 }
 
 enum HtmlSegment {
     Sep,
     Lit(String),
     Entry { text: String, annotation: EntryAnnotation },
+    TagOpen(String, Vec<(String, String)>),
+    TagClose(String),
+    SelfClosingTag(String, Vec<(String, String)>),
 }
 
 fn needs_separator(
@@ -1168,7 +1216,7 @@ pub fn render_site(dir: &Path, outdir: &Path, huc: Option<&Path>, site_title: Op
         let parts = render::resolve_annotated(&hut_file.tokens, &ctx)?;
         let (separator, no_sep_before) = render::read_render_config(&ctx);
 
-        let body_html = annotated_to_body_html(&parts, &separator, &no_sep_before);
+        let body_html = HtmlRenderer.render(&parts, &separator, &no_sep_before);
         let page_html = wrap_page(&nav_entry.title, &body_html, &nav, &nav_entry.rel_path, site_title);
 
         let out_path = outdir.join(&nav_entry.rel_path);

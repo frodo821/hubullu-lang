@@ -557,6 +557,10 @@ pub enum Token {
     Glue,
     /// `//` — newline marker: inserts a line break in rendered output.
     Newline,
+    /// `<em>...</em>` — XML-like tag wrapping child tokens.
+    Tag { name: String, attrs: Vec<(String, String)>, children: Vec<Token>, span: Span },
+    /// `<br/>` — self-closing XML-like tag.
+    SelfClosingTag { name: String, attrs: Vec<(String, String)>, span: Span },
 }
 
 // ---------------------------------------------------------------------------

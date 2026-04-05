@@ -35,6 +35,9 @@ pub enum TokenKind {
     Tilde,     // ~
     Caret,     // ^
     Dollar,    // $
+    Minus,     // -
+    Lt,        // <
+    Gt,        // >
 
     // @-prefixed directives
     AtUse,       // @use

@@ -601,6 +601,9 @@ pub enum ResolvedPart {
     Text(String),
     Glue,
     Newline,
+    TagOpen(String, Vec<(String, String)>),
+    TagClose(String),
+    SelfClosingTag(String, Vec<(String, String)>),
 }
 
 /// Metadata about a resolved entry reference (for annotated rendering).
@@ -625,6 +628,12 @@ pub enum AnnotatedPart {
     Entry { text: String, annotation: EntryAnnotation },
     Glue,
     Newline,
+    /// Opening XML-like tag: `<em>` → `TagOpen("em", [])`
+    TagOpen(String, Vec<(String, String)>),
+    /// Closing XML-like tag: `</em>` → `TagClose("em")`
+    TagClose(String),
+    /// Self-closing XML-like tag: `<br/>` → `SelfClosingTag("br", [])`
+    SelfClosingTag(String, Vec<(String, String)>),
 }
 
 /// Resolve a list of AST tokens using the [`ResolveContext`].
@@ -748,6 +757,14 @@ pub fn resolve(
                         parts.push(ResolvedPart::Text(form_str));
                     }
                 } }
+            }
+            ast::Token::Tag { name, attrs, children, .. } => {
+                parts.push(ResolvedPart::TagOpen(name.clone(), attrs.clone()));
+                parts.extend(resolve(children, ctx)?);
+                parts.push(ResolvedPart::TagClose(name.clone()));
+            }
+            ast::Token::SelfClosingTag { name, attrs, .. } => {
+                parts.push(ResolvedPart::SelfClosingTag(name.clone(), attrs.clone()));
             }
         }
     }
@@ -903,6 +920,14 @@ pub fn resolve_annotated(
                     }
                 }
             }
+            ast::Token::Tag { name, attrs, children, .. } => {
+                parts.push(AnnotatedPart::TagOpen(name.clone(), attrs.clone()));
+                parts.extend(resolve_annotated(children, ctx)?);
+                parts.push(AnnotatedPart::TagClose(name.clone()));
+            }
+            ast::Token::SelfClosingTag { name, attrs, .. } => {
+                parts.push(AnnotatedPart::SelfClosingTag(name.clone(), attrs.clone()));
+            }
         }
     }
     Ok(parts)
@@ -958,6 +983,71 @@ pub fn read_render_config(ctx: &ResolveContext) -> (String, String) {
 // Smart join
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// PartRenderer trait — format-agnostic rendering of AnnotatedPart sequences
+// ---------------------------------------------------------------------------
+
+/// Trait for rendering a sequence of resolved [`AnnotatedPart`]s into a
+/// target format (HTML, plain text, etc.).
+///
+/// Library users can implement this trait to add custom output formats
+/// (e.g. LaTeX, EPUB) without modifying the core resolution pipeline.
+pub trait PartRenderer {
+    /// Render annotated parts into the target format.
+    ///
+    /// * `separator` — default token separator (e.g. `" "`)
+    /// * `no_sep_before` — characters that suppress the preceding separator
+    ///   (e.g. `".,;:!?"`)
+    fn render(&self, parts: &[AnnotatedPart], separator: &str, no_sep_before: &str) -> String;
+}
+
+/// Plain-text renderer: strips tags and joins text content with separators.
+pub struct PlainTextRenderer;
+
+impl PartRenderer for PlainTextRenderer {
+    fn render(&self, parts: &[AnnotatedPart], separator: &str, no_sep_before: &str) -> String {
+        let mut result = String::new();
+        let mut glue_next = false;
+        let mut newline_next = false;
+        let mut has_content = false;
+
+        for part in parts {
+            match part {
+                AnnotatedPart::Glue => {
+                    glue_next = true;
+                }
+                AnnotatedPart::Newline => {
+                    newline_next = true;
+                    glue_next = false;
+                }
+                AnnotatedPart::Lit(text) | AnnotatedPart::Entry { text, .. } => {
+                    if newline_next {
+                        result.push('\n');
+                        newline_next = false;
+                    } else if has_content && !separator.is_empty() && !glue_next {
+                        let suppress = text
+                            .chars()
+                            .next()
+                            .map(|c| no_sep_before.contains(c))
+                            .unwrap_or(false);
+                        if !suppress {
+                            result.push_str(separator);
+                        }
+                    }
+                    glue_next = false;
+                    has_content = true;
+                    result.push_str(text);
+                }
+                // Tags are stripped in plain-text output.
+                AnnotatedPart::TagOpen(..)
+                | AnnotatedPart::TagClose(_)
+                | AnnotatedPart::SelfClosingTag(..) => {}
+            }
+        }
+        result
+    }
+}
+
 /// Join resolved parts using separator, suppressing it before certain characters
 /// and around `Glue` markers.
 pub fn smart_join(parts: &[ResolvedPart], separator: &str, no_sep_before: &str) -> String {
@@ -989,6 +1079,10 @@ pub fn smart_join(parts: &[ResolvedPart], separator: &str, no_sep_before: &str) 
                 glue_next = false;
                 result.push_str(text);
             }
+            // Tags are structural markers for HTML; plain-text join ignores them.
+            ResolvedPart::TagOpen(..)
+            | ResolvedPart::TagClose(_)
+            | ResolvedPart::SelfClosingTag(..) => {}
         }
     }
     result
