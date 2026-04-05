@@ -1,0 +1,10 @@
+{
+  "hubullu": {
+    "command": "hubullu",
+    "args": ["lsp"],
+    "extensionToLanguage": {
+      ".hu": "hubullu",
+      ".hut": "hubullu"
+    }
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "name": "hubullu-lsp",
+  "description": "Hubullu language server for .hu and .hut files",
+  "lspServers": "./.lsp.json"
+}
