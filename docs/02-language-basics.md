@@ -2,7 +2,7 @@
 
 ## File Structure
 
-A LexDSL file consists of top-level items in any order (with the exception that `@use` and `@reference` must precede other items). The eight top-level items are:
+A Hubullu file consists of top-level items in any order (with the exception that `@use` and `@reference` must precede other items). The eight top-level items are:
 
 | Item | Purpose |
 | ---- | ------- |
@@ -12,6 +12,7 @@ A LexDSL file consists of top-level items in any order (with the exception that 
 | `@extend` | Add enumerated values to an existing tag axis |
 | `inflection` | Define a paradigm (inflection/declension pattern) |
 | `phonrule` | Define phonological rewrite rules (e.g. vowel harmony) |
+| `@export` | Re-export imported declarations or entries transitively |
 | `@render` | Configure token rendering (separator, punctuation handling) |
 | `entry` | Define a dictionary entry |
 

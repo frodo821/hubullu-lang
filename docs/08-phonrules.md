@@ -104,7 +104,6 @@ This reads: "apply `to_back` to any vowel that is preceded (across morpheme boun
 | `$` | Matches word end only |
 | `class*` | Matches zero or more characters in the class |
 | `!class*` | Matches zero or more characters NOT in the class |
-| `class+` | Matches one or more characters in the class (use `!` prefix for negation) |
 | `(a \| b)` | Matches if any alternative matches (alternation) |
 
 Context elements can appear on either side of `_`. Left context reads right-to-left from the match position; right context reads left-to-right.
@@ -180,5 +179,6 @@ compose harmony(root + tense_sfx + pn_sfx)
 
 1. **Inflection rule RHS**: `[conditions] -> harmony(\`{root}ler\`)`
 2. **Compose chain**: `compose harmony(root + sfx1 + sfx2)`
+3. **Inflection-level `apply`**: `apply harmony(cell)` — wraps all non-delegate rule results
 
 Phonrules are imported via `@use` like other declarations. They are hoisted within the same file.

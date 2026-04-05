@@ -1,6 +1,6 @@
 # Tag Axes & @extend
 
-Tag axes are the foundation of LexDSL's type system. They define the grammatical dimensions (tense, case, number, gender, etc.) and classification categories (part of speech, register, etc.) that structure your dictionary.
+Tag axes are the foundation of Hubullu's type system. They define the grammatical dimensions (tense, case, number, gender, etc.) and classification categories (part of speech, register, etc.) that structure your dictionary.
 
 ## Declaring a Tag Axis
 

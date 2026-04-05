@@ -1,6 +1,6 @@
 # Inflection
 
-Inflection definitions are the heart of LexDSL. They describe how words change form across grammatical dimensions — conjugation tables for verbs, declension tables for nouns, and any other morphological paradigm.
+Inflection definitions are the heart of Hubullu. They describe how words change form across grammatical dimensions — conjugation tables for verbs, declension tables for nouns, and any other morphological paradigm.
 
 ## Basic Structure
 
@@ -90,6 +90,25 @@ Rules:
 - Higher specificity always wins
 - If two rules match with **equal specificity**, it's a compile error (ambiguous)
 - If no rule matches a cell, it's a compile error (incomplete paradigm)
+
+### Apply (Paradigm-Wide Phonrule)
+
+You can apply a phonological rule to **every non-delegate cell** in the paradigm by adding an `apply` expression before the rules:
+
+```
+inflection harmonic_verb for {tense, number} {
+  requires stems: root
+  apply harmony(cell)
+
+  [tense=present, number=sg] -> `{root}ler`
+  [tense=past, number=sg]    -> `{root}di`
+  [_]                        -> null
+}
+```
+
+`cell` is a terminal representing the evaluated rule result. Phonrule applications nest: `apply harmony(elision(cell))` applies `elision` first, then `harmony`.
+
+Delegate results (rules that forward to another inflection) are **not** affected by `apply`.
 
 ### Example: A Complete Verb Conjugation
 

@@ -41,7 +41,7 @@ Letters, digits, and underscores are valid in identifiers. Digits alone are also
 
 ## @use (Declarations)
 
-Imports tagaxis, @extend, and inflection from another file. Does NOT import entries.
+Imports tagaxis, @extend, inflection, and phonrule from another file. Does NOT import entries.
 
 ```
 @use * from "core/tags.hu"              # All declarations
@@ -130,8 +130,7 @@ For structural axes, define slots:
 Define inflection paradigms with tag conditions mapping to forms:
 
 ```
-inflection strong_verb for {tense, person, number} {
-  display: { en: "Strong Verb", ja: "強変化動詞" }  # Optional display name
+inflection strong_verb display { en: "Strong Verb", ja: "強変化動詞" } for {tense, person, number} {
   requires stems: pres, past
 
   [tense=present, person=1, number=sg] -> `{pres}e`
@@ -164,6 +163,23 @@ requires stems: root[root_type=triliteral]
 
 [person=3, number=sg] -> `{root.C1}a{root.C2}a{root.C3}a`
 ```
+
+## apply (Paradigm-Wide Phonrule)
+
+Apply a phonrule to every non-delegate cell in the paradigm:
+
+```
+inflection harmonic_verb for {tense, number} {
+  requires stems: root
+  apply harmony(cell)
+
+  [tense=present, number=sg] -> `{root}ler`
+  [tense=past, number=sg]    -> `{root}di`
+  [_]                        -> null
+}
+```
+
+`cell` is the terminal for the evaluated rule result. Nesting: `apply harmony(elision(cell))`. Delegate results are NOT affected by `apply`.
 
 ## Phonological Rule Application in Rules
 
@@ -283,6 +299,10 @@ entry faren {
       tokens: faren[tense=present, person=1, number=sg] "."
       translation: "I go."
     }
+    example {
+      tokens: <em>faren[tense=past, person=3, number=sg]</em> "."
+      translation: "He went."
+    }
   }
 }
 ```
@@ -298,6 +318,17 @@ entry_id[tense=present, number=sg]    # Specific form
 entry_id[$=root]                      # Stem extraction
 namespace.entry_id#sense[form_spec]   # Full form
 ```
+
+### Token Types in Examples
+
+- `entry_ref[form_spec]` — inflected form
+- `entry_ref[]` — headword form
+- `entry_ref[$=stem]` — raw stem value
+- `"literal"` — plain text
+- `~` — glue (suppress separator between adjacent tokens)
+- `//` — newline (insert line break between tokens)
+- `<tag>...</tag>` — XML-like tag wrapping child tokens
+- `<tag/>` — self-closing tag
 
 ### Stem References `[$=name]`
 
@@ -320,13 +351,15 @@ Configure text rendering for .hut files:
 
 # Hoisting Rules
 
-| Construct      | Hoisted | Forward-reference OK |
-|----------------|---------|---------------------|
-| tagaxis        | Yes     | Yes                 |
-| @extend        | Yes     | Yes                 |
-| inflection     | Yes     | Yes                 |
-| entry          | No      | No                  |
-| @use/@reference| No      | Must be at top      |
+| Construct        | Hoisted | Forward-reference OK |
+|------------------|---------|---------------------|
+| tagaxis          | Yes     | Yes                 |
+| @extend          | Yes     | Yes                 |
+| inflection       | Yes     | Yes                 |
+| phonrule         | Yes     | Yes                 |
+| entry            | No      | No                  |
+| @use/@reference  | No      | Must be at top      |
+| @export          | No      | Must be at top      |
 
 # Common Errors to Avoid
 

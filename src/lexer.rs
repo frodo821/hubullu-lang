@@ -1,4 +1,4 @@
-//! Hand-written lexer for the LexDSL language.
+//! Hand-written lexer for the Hubullu language.
 //!
 //! Tokenises source text into [`Token`]s. Notable rules:
 //! - `#` after whitespace (or at line start) starts a comment; after non-whitespace it is a `Hash` token
@@ -10,7 +10,7 @@ use crate::error::Diagnostic;
 use crate::span::FileId;
 use crate::token::{TemplateSeg, Token, TokenKind};
 
-/// Hand-written scanner for LexDSL source text.
+/// Hand-written scanner for Hubullu source text.
 pub struct Lexer<'a> {
     source: &'a str,
     file_id: FileId,

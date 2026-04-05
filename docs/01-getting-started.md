@@ -1,6 +1,6 @@
 # Getting Started with Hubullu
 
-Hubullu is a compiler for **LexDSL**, a domain-specific language for describing dictionaries of artificial natural languages (constructed languages). It compiles `.hu` source files into a SQLite database containing entries, inflected forms, inter-entry links, and metadata with full-text search.
+Hubullu is a compiler for the **Hubullu** language, a domain-specific language for describing dictionaries of artificial natural languages (constructed languages). It compiles `.hu` source files into a SQLite database containing entries, inflected forms, inter-entry links, and metadata with full-text search.
 
 ## Design Principles
 
@@ -22,13 +22,13 @@ The binary is at `target/release/hubullu`.
 ## CLI Usage
 
 ```sh
-hubullu <input.hu> [-o <output.sqlite>]
+hubullu compile <input.hu> [-o <output.huc>]
 ```
 
 | Argument      | Description                                   |
 | ------------- | --------------------------------------------- |
 | `<input.hu>` | Entry-point `.hu` file (required, positional) |
-| `-o, --output` | Output SQLite path (default: `dictionary.sqlite`) |
+| `-o, --output` | Output `.huc` path (default: `dictionary.huc`) |
 
 On success, prints `Compiled to <output>` to stderr. On failure, prints diagnostics and exits with code 1.
 
@@ -118,14 +118,14 @@ entry house {
 ### Step 3: Compile
 
 ```sh
-hubullu main.hu -o my-lang.sqlite
+hubullu compile main.hu -o my-lang.huc
 ```
 
 ### Step 4: Query the result
 
 ```sh
-sqlite3 my-lang.sqlite "SELECT * FROM entries;"
-sqlite3 my-lang.sqlite "SELECT * FROM forms;"
+sqlite3 my-lang.huc "SELECT * FROM entries;"
+sqlite3 my-lang.huc "SELECT * FROM forms;"
 ```
 
 You'll see:

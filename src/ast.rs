@@ -1,4 +1,4 @@
-//! LexDSL Abstract Syntax Tree definitions.
+//! Hubullu Abstract Syntax Tree definitions.
 //!
 //! Two string types exist in the DSL:
 //! - `StringLit` (`"..."`) — plain text, no interpolation

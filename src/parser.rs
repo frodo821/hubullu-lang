@@ -1,4 +1,4 @@
-//! Recursive descent parser for the LexDSL language.
+//! Recursive descent parser for the Hubullu language.
 //!
 //! Converts a token stream into an [`ast::File`]. Recovers from errors at
 //! the top-level item boundary so that multiple diagnostics can be reported
@@ -9,7 +9,7 @@ use crate::error::Diagnostic;
 use crate::span::FileId;
 use crate::token::{TemplateSeg, Token, TokenKind};
 
-/// Recursive descent parser for LexDSL.
+/// Recursive descent parser for Hubullu.
 pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,

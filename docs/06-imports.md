@@ -1,10 +1,10 @@
 # Imports
 
-LexDSL projects typically span multiple files. The import system has two directives — `@use` for declarations and `@reference` for entries — each with distinct scoping and cycle rules.
+Hubullu projects typically span multiple files. The import system has two directives — `@use` for declarations and `@reference` for entries — each with distinct scoping and cycle rules.
 
 ## @use — Import Declarations
 
-`@use` imports **declarations** (tag axes, `@extend`s, inflection classes) from another file:
+`@use` imports **declarations** (tag axes, `@extend`s, inflection classes, phonrules) from another file:
 
 ```
 @use * from "profile.hu"
@@ -68,6 +68,30 @@ Unlike `@use`, **`@reference` permits circular references**. This is by design �
 ```
 
 The compiler uses a visited-file set to avoid re-loading files, but does not treat cycles as errors.
+
+## @export — Re-export Symbols
+
+`@export` re-exports imported symbols so that files importing from you also receive them:
+
+### Form 1: Re-export Already-Imported Symbols
+
+```
+@use * from "core.hu"
+@export use *                    # re-export all declarations from core.hu
+@export use tense                # re-export only tense
+```
+
+### Form 2: Import and Re-export in One Step
+
+```
+@export use * from "core.hu"             # import + re-export declarations
+@export reference * from "entries.hu"    # import + re-export entries
+```
+
+`@export use` handles declarations (tagaxis, @extend, inflection, phonrule).
+`@export reference` handles entries.
+
+The syntax for the import target (`*`, `* as ns`, named list) is the same as `@use` and `@reference`.
 
 ## Import Syntax
 
@@ -147,6 +171,16 @@ Import paths are resolved **relative to the importing file's directory**:
 @reference * from "irregular.hu"     # resolves to project/entries/irregular.hu
 ```
 
+## Standard Library
+
+The `std:` scheme imports built-in modules bundled with the compiler:
+
+```
+@use * from "std:ipa"
+```
+
+Standard library modules are embedded in the compiler binary — no filesystem path resolution is performed.
+
 ## Import Placement
 
 `@use` and `@reference` must appear at the **top of the file**, before any other items. They are **not hoisted** — unlike `tagaxis`, `@extend`, and `inflection`, which can appear in any order within a file.
@@ -203,6 +237,16 @@ inflection verb_class for {verbal_tense, number} { ... }
 | **Cycles** | Compile error | Allowed |
 | **Placement** | File top only | File top only |
 | **Hoisted** | No | No |
+
+`@export` re-exports symbols transitively. Without `@export`, imported symbols are visible only in the importing file.
+
+### Standard Library
+
+| Path scheme | Resolution |
+| ----------- | ---------- |
+| `"profile.hu"` | Relative to importing file |
+| `"../core.hu"` | Relative path |
+| `"std:ipa"` | Built-in module (compiler-embedded) |
 
 ## Recommended Project Layout
 

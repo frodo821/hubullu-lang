@@ -1,6 +1,6 @@
 # Real-World Examples
 
-This guide walks through complete, realistic LexDSL projects for different morphological types. Each example shows how to model a specific kind of language from scratch.
+This guide walks through complete, realistic Hubullu projects for different morphological types. Each example shows how to model a specific kind of language from scratch.
 
 ## Example 1: A Germanic Conlang (Fusional)
 

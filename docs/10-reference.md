@@ -11,6 +11,7 @@ file = item* ;
 
 item = use_decl
      | reference_decl
+     | export_decl
      | tagaxis_decl
      | extend_decl
      | inflection_decl
@@ -33,6 +34,12 @@ import_list    = "(" import_entries ")"
 
 import_entries = import_entry ("," import_entry)* ","? ;
 import_entry   = IDENT ("as" IDENT)? ;
+```
+
+### @export
+
+```ebnf
+export_decl = "@export" ("use" | "reference") import_target ("from" STRING)? ;
 ```
 
 ### Tag Axis
@@ -71,7 +78,11 @@ display_clause = "display" display_map ;
 
 axis_list = IDENT ("," IDENT)* ","? ;
 
-inflection_body = requires_stems? (rule_list | compose_body) ;
+inflection_body = requires_stems? (apply_clause? rule_list | compose_body) ;
+
+apply_clause = "apply" apply_expr ;
+apply_expr = IDENT "(" apply_expr ")"
+           | "cell" ;
 
 requires_stems = "requires" "stems" ":" stem_req ("," stem_req)* ;
 stem_req       = IDENT ("[" tag_condition_list_plain "]")? ;
@@ -97,7 +108,7 @@ delegate_tag       = IDENT "=" IDENT    (* fixed value *)
                    | IDENT              (* pass-through *) ;
 
 stem_mapping_list  = (stem_mapping ",")* stem_mapping ","? ;
-stem_mapping       = IDENT ":" IDENT ;
+stem_mapping       = IDENT ":" (IDENT | STRING) ;
 ```
 
 ### Compose
@@ -133,8 +144,8 @@ rewrite_rule = phon_pattern "->" phon_replacement ("/" phon_context)? ;
 phon_pattern = IDENT | STRING ;
 phon_replacement = IDENT | STRING | "null" ;
 phon_context = context_elem* "_" context_elem* ;
-context_elem = IDENT ("*" | "+")?
-             | "!" IDENT ("*" | "+")?
+context_elem = IDENT "*"?
+             | "!" IDENT "*"?
              | "+"
              | "^"
              | "$"
@@ -197,7 +208,12 @@ token = entry_ref ("[" tag_condition_list_plain? "]")?
       | entry_ref "[$=" IDENT "]"
       | STRING
       | "~"
-      | "//" ;
+      | "//"
+      | xml_tag ;
+
+xml_tag = "<" IDENT xml_attrs ">" token* "</" IDENT ">"
+        | "<" IDENT xml_attrs "/>" ;
+xml_attrs = (IDENT "=" STRING)* ;
 ```
 
 ### Entry References
@@ -266,7 +282,7 @@ Create SQLite database with tables, indexes, and FTS5 virtual table.
 | unterminated template literal | Missing closing `` ` `` |
 | unknown escape sequence | Unrecognized `\x` |
 | missing `}` in template interpolation | `{name` without closing `}` |
-| unknown directive `@<name>` | Only @use, @reference, @extend, @render are valid |
+| unknown directive `@<name>` | Only @use, @reference, @export, @extend, @render are valid |
 | unexpected character `<char>` | Character not part of any token |
 
 ### Phase 1 Errors
@@ -279,6 +295,7 @@ Create SQLite database with tables, indexes, and FTS5 virtual table.
 | cannot import declaration via @reference | Named @reference targeting tagaxis/extend/inflection |
 | symbol `<name>` not found in `<file>` | Named import references nonexistent symbol |
 | duplicate definition of `<name>` | Same name defined twice in one file |
+| unknown standard library module `<name>` | @use references a nonexistent stdlib module |
 
 ### Phase 2 Errors
 
@@ -308,11 +325,13 @@ CREATE TABLE entries (
     name TEXT NOT NULL,
     headword TEXT NOT NULL,
     meaning TEXT NOT NULL,
-    inflection_class_id INTEGER
+    inflection_class_id INTEGER,
+    etymology_proto TEXT,
+    etymology_note TEXT
 );
 ```
 
-The `name` column stores the entry's identifier. `inflection_class_id` references `inflection_meta(id)` and is `NULL` for entries without inflection.
+The `name` column stores the entry's identifier. `inflection_class_id` references `inflection_meta(id)` and is `NULL` for entries without inflection. `etymology_proto` and `etymology_note` store the proto-form and note from the entry's `etymology` block (both `NULL` if no etymology is provided).
 
 ### entry_tags
 
@@ -462,6 +481,35 @@ CREATE TABLE render_config (
 
 Keys: `separator` (default: `" "`), `no_separator_before` (default: `".,;:!?"`).
 
+### compile_meta
+
+Compilation metadata.
+
+```sql
+CREATE TABLE compile_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+```
+
+Keys: `entry_point_dir` (the directory of the entry-point `.hu` file).
+
+### name_resolution
+
+Per-file symbol scope for `.hut` rendering resolution.
+
+```sql
+CREATE TABLE name_resolution (
+    file_hash TEXT NOT NULL,
+    name TEXT NOT NULL,
+    entry_id INTEGER NOT NULL,
+    PRIMARY KEY (file_hash, name),
+    FOREIGN KEY (entry_id) REFERENCES entries(id)
+);
+```
+
+Each row maps a file (identified by SHA256 hash of its relative path) to the entry names visible in that file's scope.
+
 ### Indexes
 
 ```sql
@@ -475,6 +523,7 @@ CREATE INDEX idx_entry_tags ON entry_tags(entry_id);
 CREATE INDEX idx_entry_tags_axis ON entry_tags(axis, value);
 CREATE INDEX idx_inflection_display ON inflection_display(inflection_id);
 CREATE INDEX idx_inflection_axes ON inflection_axes(inflection_id);
+CREATE INDEX idx_name_resolution_hash ON name_resolution(file_hash);
 ```
 
 ### Full-Text Search

@@ -1,4 +1,4 @@
-//! Token types produced by the LexDSL lexer.
+//! Token types produced by the Hubullu lexer.
 
 use crate::ast::{Span, Spanned};
 

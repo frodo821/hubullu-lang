@@ -1,4 +1,4 @@
-//! AST visitor trait for walking LexDSL syntax trees.
+//! AST visitor trait for walking Hubullu syntax trees.
 //!
 //! Provides a `Visitor` trait with default (no-op) methods for each node type,
 //! plus `walk_*` functions that recursively descend. Override only the methods

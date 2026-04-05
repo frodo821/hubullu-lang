@@ -1,4 +1,4 @@
-//! # hubullu — LexDSL compiler
+//! # hubullu — Hubullu compiler
 //!
 //! Compiles `.hu` artificial natural language dictionary files into `.huc` files.
 //!
@@ -23,7 +23,7 @@
 //! For tooling (LSP, linters), use [`parse_source`] or [`parse_file`] to obtain
 //! the AST without running the full pipeline.
 
-/// Abstract syntax tree types for the LexDSL language.
+/// Abstract syntax tree types for the Hubullu language.
 pub mod ast;
 /// Generic DAG cycle detector (Kahn's algorithm).
 pub mod dag;
@@ -45,7 +45,7 @@ pub mod error;
 pub mod inflection_eval;
 /// Linter for `.hu` files — warnings and style checks with optional auto-fix.
 pub mod lint;
-/// Hand-written lexer (scanner) for the LexDSL language.
+/// Hand-written lexer (scanner) for the Hubullu language.
 pub mod lexer;
 /// Recursive descent parser — tokens to [`ast::File`].
 pub mod parser;
@@ -152,7 +152,7 @@ pub fn lex_source(source: &str, filename: &str) -> (Vec<Token>, Vec<Diagnostic>,
 // Full compilation (requires "sqlite" feature)
 // ---------------------------------------------------------------------------
 
-/// Compile a LexDSL project from the given entry file to a `.huc` file.
+/// Compile a Hubullu project from the given entry file to a `.huc` file.
 ///
 /// Automatically uses incremental compilation when a valid cache exists
 /// alongside the output file.  To force a full rebuild, delete the

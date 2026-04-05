@@ -285,7 +285,13 @@ A token list is a sequence of:
    tokens: "line one" // "line two"
    ```
 
-5. **Stem reference `[$=name]`** — extracts a raw stem value instead of an inflected form:
+5. **XML-like tags** — wrap tokens in semantic tags for rendering:
+   ```
+   tokens: <em>faren[tense=present, person=1, number=sg]</em> "."
+   ```
+   Tags support attributes: `<span class="verb">...</span>`. Self-closing tags are also supported: `<br/>`.
+
+6. **Stem reference `[$=name]`** — extracts a raw stem value instead of an inflected form:
    ```
    tokens: gelmek[$=root]~"iyor"
    ```

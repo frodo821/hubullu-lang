@@ -52,7 +52,7 @@ cargo install --git https://github.com/frodo821/hubullu-lang.git
 Compile a `.hu` project to a SQLite database:
 
 ```sh
-hubullu compile main.hu -o dictionary.sqlite
+hubullu compile main.hu -o dictionary.huc
 ```
 
 ### Lint
@@ -99,7 +99,7 @@ hubullu can also be used as a Rust library:
 use std::path::Path;
 
 // Full compilation
-hubullu::compile(Path::new("main.hu"), Path::new("dict.sqlite"))
+hubullu::compile(Path::new("main.hu"), Path::new("dict.huc"))
     .expect("compilation failed");
 
 // Parse only (for tooling)
