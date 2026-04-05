@@ -249,6 +249,19 @@ pub fn generate_hut(
                 in_header = false;
                 STRING
             }
+            TokenKind::Minus if !in_header => {
+                // Hyphen in tag names (e.g. `my-custom-elem`): color as ident to
+                // match the surrounding Ident tokens.
+                let prev_is_ident = i > 0
+                    && matches!(file_tokens.get(i - 1).map(|t| &t.node), Some(TokenKind::Ident(_)));
+                let next_is_ident =
+                    matches!(file_tokens.get(i + 1).map(|t| &t.node), Some(TokenKind::Ident(_)));
+                if prev_is_ident && next_is_ident {
+                    TYPE
+                } else {
+                    continue;
+                }
+            }
             TokenKind::Arrow | TokenKind::Plus | TokenKind::Star | TokenKind::Pipe
             | TokenKind::Tilde | TokenKind::Eq | TokenKind::Bang | TokenKind::Slash | TokenKind::DoubleSlash => OPERATOR,
             TokenKind::Eof => continue,

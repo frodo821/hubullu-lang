@@ -84,26 +84,14 @@ fn collect_example_hints(
 
         if is_glued {
             // Glue chain: concatenate all resolved parts into one hint.
+            // Tags are transparent — recurse into children.
             if let Some(end) = last_span_end {
                 let mut parts = Vec::new();
                 let mut all_resolved = true;
-                for j in chain_start..chain_end {
-                    match &tokens[j] {
-                        ast::Token::Ref(entry_ref) => {
-                            if let Some(form) = resolve_ref_form(entry_ref, phase2) {
-                                parts.push(form);
-                            } else {
-                                all_resolved = false;
-                                break;
-                            }
-                        }
-                        ast::Token::Lit(lit) if lit.span.file_id == file_id => {
-                            parts.push(lit.node.clone());
-                        }
-                        ast::Token::Glue | ast::Token::Newline => {}
-                        _ => {}
-                    }
-                }
+                collect_chain_parts(
+                    &tokens[chain_start..chain_end],
+                    file_id, phase2, &mut parts, &mut all_resolved,
+                );
                 if all_resolved && !parts.is_empty() {
                     let form_str = parts.join("");
                     let position = convert::offset_to_position(file_id, end, source_map);
@@ -128,6 +116,38 @@ fn collect_example_hints(
     }
 }
 
+/// Collect resolved form parts from a token slice, recursing into Tag children.
+fn collect_chain_parts(
+    tokens: &[ast::Token],
+    file_id: FileId,
+    phase2: &Phase2Result,
+    parts: &mut Vec<String>,
+    all_resolved: &mut bool,
+) {
+    for tok in tokens {
+        if !*all_resolved {
+            break;
+        }
+        match tok {
+            ast::Token::Ref(entry_ref) => {
+                if let Some(form) = resolve_ref_form(entry_ref, phase2) {
+                    parts.push(form);
+                } else {
+                    *all_resolved = false;
+                }
+            }
+            ast::Token::Lit(lit) if lit.span.file_id == file_id => {
+                parts.push(lit.node.clone());
+            }
+            ast::Token::Tag { children, .. } => {
+                collect_chain_parts(children, file_id, phase2, parts, all_resolved);
+            }
+            ast::Token::Glue | ast::Token::Newline | ast::Token::SelfClosingTag { .. } => {}
+            _ => {}
+        }
+    }
+}
+
 /// Resolve the form string for a single entry ref.
 fn resolve_ref_form(entry_ref: &EntryRef, phase2: &Phase2Result) -> Option<String> {
     let entry_id = &entry_ref.entry_id.node;
@@ -146,6 +166,8 @@ fn token_span_end(tok: &ast::Token, file_id: FileId) -> Option<usize> {
     match tok {
         ast::Token::Ref(r) if r.span.file_id == file_id => Some(r.span.end),
         ast::Token::Lit(lit) if lit.span.file_id == file_id => Some(lit.span.end),
+        ast::Token::Tag { span, .. } if span.file_id == file_id => Some(span.end),
+        ast::Token::SelfClosingTag { span, .. } if span.file_id == file_id => Some(span.end),
         _ => None,
     }
 }
@@ -444,6 +466,116 @@ pub fn parse_bracket_conditions(
         if i < tokens.len() && matches!(tokens[i].node, TokenKind::Comma) {
             i += 1;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::{self, Span, Spanned, StringLit};
+    use crate::error::Diagnostics;
+    use crate::phase2::{Phase2Result, ResolvedEntry};
+    use std::collections::HashMap;
+
+    fn fid() -> FileId { FileId(0) }
+
+    fn span(start: usize, end: usize) -> Span {
+        Span { file_id: fid(), start, end }
+    }
+
+    fn mk_ref(name: &str, s: usize, e: usize) -> ast::Token {
+        ast::Token::Ref(EntryRef {
+            namespace: vec![],
+            entry_id: Spanned { node: name.to_string(), span: span(s, e) },
+            meaning: None,
+            form_spec: None,
+            stem_spec: None,
+            span: span(s, e),
+        })
+    }
+
+    fn mk_lit(text: &str, s: usize, e: usize) -> ast::Token {
+        ast::Token::Lit(StringLit { node: text.to_string(), span: span(s, e) })
+    }
+
+    fn mk_tag(name: &str, children: Vec<ast::Token>, s: usize, e: usize) -> ast::Token {
+        ast::Token::Tag { name: name.to_string(), attrs: vec![], children, span: span(s, e) }
+    }
+
+    fn mk_phase2(entries: Vec<(&str, &str)>) -> Phase2Result {
+        Phase2Result {
+            axes: HashMap::new(),
+            inflections: vec![],
+            entries: entries.into_iter().map(|(name, hw)| ResolvedEntry {
+                name: name.to_string(),
+                source_file: std::path::PathBuf::new(),
+                headword: hw.to_string(),
+                headword_scripts: HashMap::new(),
+                tags: vec![],
+                inflection_class: None,
+                meaning: String::new(),
+                meanings: vec![],
+                stems: HashMap::new(),
+                forms: vec![],
+                links: vec![],
+                etymology_proto: None,
+                etymology_note: None,
+            }).collect(),
+            render_config: Default::default(),
+            diagnostics: Diagnostics::new(),
+        }
+    }
+
+    #[test]
+    fn collect_chain_parts_simple_glue() {
+        let p2 = mk_phase2(vec![("a", "alpha"), ("b", "beta")]);
+        let tokens = vec![mk_ref("a", 0, 1), ast::Token::Glue, mk_ref("b", 2, 3)];
+        let mut parts = Vec::new();
+        let mut ok = true;
+        collect_chain_parts(&tokens, fid(), &p2, &mut parts, &mut ok);
+        assert!(ok);
+        assert_eq!(parts, vec!["alpha", "beta"]);
+    }
+
+    #[test]
+    fn collect_chain_parts_tag_transparent() {
+        // ref1~<em>ref2</em>~ref3 — tag is transparent for inlay hints
+        let p2 = mk_phase2(vec![("r1", "one"), ("r2", "two"), ("r3", "three")]);
+        let tokens = vec![
+            mk_ref("r1", 0, 2),
+            ast::Token::Glue,
+            mk_tag("em", vec![mk_ref("r2", 7, 9)], 3, 15),
+            ast::Token::Glue,
+            mk_ref("r3", 16, 18),
+        ];
+        let mut parts = Vec::new();
+        let mut ok = true;
+        collect_chain_parts(&tokens, fid(), &p2, &mut parts, &mut ok);
+        assert!(ok);
+        assert_eq!(parts, vec!["one", "two", "three"]);
+    }
+
+    #[test]
+    fn collect_chain_parts_tag_with_glue_inside() {
+        // ref1~ref2<em>~ref3~ref4</em>
+        // Top-level: [Ref(r1), Glue, Ref(r2), Tag{children: [Glue, Ref(r3), Glue, Ref(r4)]}]
+        let p2 = mk_phase2(vec![("r1", "one"), ("r2", "two"), ("r3", "three"), ("r4", "four")]);
+        let tokens = vec![
+            mk_ref("r1", 0, 2),
+            ast::Token::Glue,
+            mk_ref("r2", 3, 5),
+            mk_tag("em", vec![
+                ast::Token::Glue,
+                mk_ref("r3", 10, 12),
+                ast::Token::Glue,
+                mk_ref("r4", 13, 15),
+            ], 5, 20),
+        ];
+        let mut parts = Vec::new();
+        let mut ok = true;
+        collect_chain_parts(&tokens, fid(), &p2, &mut parts, &mut ok);
+        assert!(ok);
+        assert_eq!(parts, vec!["one", "two", "three", "four"]);
     }
 }
 

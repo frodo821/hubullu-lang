@@ -32,11 +32,19 @@ fn build_parse_result(uri: &Uri, text: &str) -> ParseResult {
         let mut source_map = crate::span::SourceMap::new();
         let file_id = source_map.add_file(filename.into(), text.to_string());
         let lexer = crate::lexer::Lexer::new(source_map.source(file_id), file_id);
-        let (tokens, _) = lexer.tokenize();
+        let (tokens, lex_errors) = lexer.tokenize();
+
+        // Parse the .hut token stream to detect tag errors (unclosed, mismatched, etc.).
+        let parser = crate::parser::Parser::new(tokens.clone(), file_id);
+        let (_hut_file, parse_errors) = parser.parse_token_list_to_eof();
+
+        let mut diagnostics = lex_errors;
+        diagnostics.extend(parse_errors);
+
         ParseResult {
             file: crate::ast::File { items: Vec::new() },
             tokens,
-            diagnostics: Vec::new(),
+            diagnostics,
             source_map,
             file_id,
         }
