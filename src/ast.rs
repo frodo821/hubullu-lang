@@ -336,10 +336,31 @@ pub struct StemReq {
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InflectionBody {
-    /// Simple rule list.
-    Rules(Vec<InflectionRule>),
+    /// Simple rule list, optionally with an `apply` phonrule wrapper.
+    Rules(RulesBody),
     /// Agglutinative: `compose root + sfx1 + sfx2` with slots and optional overrides.
     Compose(ComposeBody),
+}
+
+/// Body for rule-based inflections.
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RulesBody {
+    /// Optional `apply harmony(cell)` — phonrule applied to every non-delegate cell.
+    pub apply: Option<ApplyExpr>,
+    pub rules: Vec<InflectionRule>,
+}
+
+/// Expression tree for `apply` at the inflection level.
+///
+/// `apply harmony(elision(cell))` → `PhonApply { rule: harmony, inner: PhonApply { rule: elision, inner: Cell } }`
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ApplyExpr {
+    /// Terminal: the evaluated cell result.
+    Cell,
+    /// Phonological rule application wrapping an inner expression.
+    PhonApply { rule: Ident, inner: Box<ApplyExpr> },
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]

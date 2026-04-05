@@ -129,8 +129,8 @@ pub fn walk_inflection<V: Visitor>(visitor: &mut V, inflection: &Inflection) {
 
 pub fn walk_inflection_body<V: Visitor>(visitor: &mut V, body: &InflectionBody) {
     match body {
-        InflectionBody::Rules(rules) => {
-            for rule in rules {
+        InflectionBody::Rules(body) => {
+            for rule in &body.rules {
                 visitor.visit_inflection_rule(rule);
             }
         }

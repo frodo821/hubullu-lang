@@ -626,8 +626,8 @@ fn lint_duplicate_condition(file: &File, lints: &mut Vec<LintDiagnostic>) {
 
 fn check_body_duplicate_conditions(body: &InflectionBody, lints: &mut Vec<LintDiagnostic>) {
     match body {
-        InflectionBody::Rules(rules) => {
-            check_duplicate_conditions_inner(rules, lints);
+        InflectionBody::Rules(body) => {
+            check_duplicate_conditions_inner(&body.rules, lints);
         }
         InflectionBody::Compose(comp) => {
             for slot in &comp.slots {
@@ -859,7 +859,7 @@ fn is_inflection_used(name: &str, p1: &Phase1Result) -> bool {
 
 fn references_inflection_name(body: &InflectionBody, name: &str) -> bool {
     match body {
-        InflectionBody::Rules(rules) => rules_reference_inflection(rules, name),
+        InflectionBody::Rules(body) => rules_reference_inflection(&body.rules, name),
         InflectionBody::Compose(comp) => rules_reference_inflection(&comp.overrides, name),
     }
 }
@@ -969,8 +969,8 @@ fn collect_used_tag_values(file: &File, used: &mut HashSet<(String, String)>) {
 
 fn collect_body_tag_values(body: &InflectionBody, used: &mut HashSet<(String, String)>) {
     match body {
-        InflectionBody::Rules(rules) => {
-            for rule in rules {
+        InflectionBody::Rules(body) => {
+            for rule in &body.rules {
                 collect_rule_tag_values(rule, used);
             }
         }
@@ -1049,8 +1049,8 @@ fn lint_unused_stem(p1: &Phase1Result, lints: &mut Vec<LintDiagnostic>) {
 fn collect_template_stem_refs(body: &InflectionBody) -> HashSet<String> {
     let mut stems = HashSet::new();
     match body {
-        InflectionBody::Rules(rules) => {
-            collect_rules_template_stems(rules, &mut stems);
+        InflectionBody::Rules(body) => {
+            collect_rules_template_stems(&body.rules, &mut stems);
         }
         InflectionBody::Compose(comp) => {
             for slot in &comp.slots {
@@ -1131,8 +1131,8 @@ fn check_shadowed_in_body(
     lints: &mut Vec<LintDiagnostic>,
 ) {
     match body {
-        InflectionBody::Rules(rules) => {
-            check_shadowed_rules(rules, axes, axis_values, lints);
+        InflectionBody::Rules(body) => {
+            check_shadowed_rules(&body.rules, axes, axis_values, lints);
         }
         InflectionBody::Compose(comp) => {
             for slot in &comp.slots {
@@ -1201,16 +1201,16 @@ fn lint_incomplete_coverage(
     for file in p1.files.values() {
         for item in &file.items {
             if let Item::Inflection(infl) = &item.node {
-                if let InflectionBody::Rules(rules) = &infl.body {
+                if let InflectionBody::Rules(body) = &infl.body {
                     let axes: Vec<String> = infl.axes.iter().map(|a| a.node.clone()).collect();
-                    check_incomplete_coverage(rules, &axes, axis_values, &infl.name, lints);
+                    check_incomplete_coverage(&body.rules, &axes, axis_values, &infl.name, lints);
                 }
             }
             if let Item::Entry(entry) = &item.node {
                 if let Some(EntryInflection::Inline(inline)) = &entry.inflection {
-                    if let InflectionBody::Rules(rules) = &inline.body {
+                    if let InflectionBody::Rules(body) = &inline.body {
                         let axes: Vec<String> = inline.axes.iter().map(|a| a.node.clone()).collect();
-                        check_incomplete_coverage(rules, &axes, axis_values, &entry.name, lints);
+                        check_incomplete_coverage(&body.rules, &axes, axis_values, &entry.name, lints);
                     }
                 }
             }

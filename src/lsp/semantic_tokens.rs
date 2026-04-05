@@ -435,8 +435,8 @@ fn classify_inflection(infl: &ast::Inflection, fid: FileId, map: &mut HashMap<(u
 
 fn classify_inflection_body(body: &ast::InflectionBody, fid: FileId, map: &mut HashMap<(usize, usize), u32>) {
     match body {
-        ast::InflectionBody::Rules(rules) => {
-            for rule in rules {
+        ast::InflectionBody::Rules(body) => {
+            for rule in &body.rules {
                 classify_inflection_rule(rule, fid, map);
             }
         }
