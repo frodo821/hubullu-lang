@@ -12,7 +12,32 @@ use crate::error::{Diagnostic, Diagnostics};
 use crate::lexer::Lexer;
 use crate::parser::Parser;
 use crate::span::{FileId, SourceMap};
+use crate::stdlib;
 use crate::symbol_table::{ImportedSymbol, SymbolKind, SymbolTable};
+
+// ---------------------------------------------------------------------------
+// Import path classification
+// ---------------------------------------------------------------------------
+
+/// Classified import path.
+enum ImportSource {
+    /// Relative filesystem path (existing behavior).
+    Relative(String),
+    /// Standard library module, e.g. `"std:ipa"` → module name `"ipa"`.
+    Std(String),
+    /// Unsupported scheme (e.g. `"https://..."`).
+    UnsupportedScheme(String),
+}
+
+fn classify_import_path(raw: &str) -> ImportSource {
+    if let Some(rest) = raw.strip_prefix("std:") {
+        ImportSource::Std(rest.to_string())
+    } else if raw.contains("://") {
+        ImportSource::UnsupportedScheme(raw.to_string())
+    } else {
+        ImportSource::Relative(raw.to_string())
+    }
+}
 
 /// Result of phase 1: all files parsed, symbols registered.
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
@@ -56,15 +81,11 @@ pub fn run_phase1_virtual(
 
     // Process each import as a @reference from the virtual file.
     for import in imports {
-        let import_path = base_dir.join(&import.path.node);
-        if !ctx.reference_visited.contains(&import_path) {
-            ctx.reference_visited.insert(import_path.clone());
-            let dep_id = ctx.load_file_recursive_with_span(
-                &import_path, false, import.path.span,
-            );
-            if let Some(dep_id) = dep_id {
-                ctx.register_imports(file_id, dep_id, &import.target, false);
-            }
+        let dep_id = ctx.resolve_import(
+            &import.path.node, base_dir, false, import.path.span,
+        );
+        if let Some(dep_id) = dep_id {
+            ctx.register_imports(file_id, dep_id, &import.target, false);
         }
     }
 
@@ -132,6 +153,152 @@ impl Phase1Ctx {
         import_span: crate::ast::Span,
     ) -> Option<FileId> {
         self.load_file_recursive_inner(path, is_use, Some(import_span))
+    }
+
+    /// Classify an import path and dispatch to the appropriate loader.
+    fn resolve_import(
+        &mut self,
+        raw_path: &str,
+        base_dir: &Path,
+        is_use: bool,
+        span: crate::ast::Span,
+    ) -> Option<FileId> {
+        match classify_import_path(raw_path) {
+            ImportSource::Relative(rel) => {
+                let import_path = base_dir.join(&rel);
+                if is_use {
+                    self.load_file_recursive_with_span(&import_path, true, span)
+                } else {
+                    if !self.reference_visited.contains(&import_path) {
+                        self.reference_visited.insert(import_path.clone());
+                        self.load_file_recursive_with_span(&import_path, false, span)
+                    } else {
+                        self.path_to_id.get(&import_path).copied()
+                    }
+                }
+            }
+            ImportSource::Std(module_name) => {
+                self.load_std_module(&module_name, span)
+            }
+            ImportSource::UnsupportedScheme(scheme) => {
+                self.diagnostics.add(
+                    Diagnostic::error(format!(
+                        "unsupported import scheme: '{}'",
+                        scheme,
+                    ))
+                    .with_label(span, "scheme not supported"),
+                );
+                None
+            }
+        }
+    }
+
+    /// Load a standard library module by name, returning its [`FileId`].
+    ///
+    /// On first load, the embedded source is lexed, parsed, and symbols are
+    /// registered. Subsequent loads return the cached [`FileId`].
+    fn load_std_module(
+        &mut self,
+        module_name: &str,
+        span: crate::ast::Span,
+    ) -> Option<FileId> {
+        let synthetic = stdlib::synthetic_path(module_name);
+
+        // Already loaded?
+        if let Some(&id) = self.path_to_id.get(&synthetic) {
+            return Some(id);
+        }
+
+        let source = match stdlib::lookup(module_name) {
+            Some(s) => s.to_string(),
+            None => {
+                let available = stdlib::available_modules();
+                let hint = if available.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        " (available: {})",
+                        available
+                            .iter()
+                            .filter(|n| !n.starts_with('_'))
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    )
+                };
+                self.diagnostics.add(
+                    Diagnostic::error(format!(
+                        "unknown standard library module '{}'{}",
+                        module_name, hint,
+                    ))
+                    .with_label(span, "not found"),
+                );
+                return None;
+            }
+        };
+
+        let file_id = self.source_map.add_file(synthetic.clone(), source);
+        self.path_to_id.insert(synthetic, file_id);
+
+        // Lex & parse
+        let lexer = Lexer::new(self.source_map.source(file_id), file_id);
+        let (tokens, lex_errors) = lexer.tokenize();
+        for e in lex_errors {
+            self.diagnostics.add(e);
+        }
+
+        let parser = Parser::new(tokens, file_id);
+        let (file, parse_errors) = parser.parse();
+        for e in parse_errors {
+            self.diagnostics.add(e);
+        }
+
+        // Register local symbols
+        for (idx, item) in file.items.iter().enumerate() {
+            let (name, kind) = match &item.node {
+                Item::TagAxis(ta) => (ta.name.node.clone(), SymbolKind::TagAxis),
+                Item::Extend(ext) => (ext.name.node.clone(), SymbolKind::Extend),
+                Item::Inflection(infl) => (infl.name.node.clone(), SymbolKind::Inflection),
+                Item::Entry(entry) => (entry.name.node.clone(), SymbolKind::Entry),
+                Item::PhonRule(pr) => (pr.name.node.clone(), SymbolKind::PhonRule),
+                Item::Use(_) | Item::Reference(_) | Item::Export(_) | Item::Render(_) => continue,
+            };
+            if let Err(diag) = self.symbol_table.register_local(
+                file_id, name, kind, item.span, idx,
+            ) {
+                self.diagnostics.add(diag);
+            }
+        }
+
+        // Process imports within the std module (must use std: scheme, not relative paths)
+        let imports: Vec<_> = file
+            .items
+            .iter()
+            .filter_map(|item| match &item.node {
+                Item::Use(imp) => Some((true, imp.clone())),
+                Item::Reference(imp) => Some((false, imp.clone())),
+                _ => None,
+            })
+            .collect();
+
+        self.files.insert(file_id, file);
+
+        for (is_use_import, import) in imports {
+            let dep_id = self.resolve_import(
+                &import.path.node,
+                // base_dir is irrelevant for std modules — relative imports
+                // within std will fail at canonicalize, which is fine since
+                // inter-std deps should use std: scheme.
+                Path::new("<std>"),
+                is_use_import,
+                import.path.span,
+            );
+            if let Some(dep_id) = dep_id {
+                self.register_imports(file_id, dep_id, &import.target, is_use_import);
+            }
+        }
+
+        Some(file_id)
     }
 
     fn load_file_recursive_inner(
@@ -258,18 +425,9 @@ impl Phase1Ctx {
         self.files.insert(file_id, file);
 
         for (is_use_import, import) in imports {
-            let import_path = base_dir.join(&import.path.node);
-            let dep_id = if is_use_import {
-                self.load_file_recursive_with_span(&import_path, true, import.path.span)
-            } else {
-                if !self.reference_visited.contains(&import_path) {
-                    self.reference_visited.insert(import_path.clone());
-                    self.load_file_recursive_with_span(&import_path, false, import.path.span)
-                } else {
-                    self.path_to_id.get(&import_path).copied()
-                }
-            };
-
+            let dep_id = self.resolve_import(
+                &import.path.node, &base_dir, is_use_import, import.path.span,
+            );
             if let Some(dep_id) = dep_id {
                 // Register imported symbols into this file's scope
                 self.register_imports(file_id, dep_id, &import.target, is_use_import);
@@ -409,17 +567,9 @@ impl Phase1Ctx {
     fn process_export(&mut self, file_id: FileId, base_dir: &Path, export: &Export) {
         if let Some(ref path_lit) = export.path {
             // Form 2: combined import + re-export from file
-            let export_path = base_dir.join(&path_lit.node);
-            let dep_id = if export.is_use {
-                self.load_file_recursive_with_span(&export_path, true, path_lit.span)
-            } else {
-                if !self.reference_visited.contains(&export_path) {
-                    self.reference_visited.insert(export_path.clone());
-                    self.load_file_recursive_with_span(&export_path, false, path_lit.span)
-                } else {
-                    self.path_to_id.get(&export_path).copied()
-                }
-            };
+            let dep_id = self.resolve_import(
+                &path_lit.node, base_dir, export.is_use, path_lit.span,
+            );
             if let Some(dep_id) = dep_id {
                 // Import into this file's scope (so the file itself can use them)
                 self.register_imports(file_id, dep_id, &export.target, export.is_use);
@@ -626,5 +776,29 @@ impl Phase1Ctx {
                 scope.exports.extend(to_export);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_relative_path() {
+        assert!(matches!(classify_import_path("./foo.hu"), ImportSource::Relative(p) if p == "./foo.hu"));
+        assert!(matches!(classify_import_path("../bar.hu"), ImportSource::Relative(p) if p == "../bar.hu"));
+        assert!(matches!(classify_import_path("profile.hu"), ImportSource::Relative(p) if p == "profile.hu"));
+    }
+
+    #[test]
+    fn classify_std_scheme() {
+        assert!(matches!(classify_import_path("std:ipa"), ImportSource::Std(m) if m == "ipa"));
+        assert!(matches!(classify_import_path("std:_test"), ImportSource::Std(m) if m == "_test"));
+    }
+
+    #[test]
+    fn classify_unsupported_scheme() {
+        assert!(matches!(classify_import_path("https://example.com/foo.hu"), ImportSource::UnsupportedScheme(_)));
+        assert!(matches!(classify_import_path("http://example.com/foo.hu"), ImportSource::UnsupportedScheme(_)));
     }
 }

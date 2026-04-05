@@ -1,0 +1,7 @@
+@use * from "std:_test"
+
+entry foo {
+    headword: "foo"
+    tags: [std_test_axis=alpha]
+    meaning: "test entry"
+}

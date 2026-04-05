@@ -90,6 +90,10 @@ fn resolve_import_path(
     phase1: &Phase1Result,
 ) -> Option<GotoDefinitionResponse> {
     if let TokenKind::StringLit(path_str) = &tok.node {
+        // std: imports have no filesystem location to jump to.
+        if path_str.contains("://") || path_str.starts_with("std:") {
+            return None;
+        }
         let suffix = convert::normalize_import_suffix(path_str);
         for fid in phase1.source_map.file_ids() {
             let file_path = phase1.source_map.path(fid);

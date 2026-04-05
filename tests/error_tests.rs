@@ -260,3 +260,20 @@ fn test_cyclic_derived_from() {
     let errors = compile_error("errors/cyclic_derived_from.hu");
     assert_error_contains(&errors, "cyclic derived_from");
 }
+
+// =========================================================================
+// Import scheme errors
+// =========================================================================
+
+#[test]
+fn test_unknown_std_module() {
+    let errors = compile_error("errors/unknown_std_module.hu");
+    assert_error_contains(&errors, "unknown standard library module");
+    assert_error_contains(&errors, "nonexistent");
+}
+
+#[test]
+fn test_unsupported_import_scheme() {
+    let errors = compile_error("errors/unsupported_scheme.hu");
+    assert_error_contains(&errors, "unsupported import scheme");
+}

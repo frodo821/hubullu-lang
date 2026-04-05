@@ -167,10 +167,16 @@ impl Cache {
 // ---------------------------------------------------------------------------
 
 /// Compute SHA-256 content hash for every source file in the Phase1Result.
+///
+/// Standard library modules (`std:` imports) are skipped — they are immutable
+/// within a given binary version and do not need cache invalidation tracking.
 pub fn compute_file_hashes(p1: &Phase1Result) -> HashMap<PathBuf, String> {
     let mut result = HashMap::new();
     for &file_id in p1.files.keys() {
         let path = p1.source_map.path(file_id).to_path_buf();
+        if crate::stdlib::is_std_path(&path) {
+            continue;
+        }
         let source = p1.source_map.source(file_id);
         let mut hasher = Sha256::new();
         hasher.update(source.as_bytes());
@@ -191,8 +197,11 @@ pub fn compute_schema_fingerprint(p1: &Phase1Result) -> String {
     file_ids.sort_by_key(|id| id.0);
 
     for file_id in file_ids {
-        let file = &p1.files[&file_id];
         let path = p1.source_map.path(file_id);
+        if crate::stdlib::is_std_path(path) {
+            continue;
+        }
+        let file = &p1.files[&file_id];
         for item in &file.items {
             match &item.node {
                 Item::TagAxis(_)

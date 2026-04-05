@@ -83,6 +83,10 @@ fn resolve_import_target(
     path_str: &str,
     phase1: &Phase1Result,
 ) -> Option<lsp_types::Uri> {
+    // std: imports and unsupported schemes have no filesystem URI.
+    if path_str.starts_with("std:") || path_str.contains("://") {
+        return None;
+    }
     let suffix = convert::normalize_import_suffix(path_str);
     for fid in phase1.source_map.file_ids() {
         let file_path = phase1.source_map.path(fid);

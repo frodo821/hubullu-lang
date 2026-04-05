@@ -57,6 +57,8 @@ pub mod phase1;
 pub mod phase2;
 /// Source map for multi-file span resolution (FileId → source text, line/col).
 pub mod span;
+/// Built-in standard library modules for `std:` imports.
+pub mod stdlib;
 /// Symbol table with per-file scopes and name resolution.
 pub mod symbol_table;
 /// Token types produced by the [`lexer`].

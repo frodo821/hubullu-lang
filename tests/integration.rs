@@ -345,3 +345,23 @@ fn test_incremental_cache_deleted() {
     let count: i64 = conn.query_row("SELECT COUNT(*) FROM forms", [], |r| r.get(0)).unwrap();
     assert_eq!(count, 4);
 }
+
+// =========================================================================
+// Standard library imports (std: scheme)
+// =========================================================================
+
+#[test]
+fn test_std_import() {
+    let input = fixture_path("std_import/main.hu");
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("std_import.huc");
+
+    let result = hubullu::compile(&input, &output);
+    assert!(result.is_ok(), "compile with std: import failed: {:?}", result.err());
+
+    let conn = Connection::open(&output).unwrap();
+    let entry_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM entries", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(entry_count, 1, "expected 1 entry using std:_test axis");
+}

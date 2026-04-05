@@ -1,0 +1,10 @@
+# Standard library test module — used only for testing std: import infrastructure.
+
+tagaxis std_test_axis {
+    role: classificatory
+}
+
+@extend std_test_values for tagaxis std_test_axis {
+    alpha {}
+    beta {}
+}
