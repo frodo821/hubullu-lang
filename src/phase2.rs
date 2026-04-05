@@ -778,7 +778,9 @@ impl<'a> Phase2Ctx<'a> {
         let mut groups: Vec<(String, Option<Span>, Vec<Ident>)> = Vec::new();
         for (diag, ispan, entry_name) in std::mem::take(&mut self.deferred_infl_errors) {
             if let Some(group) = groups.iter_mut().find(|(m, s, _)| *m == diag.message && *s == ispan) {
-                group.2.push(entry_name);
+                if !group.2.iter().any(|e| e.span == entry_name.span) {
+                    group.2.push(entry_name);
+                }
             } else {
                 groups.push((diag.message, ispan, vec![entry_name]));
             }
