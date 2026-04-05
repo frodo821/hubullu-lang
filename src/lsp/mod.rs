@@ -287,7 +287,7 @@ enum EntryRefDisplayMode {
 /// Cached project-level analysis (populated on save).
 struct ProjectState {
     phase1: Phase1Result,
-    /// Phase2 result (available when phase1 has no errors).
+    /// Phase2 result (available when phase1 has no errors; may itself contain diagnostics).
     phase2: Option<Phase2Result>,
     /// Per-file token cache (lexed once during project analysis).
     token_cache: std::collections::HashMap<FileId, Vec<Token>>,
@@ -1137,7 +1137,7 @@ fn publish_doc_diagnostics(
     let parse_diags: Vec<&crate::error::Diagnostic> =
         doc.parse_result.diagnostics.iter().collect();
 
-    // Project-level diagnostics (phase1 + lint) use the project source_map.
+    // Project-level diagnostics (phase1 + phase2 + lint) use the project source_map.
     let mut proj_diags: Vec<&crate::error::Diagnostic> = Vec::new();
     let mut lint_diags: Vec<&crate::lint::LintDiagnostic> = Vec::new();
     let proj_source_map;
@@ -1152,6 +1152,17 @@ fn publish_doc_diagnostics(
                 .filter(|d| d.labels.first().is_some_and(|l| l.span.file_id == fid))
                 .collect();
             proj_diags.extend(p1_diags);
+
+            // Include phase2 diagnostics (inflection errors, etc.) for this file.
+            if let Some(p2) = &proj.phase2 {
+                let p2_diags: Vec<_> = p2
+                    .diagnostics
+                    .errors
+                    .iter()
+                    .filter(|d| d.labels.first().is_some_and(|l| l.span.file_id == fid))
+                    .collect();
+                proj_diags.extend(p2_diags);
+            }
 
             // Include lint diagnostics for this file.
             let file_lint_diags: Vec<_> = proj
@@ -1316,8 +1327,7 @@ fn build_project_state(entry_path: &std::path::Path, cache_root: &std::path::Pat
     let phase1 = crate::phase1::run_phase1(entry_path);
 
     let phase2 = if !phase1.diagnostics.has_errors() {
-        let p2 = crate::phase2::run_phase2(&phase1);
-        if !p2.diagnostics.has_errors() { Some(p2) } else { None }
+        Some(crate::phase2::run_phase2(&phase1))
     } else {
         None
     };
@@ -1410,8 +1420,7 @@ fn try_load_hut_project(
     let phase1 = crate::phase1::run_phase1_virtual(&hut_file.references, &hut_dir);
 
     let phase2 = if !phase1.diagnostics.has_errors() {
-        let p2 = crate::phase2::run_phase2(&phase1);
-        if !p2.diagnostics.has_errors() { Some(p2) } else { None }
+        Some(crate::phase2::run_phase2(&phase1))
     } else {
         None
     };

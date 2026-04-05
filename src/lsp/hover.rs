@@ -124,14 +124,32 @@ fn format_inflection(i: &ast::Inflection) -> String {
         ast::InflectionBody::Compose(_) => "compose",
     };
 
-    format!(
+    let apply_info = match &i.body {
+        ast::InflectionBody::Rules(body) => body.apply.as_ref().map(format_apply_expr),
+        _ => None,
+    };
+
+    let mut result = format!(
         "```hubullu\ninflection {} for {{{}}}\n```\n---\n**requires stems**: {}\\\n**{} rules** ({})",
         i.name.node,
         axes.join(", "),
         if stems.is_empty() { "none".to_string() } else { stems.join(", ") },
         rule_count,
         body_kind
-    )
+    );
+    if let Some(apply) = apply_info {
+        result.push_str(&format!("\\\n**apply**: `{}`", apply));
+    }
+    result
+}
+
+pub(crate) fn format_apply_expr(expr: &ast::ApplyExpr) -> String {
+    match expr {
+        ast::ApplyExpr::Cell => "cell".to_string(),
+        ast::ApplyExpr::PhonApply { rule, inner } => {
+            format!("{}({})", rule.node, format_apply_expr(inner))
+        }
+    }
 }
 
 fn format_tagaxis(t: &ast::TagAxis) -> String {

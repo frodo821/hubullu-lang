@@ -928,7 +928,13 @@ fn format_inflection_doc(i: &ast::Inflection) -> String {
             "compose",
         ),
     };
-    format!(
+
+    let apply_info = match &i.body {
+        ast::InflectionBody::Rules(body) => body.apply.as_ref().map(super::hover::format_apply_expr),
+        _ => None,
+    };
+
+    let mut result = format!(
         "```hubullu\ninflection {} for {{{}}}\n```\n---\n\
          **requires stems**: {}\\\n\
          **{} rules** ({})",
@@ -937,7 +943,11 @@ fn format_inflection_doc(i: &ast::Inflection) -> String {
         if stems.is_empty() { "none".to_string() } else { stems.join(", ") },
         rule_count,
         body_kind
-    )
+    );
+    if let Some(apply) = apply_info {
+        result.push_str(&format!("\\\n**apply**: `{}`", apply));
+    }
+    result
 }
 
 fn format_tagaxis_doc(t: &ast::TagAxis) -> String {

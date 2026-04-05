@@ -436,6 +436,9 @@ fn classify_inflection(infl: &ast::Inflection, fid: FileId, map: &mut HashMap<(u
 fn classify_inflection_body(body: &ast::InflectionBody, fid: FileId, map: &mut HashMap<(usize, usize), u32>) {
     match body {
         ast::InflectionBody::Rules(body) => {
+            if let Some(apply) = &body.apply {
+                classify_apply_expr(apply, fid, map);
+            }
             for rule in &body.rules {
                 classify_inflection_rule(rule, fid, map);
             }
@@ -518,6 +521,16 @@ fn classify_compose_expr(expr: &ast::ComposeExpr, fid: FileId, map: &mut HashMap
         ast::ComposeExpr::PhonApply { rule, inner } => {
             put(map, &rule.span, fid, TYPE);
             classify_compose_expr(inner, fid, map);
+        }
+    }
+}
+
+fn classify_apply_expr(expr: &ast::ApplyExpr, fid: FileId, map: &mut HashMap<(usize, usize), u32>) {
+    match expr {
+        ast::ApplyExpr::Cell => {}
+        ast::ApplyExpr::PhonApply { rule, inner } => {
+            put(map, &rule.span, fid, TYPE);
+            classify_apply_expr(inner, fid, map);
         }
     }
 }
