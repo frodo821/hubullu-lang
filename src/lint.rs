@@ -1291,6 +1291,29 @@ impl NameCollector {
             used: HashSet::new(),
         }
     }
+
+    fn collect_rule_rhs_names(&mut self, rhs: &RuleRhs) {
+        match rhs {
+            RuleRhs::Delegate(d) => {
+                self.used.insert(d.target.node.clone());
+            }
+            RuleRhs::PhonApply { rule: pr, inner } => {
+                self.used.insert(pr.node.clone());
+                self.collect_rule_rhs_names(&inner.node);
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_apply_expr_names(&mut self, expr: &ApplyExpr) {
+        match expr {
+            ApplyExpr::Cell => {}
+            ApplyExpr::PhonApply { rule, inner } => {
+                self.used.insert(rule.node.clone());
+                self.collect_apply_expr_names(inner);
+            }
+        }
+    }
 }
 
 impl Visitor for NameCollector {
@@ -1310,15 +1333,11 @@ impl Visitor for NameCollector {
         for cond in &rule.condition.conditions {
             self.used.insert(cond.axis.node.clone());
         }
-        match &rule.rhs.node {
-            RuleRhs::Delegate(d) => {
-                self.used.insert(d.target.node.clone());
-            }
-            RuleRhs::PhonApply { rule: pr, .. } => {
-                self.used.insert(pr.node.clone());
-            }
-            _ => {}
-        }
+        self.collect_rule_rhs_names(&rule.rhs.node);
+    }
+
+    fn visit_apply_expr(&mut self, expr: &ApplyExpr) {
+        self.collect_apply_expr_names(expr);
     }
 
     fn visit_entry(&mut self, entry: &Entry) {

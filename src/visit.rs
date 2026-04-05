@@ -72,6 +72,10 @@ pub trait Visitor: Sized {
 
     fn visit_template(&mut self, _template: &Template) {}
 
+    fn visit_apply_expr(&mut self, expr: &ApplyExpr) {
+        walk_apply_expr(self, expr);
+    }
+
     fn visit_ident(&mut self, _ident: &Ident) {}
 }
 
@@ -130,6 +134,9 @@ pub fn walk_inflection<V: Visitor>(visitor: &mut V, inflection: &Inflection) {
 pub fn walk_inflection_body<V: Visitor>(visitor: &mut V, body: &InflectionBody) {
     match body {
         InflectionBody::Rules(body) => {
+            if let Some(apply) = &body.apply {
+                visitor.visit_apply_expr(apply);
+            }
             for rule in &body.rules {
                 visitor.visit_inflection_rule(rule);
             }
@@ -143,6 +150,16 @@ pub fn walk_inflection_body<V: Visitor>(visitor: &mut V, body: &InflectionBody) 
             for rule in &comp.overrides {
                 visitor.visit_inflection_rule(rule);
             }
+        }
+    }
+}
+
+pub fn walk_apply_expr<V: Visitor>(visitor: &mut V, expr: &ApplyExpr) {
+    match expr {
+        ApplyExpr::Cell => {}
+        ApplyExpr::PhonApply { rule, inner } => {
+            visitor.visit_ident(rule);
+            visitor.visit_apply_expr(inner);
         }
     }
 }
