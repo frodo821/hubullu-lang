@@ -6,6 +6,10 @@ use clap::{Parser, Subcommand};
 #[derive(Parser)]
 #[clap(name = "hubullu", about = "Hubullu compiler — .hu to .huc")]
 struct Cli {
+    /// Increase log verbosity (-v info, -vv debug, -vvv trace)
+    #[clap(short = 'v', long = "verbose", action = clap::ArgAction::Count, global = true)]
+    verbose: u8,
+
     #[clap(subcommand)]
     command: Command,
 }
@@ -100,6 +104,18 @@ enum SkillAction {
 
 fn main() {
     let cli = Cli::parse();
+
+    if cli.verbose > 0 {
+        let level = match cli.verbose {
+            1 => log::LevelFilter::Info,
+            2 => log::LevelFilter::Debug,
+            _ => log::LevelFilter::Trace,
+        };
+        env_logger::Builder::new()
+            .filter_module("hubullu", level)
+            .format_timestamp_millis()
+            .init();
+    }
 
     match cli.command {
         Command::Compile { input, output } => {

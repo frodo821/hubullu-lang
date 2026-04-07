@@ -24,10 +24,13 @@ pub fn emit(output_path: &Path, p1: &Phase1Result, p2: &Phase2Result) -> Result<
         Diagnostic::error(format!("cannot open output file: {}", e))
     })?;
 
+    log::debug!("emit: creating schema");
     create_schema(&conn)?;
+    log::debug!("emit: inserting data ({} entries)", p2.entries.len());
     insert_data(&conn, p2)?;
     insert_render_config(&conn, p2)?;
     insert_name_resolution(&conn, p1, p2)?;
+    log::debug!("emit: creating indexes and FTS");
     create_indexes(&conn, p2)?;
     create_fts(&conn)?;
 

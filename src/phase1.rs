@@ -362,6 +362,7 @@ impl Phase1Ctx {
             }
         };
 
+        log::debug!("phase1: loading {}", path.display());
         let file_id = self.source_map.add_file(path.clone(), source.clone());
         self.path_to_id.insert(path.clone(), file_id);
 

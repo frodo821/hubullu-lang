@@ -164,13 +164,18 @@ pub fn lex_source(source: &str, filename: &str) -> (Vec<Token>, Vec<Diagnostic>,
 pub fn compile(entry_path: &Path, output_path: &Path) -> Result<(), String> {
     use std::collections::HashSet;
 
+    log::info!("compiling {} → {}", entry_path.display(), output_path.display());
+
     // Phase 1: always run fully (parsing is fast)
+    log::info!("phase1: loading and parsing files");
     let p1 = phase1::run_phase1(entry_path);
+    log::info!("phase1: loaded {} file(s)", p1.files.len());
     if p1.diagnostics.has_errors() {
         return Err(p1.diagnostics.render_all(&p1.source_map));
     }
 
     // Compute Merkle hashes for all items
+    log::debug!("computing Merkle hashes");
     let merkle = merkle::compute(&p1);
 
     // Load cache
@@ -185,25 +190,33 @@ pub fn compile(entry_path: &Path, output_path: &Path) -> Result<(), String> {
     for (key, new_hash) in &merkle.entries {
         if let Some((old_hash, resolved)) = cache_state.entries.get(key) {
             if old_hash == new_hash {
+                log::trace!("cache hit: {}:{}", key.0.display(), key.1);
                 cached_entries.push(resolved.clone());
                 continue;
             }
         }
+        log::trace!("cache miss: {}:{}", key.0.display(), key.1);
         entries_to_resolve.insert(key.clone());
     }
+    log::debug!("cache: {} hit(s), {} miss(es)", cached_entries.len(), entries_to_resolve.len());
 
     // Phase 2: full if no cache hits at all, incremental otherwise
     let p2 = if cached_entries.is_empty() {
+        log::info!("phase2: full resolution");
         phase2::run_phase2(&p1)
     } else {
+        log::info!("phase2: incremental resolution ({} to resolve)", entries_to_resolve.len());
         phase2::run_phase2_incremental(&p1, &entries_to_resolve, cached_entries)
     };
+
+    log::info!("phase2: resolved {} entry/entries", p2.entries.len());
 
     if p2.diagnostics.has_errors() {
         return Err(p2.diagnostics.render_all(&p1.source_map));
     }
 
     // Emit .huc file (always full rebuild — remove old file first)
+    log::info!("emit: writing {}", output_path.display());
     let _ = std::fs::remove_file(output_path);
     if let Err(diag) = emit_sqlite::emit(output_path, &p1, &p2) {
         return Err(diag.render(&p1.source_map));
@@ -224,6 +237,8 @@ pub fn compile(entry_path: &Path, output_path: &Path) -> Result<(), String> {
     if let Some(c) = cache.or_else(|| cache::Cache::open(&cache_path)) {
         let _ = c.save(&cache_data);
     }
+
+    log::info!("done");
 
     Ok(())
 }

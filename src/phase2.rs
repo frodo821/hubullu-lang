@@ -113,12 +113,17 @@ pub fn run_phase2(p1: &Phase1Result) -> Phase2Result {
         deferred_infl_errors: Vec::new(),
     };
 
+    log::debug!("phase2: resolving extends");
     ctx.resolve_extends();
+    log::debug!("phase2: validating phonrules");
     ctx.validate_phonrules();
+    log::debug!("phase2: validating inflections");
     ctx.validate_inflections();
     ctx.collect_inflections();
+    log::debug!("phase2: resolving entries");
     ctx.resolve_entries();
     ctx.flush_deferred_infl_errors();
+    log::debug!("phase2: checking DAG");
     ctx.check_dag();
 
     let render_config = ctx.collect_render_config();
