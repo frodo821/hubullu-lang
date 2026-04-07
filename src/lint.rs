@@ -204,7 +204,7 @@ pub fn run_lint_from_phase1(p1: &Phase1Result) -> Vec<LintDiagnostic> {
 
 /// Run all lint rules on a project starting from the given entry file.
 pub fn run_lint(entry_path: &Path) -> LintResult {
-    let p1 = phase1::run_phase1(entry_path);
+    let p1 = phase1::run_phase1(entry_path, Default::default());
 
     let mut lints = Vec::new();
 

@@ -22,7 +22,7 @@ fn phase1_fixture(name: &str) -> hubullu::phase1::Phase1Result {
         .join("fixtures")
         .join(name)
         .join("main.hu");
-    hubullu::phase1::run_phase1(&path)
+    hubullu::phase1::run_phase1(&path, Default::default())
 }
 
 /// Build a token cache from phase1 result.
@@ -488,6 +488,7 @@ fn single_file_phase1(pr: &ParseResult) -> hubullu::phase1::Phase1Result {
         symbol_table,
         diagnostics: hubullu::error::Diagnostics::new(),
         path_to_id: HashMap::new(),
+        content_hashes: HashMap::new(),
     }
 }
 

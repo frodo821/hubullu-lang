@@ -15,6 +15,9 @@ pub struct Lexer<'a> {
     source: &'a str,
     file_id: FileId,
     pos: usize,
+    /// The character immediately before `pos`, used to distinguish `#` comment
+    /// from `Hash` token without an O(n) backward scan.
+    prev_char: Option<char>,
     errors: Vec<Diagnostic>,
 }
 
@@ -25,6 +28,7 @@ impl<'a> Lexer<'a> {
             source,
             file_id,
             pos: 0,
+            prev_char: None,
             errors: Vec::new(),
         }
     }
@@ -48,6 +52,7 @@ impl<'a> Lexer<'a> {
                         let start = self.pos;
                         let ch = self.source[self.pos..].chars().next().unwrap();
                         self.pos += ch.len_utf8();
+                        self.prev_char = Some(ch);
                         self.errors.push(
                             Diagnostic::error("unexpected character").with_label(
                                 self.span(start, self.pos),
@@ -63,17 +68,18 @@ impl<'a> Lexer<'a> {
 
     fn skip_whitespace_and_comments(&mut self) {
         while self.pos < self.source.len() {
-            let ch = self.source[self.pos..].chars().next().unwrap();
+            let b = self.source.as_bytes()[self.pos];
+            let ch = if b.is_ascii() { b as char } else {
+                self.source[self.pos..].chars().next().unwrap()
+            };
             if ch == '#' {
                 // # is a comment only if preceded by whitespace or at start of input.
                 // After a non-whitespace char (e.g. `faren#motion`), it's a Hash token.
-                if self.pos == 0 || {
-                    let prev = self.source[..self.pos].chars().next_back().unwrap();
-                    prev.is_whitespace()
-                } {
+                if self.prev_char.is_none() || self.prev_char.map_or(false, |c| c.is_whitespace()) {
                     while self.pos < self.source.len()
                         && self.source.as_bytes()[self.pos] != b'\n'
                     {
+                        self.prev_char = Some(self.source.as_bytes()[self.pos] as char);
                         self.pos += 1;
                     }
                 } else {
@@ -81,6 +87,7 @@ impl<'a> Lexer<'a> {
                 }
             } else if ch.is_whitespace() {
                 self.pos += ch.len_utf8();
+                self.prev_char = Some(ch);
             } else {
                 break;
             }
@@ -88,17 +95,43 @@ impl<'a> Lexer<'a> {
     }
 
     fn peek(&self) -> Option<char> {
-        self.source[self.pos..].chars().next()
+        if self.pos >= self.source.len() {
+            return None;
+        }
+        let b = self.source.as_bytes()[self.pos];
+        if b.is_ascii() {
+            Some(b as char)
+        } else {
+            self.source[self.pos..].chars().next()
+        }
     }
 
     fn peek_at(&self, offset: usize) -> Option<char> {
-        self.source[self.pos + offset..].chars().next()
+        let idx = self.pos + offset;
+        if idx >= self.source.len() {
+            return None;
+        }
+        let b = self.source.as_bytes()[idx];
+        if b.is_ascii() {
+            Some(b as char)
+        } else {
+            self.source[idx..].chars().next()
+        }
     }
 
     fn advance(&mut self) -> char {
-        let ch = self.source[self.pos..].chars().next().unwrap();
-        self.pos += ch.len_utf8();
-        ch
+        let b = self.source.as_bytes()[self.pos];
+        if b.is_ascii() {
+            self.pos += 1;
+            let ch = b as char;
+            self.prev_char = Some(ch);
+            ch
+        } else {
+            let ch = self.source[self.pos..].chars().next().unwrap();
+            self.pos += ch.len_utf8();
+            self.prev_char = Some(ch);
+            ch
+        }
     }
 
     fn span(&self, start: usize, end: usize) -> Span {
@@ -251,11 +284,23 @@ impl<'a> Lexer<'a> {
         let ch = self.advance();
         debug_assert!(unicode_xid::UnicodeXID::is_xid_start(ch) || ch == '_');
         while self.pos < self.source.len() {
-            let ch = self.source[self.pos..].chars().next().unwrap();
-            if unicode_xid::UnicodeXID::is_xid_continue(ch) {
-                self.pos += ch.len_utf8();
+            let b = self.source.as_bytes()[self.pos];
+            if b.is_ascii() {
+                // Fast path: ASCII XID_Continue = [a-zA-Z0-9_]
+                if b.is_ascii_alphanumeric() || b == b'_' {
+                    self.prev_char = Some(b as char);
+                    self.pos += 1;
+                } else {
+                    break;
+                }
             } else {
-                break;
+                let ch = self.source[self.pos..].chars().next().unwrap();
+                if unicode_xid::UnicodeXID::is_xid_continue(ch) {
+                    self.pos += ch.len_utf8();
+                    self.prev_char = Some(ch);
+                } else {
+                    break;
+                }
             }
         }
         let text = self.source[start..self.pos].to_string();
@@ -265,11 +310,22 @@ impl<'a> Lexer<'a> {
     fn lex_digit_ident(&mut self) -> Token {
         let start = self.pos;
         while self.pos < self.source.len() {
-            let ch = self.source[self.pos..].chars().next().unwrap();
-            if unicode_xid::UnicodeXID::is_xid_continue(ch) || ch.is_ascii_digit() {
-                self.pos += ch.len_utf8();
+            let b = self.source.as_bytes()[self.pos];
+            if b.is_ascii() {
+                if b.is_ascii_alphanumeric() || b == b'_' {
+                    self.prev_char = Some(b as char);
+                    self.pos += 1;
+                } else {
+                    break;
+                }
             } else {
-                break;
+                let ch = self.source[self.pos..].chars().next().unwrap();
+                if unicode_xid::UnicodeXID::is_xid_continue(ch) {
+                    self.pos += ch.len_utf8();
+                    self.prev_char = Some(ch);
+                } else {
+                    break;
+                }
             }
         }
         let text = self.source[start..self.pos].to_string();
@@ -279,40 +335,78 @@ impl<'a> Lexer<'a> {
     fn lex_string(&mut self) -> Token {
         let start = self.pos;
         self.advance(); // skip opening "
-        let mut value = String::new();
-        loop {
-            if self.pos >= self.source.len() {
+        let bytes = self.source.as_bytes();
+
+        // Fast path: scan for closing " without escape sequences
+        let content_start = self.pos;
+        let mut has_escape = false;
+        {
+            let mut i = self.pos;
+            while i < bytes.len() {
+                match bytes[i] {
+                    b'"' => break,
+                    b'\\' => { has_escape = true; break; }
+                    _ => i += 1,
+                }
+            }
+        }
+
+        let mut value;
+        if !has_escape {
+            // Scan to closing quote (no escapes in string)
+            let mut i = content_start;
+            while i < bytes.len() && bytes[i] != b'"' {
+                i += 1;
+            }
+            if i >= bytes.len() {
                 self.errors.push(
                     Diagnostic::error("unterminated string literal")
-                        .with_label(self.span(start, self.pos), "string starts here"),
+                        .with_label(self.span(start, i), "string starts here"),
                 );
-                break;
+                self.pos = i;
+                value = self.source[content_start..i].to_string();
+            } else {
+                value = self.source[content_start..i].to_string();
+                self.pos = i + 1; // skip closing "
+                self.prev_char = Some('"');
             }
-            let ch = self.advance();
-            match ch {
-                '"' => break,
-                '\\' => {
-                    if self.pos < self.source.len() {
-                        let esc = self.advance();
-                        match esc {
-                            'n' => value.push('\n'),
-                            't' => value.push('\t'),
-                            '\\' => value.push('\\'),
-                            '"' => value.push('"'),
-                            _ => {
-                                self.errors.push(
-                                    Diagnostic::error(format!("unknown escape sequence '\\{}'", esc))
-                                        .with_label(
-                                            self.span(self.pos - 2, self.pos),
-                                            "unknown escape",
-                                        ),
-                                );
-                                value.push(esc);
+        } else {
+            // Slow path: has escapes, process character by character
+            value = String::with_capacity(32);
+            loop {
+                if self.pos >= self.source.len() {
+                    self.errors.push(
+                        Diagnostic::error("unterminated string literal")
+                            .with_label(self.span(start, self.pos), "string starts here"),
+                    );
+                    break;
+                }
+                let ch = self.advance();
+                match ch {
+                    '"' => break,
+                    '\\' => {
+                        if self.pos < self.source.len() {
+                            let esc = self.advance();
+                            match esc {
+                                'n' => value.push('\n'),
+                                't' => value.push('\t'),
+                                '\\' => value.push('\\'),
+                                '"' => value.push('"'),
+                                _ => {
+                                    self.errors.push(
+                                        Diagnostic::error(format!("unknown escape sequence '\\{}'", esc))
+                                            .with_label(
+                                                self.span(self.pos - 2, self.pos),
+                                                "unknown escape",
+                                            ),
+                                    );
+                                    value.push(esc);
+                                }
                             }
                         }
                     }
+                    _ => value.push(ch),
                 }
-                _ => value.push(ch),
             }
         }
         self.make_token(TokenKind::StringLit(value), start, self.pos)
@@ -396,6 +490,7 @@ impl<'a> Lexer<'a> {
                 _ => {
                     current_lit.push(ch);
                     self.pos += ch.len_utf8();
+                    self.prev_char = Some(ch);
                 }
             }
         }
@@ -409,6 +504,7 @@ impl<'a> Lexer<'a> {
         while self.pos < self.source.len() {
             let b = self.source.as_bytes()[self.pos];
             if b == b' ' || b == b'\t' {
+                self.prev_char = Some(b as char);
                 self.pos += 1;
             } else {
                 break;
@@ -419,11 +515,22 @@ impl<'a> Lexer<'a> {
     fn read_ident_inline(&mut self) -> String {
         let start = self.pos;
         while self.pos < self.source.len() {
-            let ch = self.source[self.pos..].chars().next().unwrap();
-            if unicode_xid::UnicodeXID::is_xid_continue(ch) || (self.pos == start && ch == '_') {
-                self.pos += ch.len_utf8();
+            let b = self.source.as_bytes()[self.pos];
+            if b.is_ascii() {
+                if b.is_ascii_alphanumeric() || b == b'_' {
+                    self.prev_char = Some(b as char);
+                    self.pos += 1;
+                } else {
+                    break;
+                }
             } else {
-                break;
+                let ch = self.source[self.pos..].chars().next().unwrap();
+                if unicode_xid::UnicodeXID::is_xid_continue(ch) {
+                    self.pos += ch.len_utf8();
+                    self.prev_char = Some(ch);
+                } else {
+                    break;
+                }
             }
         }
         self.source[start..self.pos].to_string()
@@ -434,9 +541,10 @@ impl<'a> Lexer<'a> {
         self.advance(); // skip @
         let ident_start = self.pos;
         while self.pos < self.source.len() {
-            let ch = self.source[self.pos..].chars().next().unwrap();
-            if ch.is_ascii_alphanumeric() || ch == '_' {
-                self.pos += ch.len_utf8();
+            let b = self.source.as_bytes()[self.pos];
+            if b.is_ascii_alphanumeric() || b == b'_' {
+                self.prev_char = Some(b as char);
+                self.pos += 1;
             } else {
                 break;
             }

@@ -178,12 +178,15 @@ pub fn evaluate_rules_with_overrides(
 ) -> Result<ExpandedParadigm, Vec<Diagnostic>> {
     let mut forms = Vec::new();
     let mut errors = Vec::new();
+    // Memoize template rendering: since stems are constant across all cells for an entry,
+    // the same template always produces the same output.
+    let mut tmpl_cache: HashMap<*const Template, Result<String, Diagnostic>> = HashMap::new();
 
     for cell in cells {
         // Tier 1: try overrides
         match find_best_match(overrides, cell) {
             Ok(Some(rule)) => {
-                match apply_rule_with_apply(rule, cell, stems, struct_stems, resolver, phon_resolver, apply) {
+                match apply_rule_with_apply(rule, cell, stems, struct_stems, resolver, phon_resolver, apply, &mut tmpl_cache) {
                     Ok(result) => forms.push((cell.clone(), result)),
                     Err(e) => errors.push(e),
                 }
@@ -199,7 +202,7 @@ pub fn evaluate_rules_with_overrides(
         // Tier 2: class rules
         match find_best_match(rules, cell) {
             Ok(Some(rule)) => {
-                match apply_rule_with_apply(rule, cell, stems, struct_stems, resolver, phon_resolver, apply) {
+                match apply_rule_with_apply(rule, cell, stems, struct_stems, resolver, phon_resolver, apply, &mut tmpl_cache) {
                     Ok(result) => forms.push((cell.clone(), result)),
                     Err(e) => errors.push(e),
                 }
@@ -235,8 +238,9 @@ fn apply_rule(
     struct_stems: &HashMap<String, HashMap<String, String>>,
     resolver: &dyn DelegateResolver,
     phon_resolver: &dyn PhonRuleResolver,
+    tmpl_cache: &mut HashMap<*const Template, Result<String, Diagnostic>>,
 ) -> Result<CellResult, Diagnostic> {
-    let result = apply_rule_rhs(&rule.rhs.node, cell, stems, struct_stems, resolver, phon_resolver)?;
+    let result = apply_rule_rhs(&rule.rhs.node, cell, stems, struct_stems, resolver, phon_resolver, tmpl_cache)?;
     // Strip boundary markers from final output
     Ok(match result {
         CellResult::Form(s) => CellResult::Form(strip_boundaries(&s)),
@@ -254,8 +258,9 @@ fn apply_rule_with_apply(
     resolver: &dyn DelegateResolver,
     phon_resolver: &dyn PhonRuleResolver,
     apply: Option<&ApplyExpr>,
+    tmpl_cache: &mut HashMap<*const Template, Result<String, Diagnostic>>,
 ) -> Result<CellResult, Diagnostic> {
-    let result = apply_rule(rule, cell, stems, struct_stems, resolver, phon_resolver)?;
+    let result = apply_rule(rule, cell, stems, struct_stems, resolver, phon_resolver, tmpl_cache)?;
     match (apply, &result) {
         (Some(expr), CellResult::Form(_)) if !matches!(rule.rhs.node, RuleRhs::Delegate(_)) => {
             eval_apply_expr(expr, result, phon_resolver)
@@ -296,10 +301,18 @@ fn apply_rule_rhs(
     struct_stems: &HashMap<String, HashMap<String, String>>,
     resolver: &dyn DelegateResolver,
     phon_resolver: &dyn PhonRuleResolver,
+    tmpl_cache: &mut HashMap<*const Template, Result<String, Diagnostic>>,
 ) -> Result<CellResult, Diagnostic> {
     match rhs {
         RuleRhs::Template(tmpl) => {
-            render_template(tmpl, stems, struct_stems).map(CellResult::Form)
+            let key = tmpl as *const Template;
+            let cached = tmpl_cache.entry(key).or_insert_with(|| {
+                render_template(tmpl, stems, struct_stems)
+            });
+            match cached {
+                Ok(s) => Ok(CellResult::Form(s.clone())),
+                Err(e) => Err(e.clone()),
+            }
         }
         RuleRhs::Null => Ok(CellResult::Null),
         RuleRhs::Delegate(deleg) => {
@@ -310,7 +323,7 @@ fn apply_rule_rhs(
                 Diagnostic::error(format!("phonrule '{}' not found", rule.node))
                     .with_label(rule.span, "not found")
             })?;
-            let inner_result = apply_rule_rhs(&inner.node, cell, stems, struct_stems, resolver, phon_resolver)?;
+            let inner_result = apply_rule_rhs(&inner.node, cell, stems, struct_stems, resolver, phon_resolver, tmpl_cache)?;
             match inner_result {
                 CellResult::Form(s) => {
                     let applied = apply_phonrule(&s, pr);

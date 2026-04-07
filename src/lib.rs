@@ -166,9 +166,15 @@ pub fn compile(entry_path: &Path, output_path: &Path) -> Result<(), String> {
 
     log::info!("compiling {} → {}", entry_path.display(), output_path.display());
 
-    // Phase 1: always run fully (parsing is fast)
+    // Load cache (before phase1, so AST cache can be used)
+    let cache_path = cache_path_for(output_path);
+    let cache = cache::Cache::open(&cache_path);
+    let cache_state = cache.as_ref().map(|c| c.load()).unwrap_or_default();
+    let cache::CacheState { entries: cached_entry_state, asts: cached_asts } = cache_state;
+
+    // Phase 1: load and parse files (using AST cache when possible)
     log::info!("phase1: loading and parsing files");
-    let p1 = phase1::run_phase1(entry_path);
+    let p1 = phase1::run_phase1(entry_path, cached_asts);
     log::info!("phase1: loaded {} file(s)", p1.files.len());
     if p1.diagnostics.has_errors() {
         return Err(p1.diagnostics.render_all(&p1.source_map));
@@ -178,17 +184,12 @@ pub fn compile(entry_path: &Path, output_path: &Path) -> Result<(), String> {
     log::debug!("computing Merkle hashes");
     let merkle = merkle::compute(&p1);
 
-    // Load cache
-    let cache_path = cache_path_for(output_path);
-    let cache = cache::Cache::open(&cache_path);
-    let cache_state = cache.as_ref().map(|c| c.load()).unwrap_or_default();
-
     // Diff: find entries whose Merkle hash changed (or are new)
     let mut entries_to_resolve: HashSet<(std::path::PathBuf, String)> = HashSet::new();
     let mut cached_entries: Vec<phase2::ResolvedEntry> = Vec::new();
 
     for (key, new_hash) in &merkle.entries {
-        if let Some((old_hash, resolved)) = cache_state.entries.get(key) {
+        if let Some((old_hash, resolved)) = cached_entry_state.get(key) {
             if old_hash == new_hash {
                 log::trace!("cache hit: {}:{}", key.0.display(), key.1);
                 cached_entries.push(resolved.clone());
@@ -215,11 +216,32 @@ pub fn compile(entry_path: &Path, output_path: &Path) -> Result<(), String> {
         return Err(p2.diagnostics.render_all(&p1.source_map));
     }
 
-    // Emit .huc file (always full rebuild — remove old file first)
-    log::info!("emit: writing {}", output_path.display());
-    let _ = std::fs::remove_file(output_path);
-    if let Err(diag) = emit_sqlite::emit(output_path, &p1, &p2) {
-        return Err(diag.render(&p1.source_map));
+    // Compute output fingerprint from all Merkle entry hashes to detect no-op builds.
+    let output_fingerprint = {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        let mut sorted_keys: Vec<_> = merkle.entries.keys().collect();
+        sorted_keys.sort();
+        for key in sorted_keys {
+            hasher.update(merkle.entries[key]);
+        }
+        let result: [u8; 32] = hasher.finalize().into();
+        result
+    };
+
+    // Check if emit can be skipped (output unchanged and .huc file exists)
+    let prev_fingerprint = cache.as_ref().and_then(|c| c.load_meta("output_fingerprint"));
+    let emit_needed = prev_fingerprint.as_deref() != Some(&output_fingerprint[..])
+        || !output_path.exists();
+
+    if emit_needed {
+        log::info!("emit: writing {}", output_path.display());
+        let _ = std::fs::remove_file(output_path);
+        if let Err(diag) = emit_sqlite::emit(output_path, &p1, &p2) {
+            return Err(diag.render(&p1.source_map));
+        }
+    } else {
+        log::info!("emit: skipped (output unchanged)");
     }
 
     // Update cache (failure is non-fatal)
@@ -234,8 +256,20 @@ pub fn compile(entry_path: &Path, output_path: &Path) -> Result<(), String> {
         })
         .collect();
 
+    // Collect AST data for cache persistence
+    let ast_data: Vec<(std::path::PathBuf, [u8; 32], span::FileId, ast::File)> = p1
+        .path_to_id
+        .iter()
+        .filter_map(|(path, &file_id)| {
+            let hash = p1.content_hashes.get(path)?;
+            let file = p1.files.get(&file_id)?;
+            Some((path.clone(), *hash, file_id, file.clone()))
+        })
+        .collect();
+
     if let Some(c) = cache.or_else(|| cache::Cache::open(&cache_path)) {
-        let _ = c.save(&cache_data);
+        let _ = c.save(&cache_data, &ast_data);
+        let _ = c.save_meta("output_fingerprint", &output_fingerprint);
     }
 
     log::info!("done");

@@ -98,7 +98,7 @@ pub fn compile_cached(hu_path: &Path) -> Result<PathBuf, String> {
                 .and_then(|m| m.modified())
                 .map_err(|e| format!("cannot stat '{}': {}", cache_path.display(), e))?;
 
-            let p1 = crate::phase1::run_phase1(&hu_path);
+            let p1 = crate::phase1::run_phase1(&hu_path, Default::default());
             let any_newer = p1.path_to_id.keys().any(|src_path| {
                 std::fs::metadata(src_path)
                     .and_then(|m| m.modified())

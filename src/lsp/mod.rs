@@ -1324,7 +1324,7 @@ fn build_project_state(entry_path: &std::path::Path, cache_root: &std::path::Pat
     }
 
     // Cache miss — run full analysis.
-    let phase1 = crate::phase1::run_phase1(entry_path);
+    let phase1 = crate::phase1::run_phase1(entry_path, Default::default());
 
     let phase2 = if !phase1.diagnostics.has_errors() {
         Some(crate::phase2::run_phase2(&phase1))

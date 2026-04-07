@@ -49,6 +49,8 @@ pub struct Phase1Result {
     pub diagnostics: Diagnostics,
     /// Map from file path to FileId.
     pub path_to_id: HashMap<PathBuf, FileId>,
+    /// Map from file path to SHA256 content hash (for AST cache persistence).
+    pub content_hashes: HashMap<PathBuf, [u8; 32]>,
 }
 
 /// Run phase 1 from a set of import directives (used by `.hut` rendering).
@@ -71,6 +73,8 @@ pub fn run_phase1_virtual(
         path_to_id: HashMap::new(),
         use_stack: Vec::new(),
         reference_visited: HashSet::new(),
+        ast_cache: HashMap::new(),
+        content_hashes: HashMap::new(),
     };
 
     // Create a virtual entry file with an empty source.
@@ -95,11 +99,18 @@ pub fn run_phase1_virtual(
         symbol_table: ctx.symbol_table,
         diagnostics: ctx.diagnostics,
         path_to_id: ctx.path_to_id,
+        content_hashes: ctx.content_hashes,
     }
 }
 
 /// Run phase 1: load files, parse, hoist declarations, register symbols.
-pub fn run_phase1(entry_path: &Path) -> Phase1Result {
+///
+/// If `ast_cache` is provided (from a previous build's cache), files whose
+/// content hash matches the cache will skip lexing/parsing.
+pub fn run_phase1(
+    entry_path: &Path,
+    ast_cache: HashMap<PathBuf, ([u8; 32], FileId, File)>,
+) -> Phase1Result {
     let mut ctx = Phase1Ctx {
         files: HashMap::new(),
         source_map: SourceMap::new(),
@@ -108,6 +119,8 @@ pub fn run_phase1(entry_path: &Path) -> Phase1Result {
         path_to_id: HashMap::new(),
         use_stack: Vec::new(),
         reference_visited: HashSet::new(),
+        ast_cache,
+        content_hashes: HashMap::new(),
     };
 
     let entry_path = entry_path
@@ -122,6 +135,7 @@ pub fn run_phase1(entry_path: &Path) -> Phase1Result {
         symbol_table: ctx.symbol_table,
         diagnostics: ctx.diagnostics,
         path_to_id: ctx.path_to_id,
+        content_hashes: ctx.content_hashes,
     }
 }
 
@@ -135,6 +149,10 @@ struct Phase1Ctx {
     use_stack: Vec<PathBuf>,
     /// Set of files visited via @reference (dedup, no cycle error).
     reference_visited: HashSet<PathBuf>,
+    /// Cached ASTs from previous builds, keyed by file path → (content_hash, cached_file_id, File).
+    ast_cache: HashMap<PathBuf, ([u8; 32], FileId, File)>,
+    /// Content hashes computed during this build, for cache persistence.
+    content_hashes: HashMap<PathBuf, [u8; 32]>,
 }
 
 impl Phase1Ctx {
@@ -363,21 +381,47 @@ impl Phase1Ctx {
         };
 
         log::debug!("phase1: loading {}", path.display());
-        let file_id = self.source_map.add_file(path.clone(), source.clone());
+
+        // Compute content hash for AST cache lookup
+        use sha2::{Digest, Sha256};
+        let content_hash: [u8; 32] = Sha256::digest(source.as_bytes()).into();
+        self.content_hashes.insert(path.clone(), content_hash);
+
+        let file_id = self.source_map.add_file(path.clone(), source);
         self.path_to_id.insert(path.clone(), file_id);
 
-        // Lex & parse
-        let lexer = Lexer::new(self.source_map.source(file_id), file_id);
-        let (tokens, lex_errors) = lexer.tokenize();
-        for e in lex_errors {
-            self.diagnostics.add(e);
-        }
-
-        let parser = Parser::new(tokens, file_id);
-        let (file, parse_errors) = parser.parse();
-        for e in parse_errors {
-            self.diagnostics.add(e);
-        }
+        // Try AST cache: if content hash and file_id both match, skip lex/parse
+        let file = if let Some((cached_hash, cached_fid, cached_file)) = self.ast_cache.remove(&path) {
+            if cached_hash == content_hash && cached_fid == file_id {
+                log::debug!("phase1: AST cache hit for {}", path.display());
+                cached_file
+            } else {
+                log::debug!("phase1: AST cache miss for {}", path.display());
+                let lexer = Lexer::new(self.source_map.source(file_id), file_id);
+                let (tokens, lex_errors) = lexer.tokenize();
+                for e in lex_errors {
+                    self.diagnostics.add(e);
+                }
+                let parser = Parser::new(tokens, file_id);
+                let (file, parse_errors) = parser.parse();
+                for e in parse_errors {
+                    self.diagnostics.add(e);
+                }
+                file
+            }
+        } else {
+            let lexer = Lexer::new(self.source_map.source(file_id), file_id);
+            let (tokens, lex_errors) = lexer.tokenize();
+            for e in lex_errors {
+                self.diagnostics.add(e);
+            }
+            let parser = Parser::new(tokens, file_id);
+            let (file, parse_errors) = parser.parse();
+            for e in parse_errors {
+                self.diagnostics.add(e);
+            }
+            file
+        };
 
         // Register local symbols (hoisted declarations)
         for (idx, item) in file.items.iter().enumerate() {
@@ -852,7 +896,7 @@ entry test_word {
 }
 "#).unwrap();
 
-        let result = run_phase1(&a_path);
+        let result = run_phase1(&a_path, Default::default());
         assert!(!result.diagnostics.has_errors(), "phase1 should have no errors");
 
         // Find a.hu's file_id

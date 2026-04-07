@@ -30,7 +30,7 @@ impl Parser {
 
     /// Consume the parser and return the AST plus any diagnostics.
     pub fn parse(mut self) -> (File, Vec<Diagnostic>) {
-        let mut items = Vec::new();
+        let mut items = Vec::with_capacity(16);
         while !self.at_eof() {
             match self.parse_item() {
                 Ok(item) => items.push(item),
@@ -84,12 +84,15 @@ impl Parser {
     }
 
     fn expect_ident(&mut self) -> Result<Ident, Diagnostic> {
-        match self.peek().clone() {
-            TokenKind::Ident(s) => {
-                let tok = self.advance();
+        if let TokenKind::Ident(_) = self.peek() {
+            let tok = self.advance();
+            if let TokenKind::Ident(s) = tok.node {
                 Ok(Spanned::new(s, tok.span))
+            } else {
+                unreachable!()
             }
-            _ => Err(self.error(format!("expected identifier, found {:?}", self.peek()))),
+        } else {
+            Err(self.error(format!("expected identifier, found {:?}", self.peek())))
         }
     }
 
@@ -102,12 +105,15 @@ impl Parser {
     }
 
     fn expect_string(&mut self) -> Result<StringLit, Diagnostic> {
-        match self.peek().clone() {
-            TokenKind::StringLit(s) => {
-                let tok = self.advance();
+        if let TokenKind::StringLit(_) = self.peek() {
+            let tok = self.advance();
+            if let TokenKind::StringLit(s) = tok.node {
                 Ok(Spanned::new(s, tok.span))
+            } else {
+                unreachable!()
             }
-            _ => Err(self.error(format!("expected string literal, found {:?}", self.peek()))),
+        } else {
+            Err(self.error(format!("expected string literal, found {:?}", self.peek())))
         }
     }
 
@@ -675,11 +681,13 @@ impl Parser {
     }
 
     fn parse_rule_rhs(&mut self) -> Result<RuleRhs, Diagnostic> {
-        match self.peek().clone() {
-            TokenKind::TemplateLit(segs) => {
+        match self.peek() {
+            TokenKind::TemplateLit(_) => {
                 let tok = self.advance();
-                let template = self.segs_to_template(segs, tok.span);
-                Ok(RuleRhs::Template(template))
+                if let TokenKind::TemplateLit(segs) = tok.node {
+                    let template = self.segs_to_template(segs, tok.span);
+                    Ok(RuleRhs::Template(template))
+                } else { unreachable!() }
             }
             TokenKind::Ident(s) if s == "null" => {
                 self.advance();
@@ -973,7 +981,7 @@ impl Parser {
     }
 
     fn parse_phon_map_result(&mut self) -> Result<PhonMapResult, Diagnostic> {
-        match self.peek().clone() {
+        match self.peek() {
             TokenKind::StringLit(_) => {
                 let s = self.expect_string()?;
                 Ok(PhonMapResult::Literal(s))
@@ -990,7 +998,7 @@ impl Parser {
     }
 
     fn parse_phon_map_else(&mut self) -> Result<PhonMapElse, Diagnostic> {
-        match self.peek().clone() {
+        match self.peek() {
             TokenKind::StringLit(_) => {
                 let s = self.expect_string()?;
                 Ok(PhonMapElse::Literal(s))
@@ -1011,7 +1019,7 @@ impl Parser {
         let start = self.current_span().start;
 
         // FROM: class name or string literal
-        let from = match self.peek().clone() {
+        let from = match self.peek() {
             TokenKind::StringLit(_) => {
                 let s = self.expect_string()?;
                 PhonPattern::Literal(s)
@@ -1029,7 +1037,7 @@ impl Parser {
         self.expect(&TokenKind::Arrow)?;
 
         // TO: map name, string literal, or "null"
-        let to = match self.peek().clone() {
+        let to = match self.peek() {
             TokenKind::StringLit(_) => {
                 let s = self.expect_string()?;
                 PhonReplacement::Literal(s)
@@ -1127,7 +1135,7 @@ impl Parser {
     }
 
     fn parse_phon_context_elem(&mut self) -> Result<PhonContextElem, Diagnostic> {
-        let elem = match self.peek().clone() {
+        let elem = match self.peek() {
             TokenKind::Plus => {
                 self.advance();
                 return Ok(PhonContextElem::Boundary);

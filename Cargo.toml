@@ -8,7 +8,7 @@ rust-version = "1.70"
 
 [features]
 default = ["sqlite", "cli"]
-sqlite = ["dep:rusqlite", "dep:sha2", "serialization", "dep:serde_json"]
+sqlite = ["dep:rusqlite", "dep:sha2", "serialization", "dep:serde_json", "dep:bincode"]
 cli = ["dep:clap", "dep:env_logger", "sqlite", "lsp"]
 serialization = ["dep:serde"]
 lsp = ["dep:crossbeam-channel", "dep:lsp-server", "dep:lsp-types", "dep:serde_json", "dep:notify", "serialization"]
@@ -22,6 +22,7 @@ lsp-server = { version = "0.7", optional = true }
 lsp-types = { version = "0.97", optional = true }
 serde_json = { version = "1", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
+bincode = { version = "1", optional = true }
 notify = { version = "6", optional = true }
 log = "0.4"
 env_logger = { version = "0.11", optional = true }
