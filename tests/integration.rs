@@ -347,6 +347,478 @@ fn test_incremental_cache_deleted() {
 }
 
 // =========================================================================
+// Merkle-tree incremental cache tests
+// =========================================================================
+
+/// Helper: create a multi-file project in a temp dir.
+/// `files` is a list of (filename, content) pairs; the first file is the entry.
+fn setup_merkle_project(
+    name: &str,
+    files: &[(&str, &str)],
+) -> (tempfile::TempDir, PathBuf, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    for (fname, content) in files {
+        std::fs::write(dir.path().join(fname), content).unwrap();
+    }
+    let entry = dir.path().join(files[0].0);
+    let output = dir.path().join(format!("{}.huc", name));
+    (dir, entry, output)
+}
+
+/// Query a single form string for a given entry + tag filter.
+fn query_form(conn: &Connection, entry_name: &str, tag_filter: &str) -> String {
+    conn.query_row(
+        &format!(
+            "SELECT form_str FROM forms WHERE entry_id = \
+             (SELECT id FROM entries WHERE name = '{}') AND tags LIKE '%{}%'",
+            entry_name, tag_filter,
+        ),
+        [],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+/// Query the form count for a given entry.
+fn query_form_count(conn: &Connection, entry_name: &str) -> i64 {
+    conn.query_row(
+        &format!(
+            "SELECT COUNT(*) FROM forms WHERE entry_id = \
+             (SELECT id FROM entries WHERE name = '{}')",
+            entry_name,
+        ),
+        [],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+#[test]
+fn test_merkle_entry_change_only_affects_changed_entry() {
+    // Two entries sharing the same inflection. Changing one entry's stem should
+    // produce correct forms for both entries (the unchanged one from cache,
+    // the changed one freshly expanded).
+    let profile = r#"
+tagaxis tense {
+  role: inflectional
+  display: { en: "Tense" }
+}
+@extend tv for tagaxis tense {
+  present { display: { en: "Present" } }
+  past { display: { en: "Past" } }
+}
+inflection verb for {tense} {
+  requires stems: root
+  [tense=present] -> `{root}s`
+  [tense=past] -> `{root}ed`
+}
+"#;
+    let main_v1 = r#"
+@use * from "profile.hu"
+entry go {
+  headword: "go"
+  stems { root: "go" }
+  inflection_class: verb
+  meaning: "to go"
+}
+entry run {
+  headword: "run"
+  stems { root: "run" }
+  inflection_class: verb
+  meaning: "to run"
+}
+"#;
+
+    let (dir, entry, output) = setup_merkle_project("merkle_entry", &[
+        ("main.hu", main_v1),
+        ("profile.hu", profile),
+    ]);
+
+    // First compile
+    hubullu::compile(&entry, &output).unwrap();
+    let conn = Connection::open(&output).unwrap();
+    assert_eq!(query_form(&conn, "go", "tense=present"), "gos");
+    assert_eq!(query_form(&conn, "run", "tense=present"), "runs");
+    drop(conn);
+
+    // Change "go" entry stem → "walk"
+    let main_v2 = main_v1.replace(
+        "stems { root: \"go\" }",
+        "stems { root: \"walk\" }",
+    ).replace(
+        "headword: \"go\"",
+        "headword: \"walk\"",
+    );
+    std::fs::write(dir.path().join("main.hu"), main_v2).unwrap();
+
+    // Recompile — "run" should come from cache, "go" re-expanded
+    hubullu::compile(&entry, &output).unwrap();
+    let conn = Connection::open(&output).unwrap();
+    assert_eq!(query_form(&conn, "go", "tense=present"), "walks");
+    assert_eq!(query_form(&conn, "go", "tense=past"), "walked");
+    // "run" should be unaffected
+    assert_eq!(query_form(&conn, "run", "tense=present"), "runs");
+    assert_eq!(query_form(&conn, "run", "tense=past"), "runed");
+}
+
+#[test]
+fn test_merkle_inflection_change_propagates_to_entries() {
+    // Changing an inflection class rule should cause entries using it to be
+    // re-expanded, while entries using a different class remain cached.
+    let profile_v1 = r#"
+tagaxis tense {
+  role: inflectional
+  display: { en: "Tense" }
+}
+@extend tv for tagaxis tense {
+  present { display: { en: "Present" } }
+  past { display: { en: "Past" } }
+}
+inflection verb_a for {tense} {
+  requires stems: root
+  [tense=present] -> `{root}s`
+  [tense=past] -> `{root}ed`
+}
+inflection verb_b for {tense} {
+  requires stems: root
+  [tense=present] -> `{root}ing`
+  [tense=past] -> `{root}t`
+}
+"#;
+    let main_hu = r#"
+@use * from "profile.hu"
+entry foo {
+  headword: "foo"
+  stems { root: "foo" }
+  inflection_class: verb_a
+  meaning: "foo"
+}
+entry bar {
+  headword: "bar"
+  stems { root: "bar" }
+  inflection_class: verb_b
+  meaning: "bar"
+}
+"#;
+
+    let (dir, entry, output) = setup_merkle_project("merkle_infl", &[
+        ("main.hu", main_hu),
+        ("profile.hu", profile_v1),
+    ]);
+
+    // First compile
+    hubullu::compile(&entry, &output).unwrap();
+    let conn = Connection::open(&output).unwrap();
+    assert_eq!(query_form(&conn, "foo", "tense=present"), "foos");
+    assert_eq!(query_form(&conn, "bar", "tense=present"), "baring");
+    drop(conn);
+
+    // Change verb_a rule: present now uses "z" suffix instead of "s"
+    let profile_v2 = profile_v1.replace(
+        "[tense=present] -> `{root}s`",
+        "[tense=present] -> `{root}z`",
+    );
+    std::fs::write(dir.path().join("profile.hu"), profile_v2).unwrap();
+
+    // Recompile — "foo" (verb_a) should change, "bar" (verb_b) cached
+    hubullu::compile(&entry, &output).unwrap();
+    let conn = Connection::open(&output).unwrap();
+    assert_eq!(query_form(&conn, "foo", "tense=present"), "fooz");
+    assert_eq!(query_form(&conn, "foo", "tense=past"), "fooed");
+    // "bar" must be unchanged
+    assert_eq!(query_form(&conn, "bar", "tense=present"), "baring");
+    assert_eq!(query_form(&conn, "bar", "tense=past"), "bart");
+}
+
+#[test]
+fn test_merkle_phonrule_change_propagates_through_inflection() {
+    // A phonrule change should propagate through the inflection that uses it
+    // to the entries using that inflection.
+    let profile_v1 = r#"
+tagaxis tense {
+  role: inflectional
+  display: { en: "Tense" }
+}
+@extend tv for tagaxis tense {
+  present { display: { en: "Present" } }
+  past { display: { en: "Past" } }
+}
+
+phonrule doubling {
+  class V = ["a", "e", "i", "o", "u"]
+  V -> null / _ + _
+}
+
+inflection verb_with_phon for {tense} {
+  requires stems: root
+  apply doubling(cell)
+  [tense=present] -> `{root}s`
+  [tense=past] -> `{root}ed`
+}
+
+inflection verb_plain for {tense} {
+  requires stems: root
+  [tense=present] -> `{root}ing`
+  [tense=past] -> `{root}t`
+}
+"#;
+    let main_hu = r#"
+@use * from "profile.hu"
+entry alpha {
+  headword: "alpha"
+  stems { root: "alpha" }
+  inflection_class: verb_with_phon
+  meaning: "alpha"
+}
+entry beta {
+  headword: "beta"
+  stems { root: "beta" }
+  inflection_class: verb_plain
+  meaning: "beta"
+}
+"#;
+
+    let (dir, entry, output) = setup_merkle_project("merkle_phon", &[
+        ("main.hu", main_hu),
+        ("profile.hu", profile_v1),
+    ]);
+
+    // First compile
+    hubullu::compile(&entry, &output).unwrap();
+    let conn = Connection::open(&output).unwrap();
+    let alpha_present_v1 = query_form(&conn, "alpha", "tense=present");
+    let beta_present_v1 = query_form(&conn, "beta", "tense=present");
+    drop(conn);
+
+    // Change the phonrule: delete vowels instead of null context
+    let profile_v2 = profile_v1.replace(
+        "V -> null / _ + _",
+        "V -> null / _ #",
+    );
+    std::fs::write(dir.path().join("profile.hu"), profile_v2).unwrap();
+
+    // Recompile — "alpha" (uses doubling via verb_with_phon) should change,
+    // "beta" (verb_plain, no phonrule) should be cached
+    hubullu::compile(&entry, &output).unwrap();
+    let conn = Connection::open(&output).unwrap();
+    let alpha_present_v2 = query_form(&conn, "alpha", "tense=present");
+    let beta_present_v2 = query_form(&conn, "beta", "tense=present");
+
+    // alpha must have changed (different phonrule result)
+    assert_ne!(
+        alpha_present_v1, alpha_present_v2,
+        "phonrule change must propagate to entries using it"
+    );
+    // beta must be identical
+    assert_eq!(
+        beta_present_v1, beta_present_v2,
+        "entries not using the changed phonrule must be unaffected"
+    );
+}
+
+#[test]
+fn test_merkle_extend_change_propagates_to_entries() {
+    // Adding a value to an @extend should cause entries using that axis to be
+    // re-expanded (new forms appear).
+    let profile_v1 = r#"
+tagaxis tense {
+  role: inflectional
+  display: { en: "Tense" }
+}
+@extend tv for tagaxis tense {
+  present { display: { en: "Present" } }
+  past { display: { en: "Past" } }
+}
+inflection verb for {tense} {
+  requires stems: root
+  [tense=present] -> `{root}s`
+  [tense=past] -> `{root}ed`
+  [_] -> `{root}`
+}
+"#;
+    let main_hu = r#"
+@use * from "profile.hu"
+entry go {
+  headword: "go"
+  stems { root: "go" }
+  inflection_class: verb
+  meaning: "to go"
+}
+"#;
+
+    let (dir, entry, output) = setup_merkle_project("merkle_extend", &[
+        ("main.hu", main_hu),
+        ("profile.hu", profile_v1),
+    ]);
+
+    // First compile — 2 forms (present, past)
+    hubullu::compile(&entry, &output).unwrap();
+    let conn = Connection::open(&output).unwrap();
+    assert_eq!(query_form_count(&conn, "go"), 2);
+    drop(conn);
+
+    // Add "future" to the extend
+    let profile_v2 = profile_v1.replace(
+        "past { display: { en: \"Past\" } }\n}",
+        "past { display: { en: \"Past\" } }\n  future { display: { en: \"Future\" } }\n}",
+    );
+    std::fs::write(dir.path().join("profile.hu"), profile_v2).unwrap();
+
+    // Recompile — should now have 3 forms
+    hubullu::compile(&entry, &output).unwrap();
+    let conn = Connection::open(&output).unwrap();
+    assert_eq!(query_form_count(&conn, "go"), 3);
+}
+
+#[test]
+fn test_merkle_no_change_uses_cache() {
+    // Compiling twice with no changes should produce identical results.
+    let profile = r#"
+tagaxis tense {
+  role: inflectional
+  display: { en: "Tense" }
+}
+@extend tv for tagaxis tense {
+  present { display: { en: "Present" } }
+  past { display: { en: "Past" } }
+}
+inflection verb for {tense} {
+  requires stems: root
+  [tense=present] -> `{root}s`
+  [tense=past] -> `{root}ed`
+}
+"#;
+    let main_hu = r#"
+@use * from "profile.hu"
+entry go {
+  headword: "go"
+  stems { root: "go" }
+  inflection_class: verb
+  meaning: "to go"
+}
+"#;
+
+    let (_dir, entry, output) = setup_merkle_project("merkle_noop", &[
+        ("main.hu", main_hu),
+        ("profile.hu", profile),
+    ]);
+
+    hubullu::compile(&entry, &output).unwrap();
+    let conn = Connection::open(&output).unwrap();
+    let forms1: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT form_str FROM forms ORDER BY form_str")
+            .unwrap();
+        stmt.query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
+    };
+    drop(conn);
+
+    // Second compile — no changes
+    hubullu::compile(&entry, &output).unwrap();
+    let conn = Connection::open(&output).unwrap();
+    let forms2: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT form_str FROM forms ORDER BY form_str")
+            .unwrap();
+        stmt.query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
+    };
+
+    assert_eq!(forms1, forms2, "recompile with no changes must produce identical forms");
+}
+
+#[test]
+fn test_merkle_cross_file_phonrule_change() {
+    // Test that phonrule changes in a separate file propagate correctly
+    // to entries that use an inflection referencing that phonrule.
+    // The phonrule and inflection live in the same file (profile.hu),
+    // entries in main.hu import from profile.hu.
+    let profile_v1 = r#"
+tagaxis tense {
+  role: inflectional
+  display: { en: "Tense" }
+}
+@extend tv for tagaxis tense {
+  present { display: { en: "Present" } }
+  past { display: { en: "Past" } }
+}
+
+phonrule doubling {
+  class V = ["a", "e", "i", "o", "u"]
+  V -> null / _ + _
+}
+
+inflection verb for {tense} {
+  requires stems: root
+  apply doubling(cell)
+  [tense=present] -> `{root}s`
+  [tense=past] -> `{root}ed`
+}
+
+inflection verb_plain for {tense} {
+  requires stems: root
+  [tense=present] -> `{root}ing`
+  [tense=past] -> `{root}t`
+}
+"#;
+    let main_hu = r#"
+@use * from "profile.hu"
+entry alpha {
+  headword: "alpha"
+  stems { root: "alpha" }
+  inflection_class: verb
+  meaning: "alpha"
+}
+entry beta {
+  headword: "beta"
+  stems { root: "beta" }
+  inflection_class: verb_plain
+  meaning: "beta"
+}
+"#;
+
+    let (dir, entry, output) = setup_merkle_project("merkle_crossfile", &[
+        ("main.hu", main_hu),
+        ("profile.hu", profile_v1),
+    ]);
+
+    // First compile
+    hubullu::compile(&entry, &output).unwrap();
+    let conn = Connection::open(&output).unwrap();
+    let alpha_v1 = query_form(&conn, "alpha", "tense=present");
+    let beta_v1 = query_form(&conn, "beta", "tense=present");
+    drop(conn);
+
+    // Change the phonrule in profile.hu (only file that changes)
+    let profile_v2 = profile_v1.replace(
+        "V -> null / _ + _",
+        "V -> null / _ #",
+    );
+    std::fs::write(dir.path().join("profile.hu"), profile_v2).unwrap();
+
+    // Recompile — "alpha" (verb, uses doubling) must change,
+    // "beta" (verb_plain, no phonrule) must be cached
+    hubullu::compile(&entry, &output).unwrap();
+    let conn = Connection::open(&output).unwrap();
+    let alpha_v2 = query_form(&conn, "alpha", "tense=present");
+    let beta_v2 = query_form(&conn, "beta", "tense=present");
+
+    assert_ne!(
+        alpha_v1, alpha_v2,
+        "phonrule change must propagate through inflection to entry"
+    );
+    assert_eq!(
+        beta_v1, beta_v2,
+        "entry not using changed phonrule must be unaffected"
+    );
+}
+
+// =========================================================================
 // Standard library imports (std: scheme)
 // =========================================================================
 
