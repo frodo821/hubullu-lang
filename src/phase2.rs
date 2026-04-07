@@ -134,12 +134,13 @@ pub fn run_phase2(p1: &Phase1Result) -> Phase2Result {
 
 /// Run phase 2 with incremental entry resolution.
 ///
-/// `files_to_resolve` specifies which files need fresh entry expansion.
-/// `cached_entries` provides pre-resolved entries from unchanged files.
+/// `entries_to_resolve` specifies which `(source_path, entry_name)` pairs need
+/// fresh expansion.  `cached_entries` provides pre-resolved entries whose
+/// Merkle hashes have not changed.
 /// Schema validation (extends, inflections, phonrules) always runs fully.
 pub fn run_phase2_incremental(
     p1: &Phase1Result,
-    files_to_resolve: &HashSet<FileId>,
+    entries_to_resolve: &HashSet<(std::path::PathBuf, String)>,
     cached_entries: Vec<ResolvedEntry>,
 ) -> Phase2Result {
     let mut ctx = Phase2Ctx {
@@ -155,7 +156,7 @@ pub fn run_phase2_incremental(
     ctx.validate_phonrules();
     ctx.validate_inflections();
     ctx.collect_inflections();
-    ctx.resolve_entries_selective(files_to_resolve, cached_entries);
+    ctx.resolve_entries_by_merkle(entries_to_resolve, cached_entries);
     ctx.flush_deferred_infl_errors();
     ctx.check_dag();
 
@@ -499,10 +500,13 @@ impl<'a> Phase2Ctx<'a> {
         }
     }
 
-    /// Resolve entries only from the specified files; use cached entries for the rest.
-    fn resolve_entries_selective(
+    /// Resolve entries selectively based on Merkle hash changes.
+    ///
+    /// Only entries in `entries_to_resolve` (keyed by `(source_path, entry_name)`)
+    /// are freshly expanded; everything else comes from `cached`.
+    fn resolve_entries_by_merkle(
         &mut self,
-        files_to_resolve: &HashSet<FileId>,
+        entries_to_resolve: &HashSet<(std::path::PathBuf, String)>,
         cached: Vec<ResolvedEntry>,
     ) {
         self.entries = cached;
@@ -511,11 +515,16 @@ impl<'a> Phase2Ctx<'a> {
             .p1
             .files
             .iter()
-            .filter(|(&fid, _)| files_to_resolve.contains(&fid))
             .flat_map(|(&fid, file)| {
+                let path = self.p1.source_map.path(fid).to_path_buf();
                 file.items.iter().filter_map(move |item| {
                     if let Item::Entry(e) = &item.node {
-                        Some((fid, e.clone()))
+                        let key = (path.clone(), e.name.node.clone());
+                        if entries_to_resolve.contains(&key) {
+                            Some((fid, e.clone()))
+                        } else {
+                            None
+                        }
                     } else {
                         None
                     }

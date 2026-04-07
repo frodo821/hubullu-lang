@@ -30,6 +30,9 @@ pub mod dag;
 /// Incremental compilation cache (file hashing, schema fingerprinting).
 #[cfg(feature = "sqlite")]
 pub(crate) mod cache;
+/// Merkle-tree AST hashing for fine-grained incremental compilation.
+#[cfg(feature = "sqlite")]
+pub(crate) mod merkle;
 /// `.huc` emitter — writes compiled dictionary data to a `.huc` file (SQLite format).
 #[cfg(feature = "sqlite")]
 pub mod emit_sqlite;
@@ -159,7 +162,7 @@ pub fn lex_source(source: &str, filename: &str) -> (Vec<Token>, Vec<Diagnostic>,
 /// `<output>.cache` file.
 #[cfg(feature = "sqlite")]
 pub fn compile(entry_path: &Path, output_path: &Path) -> Result<(), String> {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashSet;
 
     // Phase 1: always run fully (parsing is fast)
     let p1 = phase1::run_phase1(entry_path);
@@ -167,51 +170,33 @@ pub fn compile(entry_path: &Path, output_path: &Path) -> Result<(), String> {
         return Err(p1.diagnostics.render_all(&p1.source_map));
     }
 
+    // Compute Merkle hashes for all items
+    let merkle = merkle::compute(&p1);
+
     // Load cache
     let cache_path = cache_path_for(output_path);
     let cache = cache::Cache::open(&cache_path);
     let cache_state = cache.as_ref().map(|c| c.load()).unwrap_or_default();
 
-    // Compute current state
-    let current_hashes = cache::compute_file_hashes(&p1);
-    let current_fingerprint = cache::compute_schema_fingerprint(&p1);
+    // Diff: find entries whose Merkle hash changed (or are new)
+    let mut entries_to_resolve: HashSet<(std::path::PathBuf, String)> = HashSet::new();
+    let mut cached_entries: Vec<phase2::ResolvedEntry> = Vec::new();
 
-    let schema_changed =
-        cache_state.schema_fingerprint.as_deref() != Some(&current_fingerprint);
+    for (key, new_hash) in &merkle.entries {
+        if let Some((old_hash, resolved)) = cache_state.entries.get(key) {
+            if old_hash == new_hash {
+                cached_entries.push(resolved.clone());
+                continue;
+            }
+        }
+        entries_to_resolve.insert(key.clone());
+    }
 
-    // Phase 2: full or incremental
-    let p2 = if schema_changed {
+    // Phase 2: full if no cache hits at all, incremental otherwise
+    let p2 = if cached_entries.is_empty() {
         phase2::run_phase2(&p1)
     } else {
-        // Identify changed files
-        let changed_paths: HashSet<&std::path::Path> = current_hashes
-            .iter()
-            .filter(|(path, hash)| {
-                cache_state
-                    .file_hashes
-                    .get(*path)
-                    .map(|h| h.as_str())
-                    != Some(hash.as_str())
-            })
-            .map(|(path, _)| path.as_path())
-            .collect();
-
-        let changed_file_ids: HashSet<span::FileId> = changed_paths
-            .iter()
-            .filter_map(|path| p1.path_to_id.get(*path).copied())
-            .collect();
-
-        // Collect cached entries from unchanged, still-existing files
-        let cached_entries: Vec<phase2::ResolvedEntry> = cache_state
-            .cached_entries
-            .iter()
-            .filter(|(path, _)| {
-                !changed_paths.contains(path.as_path()) && current_hashes.contains_key(path.as_path())
-            })
-            .flat_map(|(_, entries)| entries.clone())
-            .collect();
-
-        phase2::run_phase2_incremental(&p1, &changed_file_ids, cached_entries)
+        phase2::run_phase2_incremental(&p1, &entries_to_resolve, cached_entries)
     };
 
     if p2.diagnostics.has_errors() {
@@ -225,18 +210,19 @@ pub fn compile(entry_path: &Path, output_path: &Path) -> Result<(), String> {
     }
 
     // Update cache (failure is non-fatal)
-    let entries_by_file: HashMap<std::path::PathBuf, Vec<phase2::ResolvedEntry>> = {
-        let mut map: HashMap<std::path::PathBuf, Vec<phase2::ResolvedEntry>> = HashMap::new();
-        for entry in &p2.entries {
-            map.entry(entry.source_file.clone())
-                .or_default()
-                .push(entry.clone());
-        }
-        map
-    };
+    let cache_data: Vec<(std::path::PathBuf, String, [u8; 32], phase2::ResolvedEntry)> = p2
+        .entries
+        .iter()
+        .filter_map(|entry| {
+            let key = (entry.source_file.clone(), entry.name.clone());
+            merkle.entries.get(&key).map(|hash| {
+                (entry.source_file.clone(), entry.name.clone(), *hash, entry.clone())
+            })
+        })
+        .collect();
 
     if let Some(c) = cache.or_else(|| cache::Cache::open(&cache_path)) {
-        let _ = c.save(&current_hashes, &current_fingerprint, &entries_by_file);
+        let _ = c.save(&cache_data);
     }
 
     Ok(())

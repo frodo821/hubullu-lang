@@ -17,9 +17,15 @@ pub struct Span {
     pub end: usize,
 }
 
+/// Span is intentionally excluded from AST hashing — source positions must not
+/// affect Merkle cache keys.
+impl std::hash::Hash for Span {
+    fn hash<H: std::hash::Hasher>(&self, _state: &mut H) {}
+}
+
 /// A node annotated with source span.
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Spanned<T> {
     pub node: T,
     pub span: Span,
@@ -39,14 +45,14 @@ pub type StringLit = Spanned<String>;
 
 /// Template literal (`` `...` ``), containing segments.
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Template {
     pub segments: Vec<TemplateSegment>,
     pub span: Span,
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TemplateSegment {
     /// Literal text between interpolations.
     Lit(String),
@@ -62,14 +68,14 @@ pub enum TemplateSegment {
 
 /// A parsed `.hu` file — the root AST node.
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct File {
     pub items: Vec<Spanned<Item>>,
 }
 
 /// A top-level item in a `.hu` file.
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Item {
     Use(Import),
     Reference(Import),
@@ -84,7 +90,7 @@ pub enum Item {
 
 /// Configuration for `.hut` token rendering.
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RenderConfig {
     pub separator: Option<StringLit>,
     pub no_separator_before: Option<StringLit>,
@@ -96,7 +102,7 @@ pub struct RenderConfig {
 
 /// An `@use` or `@reference` import statement.
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Import {
     pub target: ImportTarget,
     pub path: StringLit,
@@ -104,7 +110,7 @@ pub struct Import {
 
 /// What is being imported.
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ImportTarget {
     /// `*` or `* as ns`
     Glob { alias: Option<Ident> },
@@ -113,7 +119,7 @@ pub enum ImportTarget {
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ImportEntry {
     pub name: Ident,
     pub alias: Option<Ident>,
@@ -125,7 +131,7 @@ pub struct ImportEntry {
 
 /// An `@export` directive that re-exports symbols transitively.
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Export {
     /// `true` for `@export use`, `false` for `@export reference`.
     pub is_use: bool,
@@ -141,7 +147,7 @@ pub struct Export {
 
 /// A `tagaxis` declaration defining a grammatical dimension (e.g. tense, number).
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TagAxis {
     pub name: Ident,
     pub role: Spanned<Role>,
@@ -151,7 +157,7 @@ pub struct TagAxis {
 
 /// Role of a tag axis.
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Role {
     Inflectional,
     Classificatory,
@@ -160,7 +166,7 @@ pub enum Role {
 
 /// Kind of search index for a tag axis.
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IndexKind {
     Exact,
     Fulltext,
@@ -175,7 +181,7 @@ pub type DisplayMap = Vec<(Ident, StringLit)>;
 
 /// An `@extend` block that adds values to a tag axis.
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Extend {
     pub name: Ident,
     pub target_axis: Ident,
@@ -184,7 +190,7 @@ pub struct Extend {
 
 /// A single value within an `@extend` block.
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExtendValue {
     pub name: Ident,
     pub display: DisplayMap,
@@ -198,7 +204,7 @@ pub struct ExtendValue {
 
 /// A `phonrule` block defining phonological rewrite rules.
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PhonRule {
     pub name: Ident,
     pub classes: Vec<CharClassDef>,
@@ -209,14 +215,14 @@ pub struct PhonRule {
 
 /// `class front = ["e", "i"]` or `class V = front | back`
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CharClassDef {
     pub name: Ident,
     pub body: CharClassBody,
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CharClassBody {
     /// Literal list: `["e", "i", "ö", "ü"]`
     List(Vec<StringLit>),
@@ -226,7 +232,7 @@ pub enum CharClassBody {
 
 /// `map to_back = c -> match { "e" -> "a", else -> c }`
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PhonMapDef {
     pub name: Ident,
     pub param: Ident,
@@ -234,7 +240,7 @@ pub struct PhonMapDef {
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PhonMapBody {
     Match {
         arms: Vec<PhonMapArm>,
@@ -243,21 +249,21 @@ pub enum PhonMapBody {
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PhonMapArm {
     pub from: StringLit,
     pub to: PhonMapResult,
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PhonMapResult {
     Literal(StringLit),
     Var(Ident),
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PhonMapElse {
     Literal(StringLit),
     Var(Ident),
@@ -265,7 +271,7 @@ pub enum PhonMapElse {
 
 /// A phonological rewrite rule: `V -> to_back / back !back* + !back* _`
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PhonRewriteRule {
     pub from: PhonPattern,
     pub to: PhonReplacement,
@@ -274,14 +280,14 @@ pub struct PhonRewriteRule {
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PhonPattern {
     Class(Ident),
     Literal(StringLit),
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PhonReplacement {
     Map(Ident),
     Literal(StringLit),
@@ -289,14 +295,14 @@ pub enum PhonReplacement {
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PhonContext {
     pub left: Vec<PhonContextElem>,
     pub right: Vec<PhonContextElem>,
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PhonContextElem {
     Class(Ident),
     NegClass(Ident),
@@ -314,7 +320,7 @@ pub enum PhonContextElem {
 
 /// An inflection class defining paradigm rules.
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Inflection {
     pub name: Ident,
     pub display: DisplayMap,
@@ -326,7 +332,7 @@ pub struct Inflection {
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StemReq {
     pub name: Ident,
     /// Optional constraint, e.g. `root1[stem_type=consonantal_3]`
@@ -334,7 +340,7 @@ pub struct StemReq {
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum InflectionBody {
     /// Simple rule list, optionally with an `apply` phonrule wrapper.
     Rules(RulesBody),
@@ -344,7 +350,7 @@ pub enum InflectionBody {
 
 /// Body for rule-based inflections.
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RulesBody {
     /// Optional `apply harmony(cell)` — phonrule applied to every non-delegate cell.
     pub apply: Option<ApplyExpr>,
@@ -355,7 +361,7 @@ pub struct RulesBody {
 ///
 /// `apply harmony(elision(cell))` → `PhonApply { rule: harmony, inner: PhonApply { rule: elision, inner: Cell } }`
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ApplyExpr {
     /// Terminal: the evaluated cell result.
     Cell,
@@ -364,7 +370,7 @@ pub enum ApplyExpr {
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ComposeBody {
     /// Compose expression: `harmony(root + sfx1 + sfx2)` or `root + sfx1 + sfx2`.
     pub chain: ComposeExpr,
@@ -374,7 +380,7 @@ pub struct ComposeBody {
 
 /// Expression tree for compose chains, supporting phonrule application.
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ComposeExpr {
     /// A single slot reference: `root`, `sfx1`
     Slot(Ident),
@@ -385,14 +391,14 @@ pub enum ComposeExpr {
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SlotDef {
     pub name: Ident,
     pub rules: Vec<InflectionRule>,
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct InflectionRule {
     pub condition: TagConditionList,
     pub rhs: Spanned<RuleRhs>,
@@ -400,7 +406,7 @@ pub struct InflectionRule {
 
 /// Tag condition list: `[tense=present, person=1, _]`
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TagConditionList {
     pub conditions: Vec<TagCondition>,
     /// Whether `_` (wildcard) is present at the end.
@@ -409,14 +415,14 @@ pub struct TagConditionList {
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TagCondition {
     pub axis: Ident,
     pub value: Ident,
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum RuleRhs {
     /// Template literal: `` `{pres}e` ``
     Template(Template),
@@ -432,7 +438,7 @@ pub enum RuleRhs {
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Delegate {
     /// Target inflection name.
     pub target: Ident,
@@ -443,7 +449,7 @@ pub struct Delegate {
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DelegateTag {
     /// `case=nominative` — fixed value.
     Fixed(TagCondition),
@@ -452,7 +458,7 @@ pub enum DelegateTag {
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StemMapping {
     /// Stem name in the delegate target.
     pub target_stem: Ident,
@@ -461,7 +467,7 @@ pub struct StemMapping {
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum StemSource {
     /// Reference to a stem in the caller.
     Stem(Ident),
@@ -475,7 +481,7 @@ pub enum StemSource {
 
 /// A dictionary entry definition.
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Entry {
     pub name: Ident,
     pub headword: Headword,
@@ -489,7 +495,7 @@ pub struct Entry {
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Headword {
     /// Simple: `headword: "faren"`
     Simple(StringLit),
@@ -498,14 +504,14 @@ pub enum Headword {
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StemDef {
     pub name: Ident,
     pub value: StringLit,
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum EntryInflection {
     /// `inflection_class: strong_I`
     Class(Ident),
@@ -514,14 +520,14 @@ pub enum EntryInflection {
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct InlineInflection {
     pub axes: Vec<Ident>,
     pub body: InflectionBody,
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum MeaningDef {
     /// Single meaning: `meaning: "to go"`
     Single(StringLit),
@@ -530,7 +536,7 @@ pub enum MeaningDef {
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MeaningEntry {
     pub ident: Ident,
     pub text: StringLit,
@@ -541,7 +547,7 @@ pub struct MeaningEntry {
 // ---------------------------------------------------------------------------
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Etymology {
     pub proto: Option<StringLit>,
     pub cognates: Vec<Cognate>,
@@ -550,7 +556,7 @@ pub struct Etymology {
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Cognate {
     pub entry: EntryRef,
     pub note: StringLit,
@@ -561,14 +567,14 @@ pub struct Cognate {
 // ---------------------------------------------------------------------------
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Example {
     pub tokens: Vec<Token>,
     pub translation: StringLit,
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Token {
     /// Entry reference with optional form spec: `faren[tense=present, ...]`
     Ref(EntryRef),
@@ -590,7 +596,7 @@ pub enum Token {
 
 /// Parsed `.hut` file: `@reference` imports followed by a token list.
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct HutFile {
     pub references: Vec<Import>,
     pub tokens: Vec<Token>,
@@ -599,7 +605,7 @@ pub struct HutFile {
 /// Fully qualified entry reference:
 /// `(<namespace>.)* <entry_id> (#<meaning>)? ([<form_spec>])? | ([$=<stem>])?`
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EntryRef {
     pub namespace: Vec<Ident>,
     pub entry_id: Ident,
