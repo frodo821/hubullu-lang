@@ -1109,12 +1109,20 @@ fn lint_shadowed_rule(
         for item in &file.items {
             match &item.node {
                 Item::Inflection(infl) => {
-                    let axes: Vec<String> = infl.axes.iter().map(|a| a.node.clone()).collect();
+                    let referenced = inflection_eval::collect_referenced_axes(&infl.body, &[]);
+                    let axes: Vec<String> = infl.axes.iter()
+                        .map(|a| a.node.clone())
+                        .filter(|a| referenced.contains(a.as_str()))
+                        .collect();
                     check_shadowed_in_body(&infl.body, &axes, axis_values, lints);
                 }
                 Item::Entry(entry) => {
                     if let Some(EntryInflection::Inline(inline)) = &entry.inflection {
-                        let axes: Vec<String> = inline.axes.iter().map(|a| a.node.clone()).collect();
+                        let referenced = inflection_eval::collect_referenced_axes(&inline.body, &[]);
+                        let axes: Vec<String> = inline.axes.iter()
+                            .map(|a| a.node.clone())
+                            .filter(|a| referenced.contains(a.as_str()))
+                            .collect();
                         check_shadowed_in_body(&inline.body, &axes, axis_values, lints);
                     }
                 }
@@ -1202,14 +1210,22 @@ fn lint_incomplete_coverage(
         for item in &file.items {
             if let Item::Inflection(infl) = &item.node {
                 if let InflectionBody::Rules(body) = &infl.body {
-                    let axes: Vec<String> = infl.axes.iter().map(|a| a.node.clone()).collect();
+                    let referenced = inflection_eval::collect_referenced_axes(&infl.body, &[]);
+                    let axes: Vec<String> = infl.axes.iter()
+                        .map(|a| a.node.clone())
+                        .filter(|a| referenced.contains(a.as_str()))
+                        .collect();
                     check_incomplete_coverage(&body.rules, &axes, axis_values, &infl.name, lints);
                 }
             }
             if let Item::Entry(entry) = &item.node {
                 if let Some(EntryInflection::Inline(inline)) = &entry.inflection {
                     if let InflectionBody::Rules(body) = &inline.body {
-                        let axes: Vec<String> = inline.axes.iter().map(|a| a.node.clone()).collect();
+                        let referenced = inflection_eval::collect_referenced_axes(&inline.body, &[]);
+                        let axes: Vec<String> = inline.axes.iter()
+                            .map(|a| a.node.clone())
+                            .filter(|a| referenced.contains(a.as_str()))
+                            .collect();
                         check_incomplete_coverage(&body.rules, &axes, axis_values, &entry.name, lints);
                     }
                 }

@@ -5,7 +5,7 @@
 //! - **Compose** paradigms: agglutinative slot concatenation with override rules
 //! - **Delegation**: forwarding to another inflection class with tag/stem remapping
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ast::*;
 use crate::error::Diagnostic;
@@ -64,6 +64,43 @@ pub fn enumerate_cells(
     }
 
     Ok(cells)
+}
+
+/// Collect axes explicitly referenced in rule conditions or delegate PassThrough tags.
+///
+/// Axes that never appear in any condition or PassThrough are "wildcard axes" —
+/// they don't affect the form output, so they can be excluded from the cartesian
+/// product to avoid generating duplicate rows.
+pub fn collect_referenced_axes(body: &InflectionBody, overrides: &[InflectionRule]) -> HashSet<String> {
+    let mut axes = HashSet::new();
+    let mut collect_from_rules = |rules: &[InflectionRule]| {
+        for rule in rules {
+            for cond in &rule.condition.conditions {
+                axes.insert(cond.axis.node.clone());
+            }
+            // Delegate PassThrough means the caller's axis value matters
+            if let RuleRhs::Delegate(deleg) = &rule.rhs.node {
+                for tag in &deleg.tags {
+                    if let DelegateTag::PassThrough(axis) = tag {
+                        axes.insert(axis.node.clone());
+                    }
+                }
+            }
+        }
+    };
+    match body {
+        InflectionBody::Rules(body) => {
+            collect_from_rules(&body.rules);
+        }
+        InflectionBody::Compose(comp) => {
+            for slot in &comp.slots {
+                collect_from_rules(&slot.rules);
+            }
+            collect_from_rules(&comp.overrides);
+        }
+    }
+    collect_from_rules(overrides);
+    axes
 }
 
 /// Check if a rule's condition matches a cell.
@@ -1329,5 +1366,106 @@ mod tests {
         assert!(err.is_err());
         let errors = err.unwrap_err();
         assert!(errors[0].message.contains("phonrule") && errors[0].message.contains("not found"));
+    }
+
+    // ===================================================================
+    // collect_referenced_axes tests
+    // ===================================================================
+
+    #[test]
+    fn test_collect_referenced_axes_rules() {
+        let body = InflectionBody::Rules(RulesBody {
+            rules: vec![
+                InflectionRule {
+                    condition: TagConditionList {
+                        conditions: vec![TagCondition {
+                            axis: make_ident("tense"),
+                            value: make_ident("present"),
+                        }],
+                        wildcard: true,
+                        span: make_span(),
+                    },
+                    rhs: Spanned::new(RuleRhs::Null, make_span()),
+                },
+            ],
+            apply: None,
+        });
+        let refs = collect_referenced_axes(&body, &[]);
+        assert!(refs.contains("tense"));
+        assert!(!refs.contains("number"));
+    }
+
+    #[test]
+    fn test_collect_referenced_axes_empty_rules() {
+        let body = InflectionBody::Rules(RulesBody {
+            rules: vec![
+                InflectionRule {
+                    condition: TagConditionList {
+                        conditions: vec![],
+                        wildcard: true,
+                        span: make_span(),
+                    },
+                    rhs: Spanned::new(RuleRhs::Null, make_span()),
+                },
+            ],
+            apply: None,
+        });
+        let refs = collect_referenced_axes(&body, &[]);
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn test_collect_referenced_axes_delegate_passthrough() {
+        let body = InflectionBody::Rules(RulesBody {
+            rules: vec![
+                InflectionRule {
+                    condition: TagConditionList {
+                        conditions: vec![],
+                        wildcard: true,
+                        span: make_span(),
+                    },
+                    rhs: Spanned::new(
+                        RuleRhs::Delegate(Delegate {
+                            target: make_ident("other"),
+                            tags: vec![
+                                DelegateTag::PassThrough(make_ident("case")),
+                                DelegateTag::Fixed(TagCondition {
+                                    axis: make_ident("number"),
+                                    value: make_ident("sg"),
+                                }),
+                            ],
+                            stem_mapping: vec![],
+                        }),
+                        make_span(),
+                    ),
+                },
+            ],
+            apply: None,
+        });
+        let refs = collect_referenced_axes(&body, &[]);
+        // PassThrough "case" is referenced; Fixed "number" is not
+        assert!(refs.contains("case"));
+        assert!(!refs.contains("number"));
+    }
+
+    #[test]
+    fn test_collect_referenced_axes_includes_overrides() {
+        let body = InflectionBody::Rules(RulesBody {
+            rules: vec![],
+            apply: None,
+        });
+        let overrides = vec![InflectionRule {
+            condition: TagConditionList {
+                conditions: vec![TagCondition {
+                    axis: make_ident("mood"),
+                    value: make_ident("subjunctive"),
+                }],
+                wildcard: false,
+                span: make_span(),
+            },
+            rhs: Spanned::new(RuleRhs::Null, make_span()),
+        }];
+        let refs = collect_referenced_axes(&body, &overrides);
+        assert!(refs.contains("mood"));
     }
 }

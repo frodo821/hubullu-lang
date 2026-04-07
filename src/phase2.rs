@@ -11,8 +11,8 @@ use crate::ast::*;
 use crate::dag;
 use crate::error::{Diagnostic, Diagnostics};
 use crate::inflection_eval::{
-    enumerate_cells, evaluate_compose, evaluate_rules_with_overrides, CellResult, DelegateResolver,
-    PhonRuleResolver,
+    collect_referenced_axes, enumerate_cells, evaluate_compose, evaluate_rules_with_overrides,
+    CellResult, DelegateResolver, PhonRuleResolver,
 };
 use crate::phase1::Phase1Result;
 use crate::span::FileId;
@@ -622,7 +622,17 @@ impl<'a> Phase2Ctx<'a> {
             };
 
             if let Some(body) = body {
-                let axis_values: HashMap<String, Vec<String>> = axes
+                // Filter out wildcard axes (axes never referenced in any rule
+                // condition or delegate PassThrough). They don't affect form
+                // output, so including them only produces duplicate rows.
+                let referenced = collect_referenced_axes(&body, &entry.forms_override);
+                let effective_axes: Vec<String> = axes
+                    .iter()
+                    .filter(|a| referenced.contains(a.as_str()))
+                    .cloned()
+                    .collect();
+
+                let axis_values: HashMap<String, Vec<String>> = effective_axes
                     .iter()
                     .map(|a| {
                         let vals = self
@@ -634,7 +644,7 @@ impl<'a> Phase2Ctx<'a> {
                     })
                     .collect();
 
-                match enumerate_cells(&axes, &axis_values) {
+                match enumerate_cells(&effective_axes, &axis_values) {
                     Ok(cells) => {
                         // Build struct_stems from required_stems constraints + axis slots
                         let mut struct_stems: HashMap<String, HashMap<String, String>> = HashMap::new();
