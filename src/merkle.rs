@@ -94,12 +94,16 @@ pub fn compute(p1: &Phase1Result) -> MerkleHashes {
     }
 
     // Phase 4: hash inflections (depend on phonrules and other inflections via delegate).
-    // Topological sort by delegate dependencies.
+    // collect_inflections now returns (canonical_name → (file_id, &Inflection)).
     let infl_items = collect_inflections(p1);
+
+    // Build delegate edges using resolved (canonical) names for topological sort.
     let mut delegate_edges: Vec<(String, String)> = Vec::new();
-    for (name, infl) in &infl_items {
-        for dep in delegate_refs(&infl.body) {
-            delegate_edges.push((dep, name.clone()));
+    for (name, (file_id, infl)) in &infl_items {
+        for local_dep in delegate_refs(&infl.body) {
+            if let Some(canonical) = resolve_inflection_name(p1, *file_id, &local_dep) {
+                delegate_edges.push((canonical, name.clone()));
+            }
         }
     }
     // Kahn's algorithm gives us a valid processing order
@@ -127,23 +131,31 @@ pub fn compute(p1: &Phase1Result) -> MerkleHashes {
             continue;
         }
         processed.insert(name);
-        if let Some(infl) = infl_items.get(name) {
+        if let Some((file_id, infl)) = infl_items.get(name) {
             let self_hash = ast_hash(infl);
             let mut sha = Sha256::new();
             sha.update(self_hash.to_le_bytes());
 
-            // Mix in phonrule dependency hashes (sorted for determinism)
-            let mut pr_deps: Vec<String> = phonrule_refs(&infl.body).into_iter().collect();
+            // Mix in phonrule dependency hashes (resolved to canonical names, sorted)
+            let mut pr_deps: Vec<String> = phonrule_refs(&infl.body)
+                .into_iter()
+                .filter_map(|local| resolve_phonrule_name(p1, *file_id, &local))
+                .collect();
             pr_deps.sort();
+            pr_deps.dedup();
             for pr_name in &pr_deps {
                 if let Some(h) = hashes.phonrules.get(pr_name) {
                     sha.update(h);
                 }
             }
 
-            // Mix in delegate target hashes (sorted)
-            let mut del_deps: Vec<String> = delegate_refs(&infl.body).into_iter().collect();
+            // Mix in delegate target hashes (resolved to canonical names, sorted)
+            let mut del_deps: Vec<String> = delegate_refs(&infl.body)
+                .into_iter()
+                .filter_map(|local| resolve_inflection_name(p1, *file_id, &local))
+                .collect();
             del_deps.sort();
+            del_deps.dedup();
             for del_name in &del_deps {
                 if let Some(h) = hashes.inflections.get(del_name) {
                     sha.update(h);
@@ -177,7 +189,7 @@ pub fn compute(p1: &Phase1Result) -> MerkleHashes {
 
                     // Mix in axis extend hashes for the inflection's axes
                     if let Some(ref_name) = &resolved_name {
-                        if let Some(infl) = infl_items.get(ref_name) {
+                        if let Some((_, infl)) = infl_items.get(ref_name) {
                             let mut axes: Vec<&str> =
                                 infl.axes.iter().map(|a| a.node.as_str()).collect();
                             axes.sort();
@@ -295,12 +307,12 @@ fn for_each_item_with_file<'a>(
     for_each_item(p1, |fid, item| f(fid, item));
 }
 
-/// Collect all named inflections keyed by canonical name.
-fn collect_inflections(p1: &Phase1Result) -> HashMap<String, &Inflection> {
+/// Collect all named inflections keyed by canonical name, with their file_id.
+fn collect_inflections(p1: &Phase1Result) -> HashMap<String, (FileId, &Inflection)> {
     let mut result = HashMap::new();
-    for_each_item(p1, |_, item| {
+    for_each_item(p1, |file_id, item| {
         if let Item::Inflection(infl) = item {
-            result.insert(infl.name.node.clone(), infl);
+            result.insert(infl.name.node.clone(), (file_id, infl));
         }
     });
     result
