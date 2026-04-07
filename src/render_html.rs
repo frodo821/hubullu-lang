@@ -1203,7 +1203,7 @@ pub fn render_site(dir: &Path, outdir: &Path, huc: Option<&Path>, site_title: Op
     let mut all_contexts: Vec<ResolveContext> = Vec::new();
 
     for ((hut_path, source), nav_entry) in hut_files.iter().zip(sources.iter()).zip(nav.iter()) {
-        let hut_file = render::parse_hut(source, &hut_path.to_string_lossy())?;
+        let (hut_file, hut_source_map) = render::parse_hut(source, &hut_path.to_string_lossy())?;
 
         let hut_dir = hut_path.parent().unwrap_or(Path::new("."));
 
@@ -1213,7 +1213,7 @@ pub fn render_site(dir: &Path, outdir: &Path, huc: Option<&Path>, site_title: Op
             render::ResolveContext::from_references(&hut_file.references, hut_dir)?
         };
 
-        let parts = render::resolve_annotated(&hut_file.tokens, &ctx)?;
+        let parts = render::resolve_annotated(&hut_file.tokens, &ctx, &hut_source_map)?;
         let (separator, no_sep_before) = render::read_render_config(&ctx);
 
         let body_html = HtmlRenderer.render(&parts, &separator, &no_sep_before);

@@ -21,8 +21,8 @@ use crate::span::SourceMap;
 // Parsing
 // ---------------------------------------------------------------------------
 
-/// Parse a `.hut` source string into a [`HutFile`] (references + tokens).
-pub fn parse_hut(source: &str, filename: &str) -> Result<HutFile, String> {
+/// Parse a `.hut` source string into a [`HutFile`] and its [`SourceMap`].
+pub fn parse_hut(source: &str, filename: &str) -> Result<(HutFile, SourceMap), String> {
     let mut source_map = SourceMap::new();
     let file_id = source_map.add_file(filename.into(), source.to_string());
 
@@ -40,7 +40,7 @@ pub fn parse_hut(source: &str, filename: &str) -> Result<HutFile, String> {
         return Err(msgs.join("\n"));
     }
 
-    Ok(hut_file)
+    Ok((hut_file, source_map))
 }
 
 // ---------------------------------------------------------------------------
@@ -137,6 +137,17 @@ impl EntrySource {
             None => Some(local_name), // glob — everything visible
             Some(map) => map.get(local_name).map(|s| s.as_str()),
         }
+    }
+
+    /// Check whether an entry actually exists in the `.huc` database.
+    fn entry_exists(&self, huc_name: &str) -> bool {
+        self.conn
+            .query_row(
+                "SELECT 1 FROM entries WHERE name = ?1",
+                [huc_name],
+                |_| Ok(()),
+            )
+            .is_ok()
     }
 }
 
@@ -336,19 +347,34 @@ impl ResolveContext {
     }
 
     /// Find the entry source and .huc-side name for the given reference.
+    ///
+    /// For glob imports, verifies that the entry actually exists in the DB.
+    /// If the entry is found in multiple sources, returns an ambiguity error.
     fn find_entry<'a>(
         &'a self,
         namespace: &[ast::Ident],
         local_name: &'a str,
     ) -> Result<(&'a EntrySource, &'a str), String> {
         if namespace.is_empty() {
-            // Search un-namespaced sources in order
-            for src in &self.default_sources {
+            // Search un-namespaced sources; verify DB existence and check ambiguity
+            let mut found: Option<(usize, &'a str)> = None;
+            for (i, src) in self.default_sources.iter().enumerate() {
                 if let Some(huc_name) = src.resolve_name(local_name) {
-                    return Ok((src, huc_name));
+                    if src.entry_exists(huc_name) {
+                        if let Some((prev_idx, _)) = found {
+                            return Err(format!(
+                                "entry '{}' is ambiguous (found in @reference #{} and #{})",
+                                local_name, prev_idx + 1, i + 1
+                            ));
+                        }
+                        found = Some((i, huc_name));
+                    }
                 }
             }
-            Err(format!("entry '{}' not found in any @reference", local_name))
+            match found {
+                Some((idx, huc_name)) => Ok((&self.default_sources[idx], huc_name)),
+                None => Err(format!("entry '{}' not found in any @reference", local_name)),
+            }
         } else {
             // Qualified lookup: first namespace component
             let ns = &namespace[0].node;
@@ -366,7 +392,8 @@ impl ResolveContext {
                 ));
             }
             match src.resolve_name(local_name) {
-                Some(huc_name) => Ok((src, huc_name)),
+                Some(huc_name) if src.entry_exists(huc_name) => Ok((src, huc_name)),
+                Some(_) => Err(format!("entry '{}' not found in namespace '{}'", local_name, ns)),
                 None => Err(format!("entry '{}' not found in namespace '{}'", local_name, ns)),
             }
         }
@@ -636,10 +663,18 @@ pub enum AnnotatedPart {
     SelfClosingTag(String, Vec<(String, String)>),
 }
 
+/// Format an error message with source location (line:col) from a span.
+fn loc(source_map: &SourceMap, span: &ast::Span) -> String {
+    let path = source_map.path(span.file_id);
+    let (line, col) = source_map.line_col(span.file_id, span.start);
+    format!("{}:{}:{}", path.display(), line, col)
+}
+
 /// Resolve a list of AST tokens using the [`ResolveContext`].
 pub fn resolve(
     tokens: &[ast::Token],
     ctx: &ResolveContext,
+    source_map: &SourceMap,
 ) -> Result<Vec<ResolvedPart>, String> {
     let mut parts = Vec::new();
     for token in tokens {
@@ -655,9 +690,11 @@ pub fn resolve(
             }
             ast::Token::Ref(entry_ref) => {
                 let local_name = &entry_ref.entry_id.node;
-                let (src, db_name) = ctx.find_entry(&entry_ref.namespace, local_name)?;
+                let at = loc(source_map, &entry_ref.span);
+                let (src, db_name) = ctx.find_entry(&entry_ref.namespace, local_name)
+                    .map_err(|e| format!("{}: {}", at, e))?;
 
-                // Verify the entry exists and get its headword.
+                // Get headword (find_entry already verified existence).
                 let headword: String = src
                     .conn
                     .query_row(
@@ -665,10 +702,9 @@ pub fn resolve(
                         [db_name],
                         |row| row.get(0),
                     )
-                    .map_err(|_| format!("entry '{}' is not defined", local_name))?;
+                    .map_err(|_| format!("{}: entry '{}' is not defined", at, local_name))?;
 
                 if let Some(stem_name) = &entry_ref.stem_spec {
-                    // Check stem existence with a clear message.
                     let stem_value: String = src
                         .conn
                         .query_row(
@@ -679,17 +715,16 @@ pub fn resolve(
                             |row| row.get(0),
                         )
                         .map_err(|_| {
-                            // List available stems for a helpful message.
                             let available = list_stems(src, db_name);
                             if available.is_empty() {
                                 format!(
-                                    "entry '{}' has no stems defined (requested [$={}])",
-                                    local_name, stem_name.node
+                                    "{}: entry '{}' has no stems defined (requested [$={}])",
+                                    at, local_name, stem_name.node
                                 )
                             } else {
                                 format!(
-                                    "entry '{}' has no stem '{}' (available: {})",
-                                    local_name, stem_name.node, available.join(", ")
+                                    "{}: entry '{}' has no stem '{}' (available: {})",
+                                    at, local_name, stem_name.node, available.join(", ")
                                 )
                             }
                         })?;
@@ -750,8 +785,8 @@ pub fn resolve(
                                 .collect::<Vec<_>>()
                                 .join(", ");
                             format!(
-                                "entry '{}' has no form matching [{}]",
-                                local_name, tags_display
+                                "{}: entry '{}' has no form matching [{}]",
+                                at, local_name, tags_display
                             )
                         })?;
                         parts.push(ResolvedPart::Text(form_str));
@@ -760,7 +795,7 @@ pub fn resolve(
             }
             ast::Token::Tag { name, attrs, children, .. } => {
                 parts.push(ResolvedPart::TagOpen(name.clone(), attrs.clone()));
-                parts.extend(resolve(children, ctx)?);
+                parts.extend(resolve(children, ctx, source_map)?);
                 parts.push(ResolvedPart::TagClose(name.clone()));
             }
             ast::Token::SelfClosingTag { name, attrs, .. } => {
@@ -775,6 +810,7 @@ pub fn resolve(
 pub fn resolve_annotated(
     tokens: &[ast::Token],
     ctx: &ResolveContext,
+    source_map: &SourceMap,
 ) -> Result<Vec<AnnotatedPart>, String> {
     let mut parts = Vec::new();
     for token in tokens {
@@ -790,7 +826,9 @@ pub fn resolve_annotated(
             }
             ast::Token::Ref(entry_ref) => {
                 let local_name = &entry_ref.entry_id.node;
-                let (src, db_name) = ctx.find_entry(&entry_ref.namespace, local_name)?;
+                let at = loc(source_map, &entry_ref.span);
+                let (src, db_name) = ctx.find_entry(&entry_ref.namespace, local_name)
+                    .map_err(|e| format!("{}: {}", at, e))?;
 
                 let (headword, meaning): (String, String) = src
                     .conn
@@ -799,7 +837,7 @@ pub fn resolve_annotated(
                         [db_name],
                         |row| Ok((row.get(0)?, row.get(1)?)),
                     )
-                    .map_err(|_| format!("entry '{}' is not defined", local_name))?;
+                    .map_err(|_| format!("{}: entry '{}' is not defined", at, local_name))?;
 
                 if let Some(stem_name) = &entry_ref.stem_spec {
                     let stem_value: String = src
@@ -815,13 +853,13 @@ pub fn resolve_annotated(
                             let available = list_stems(src, db_name);
                             if available.is_empty() {
                                 format!(
-                                    "entry '{}' has no stems defined (requested [$={}])",
-                                    local_name, stem_name.node
+                                    "{}: entry '{}' has no stems defined (requested [$={}])",
+                                    at, local_name, stem_name.node
                                 )
                             } else {
                                 format!(
-                                    "entry '{}' has no stem '{}' (available: {})",
-                                    local_name, stem_name.node, available.join(", ")
+                                    "{}: entry '{}' has no stem '{}' (available: {})",
+                                    at, local_name, stem_name.node, available.join(", ")
                                 )
                             }
                         })?;
@@ -903,8 +941,8 @@ pub fn resolve_annotated(
 
                             let form_str = found.ok_or_else(|| {
                                 format!(
-                                    "entry '{}' has no form matching [{}]",
-                                    local_name, tags_display
+                                    "{}: entry '{}' has no form matching [{}]",
+                                    at, local_name, tags_display
                                 )
                             })?;
                             parts.push(AnnotatedPart::Entry {
@@ -922,7 +960,7 @@ pub fn resolve_annotated(
             }
             ast::Token::Tag { name, attrs, children, .. } => {
                 parts.push(AnnotatedPart::TagOpen(name.clone(), attrs.clone()));
-                parts.extend(resolve_annotated(children, ctx)?);
+                parts.extend(resolve_annotated(children, ctx, source_map)?);
                 parts.push(AnnotatedPart::TagClose(name.clone()));
             }
             ast::Token::SelfClosingTag { name, attrs, .. } => {
@@ -1154,7 +1192,7 @@ mod tests {
 
     #[test]
     fn test_parse_hut_newline() {
-        let hut = parse_hut(r#""hello" // "world""#, "test.hut").unwrap();
+        let (hut, _sm) = parse_hut(r#""hello" // "world""#, "test.hut").unwrap();
         assert_eq!(hut.tokens.len(), 3);
         assert!(matches!(hut.tokens[0], ast::Token::Lit(_)));
         assert!(matches!(hut.tokens[1], ast::Token::Newline));
@@ -1163,7 +1201,7 @@ mod tests {
 
     #[test]
     fn test_parse_hut_stem_spec() {
-        let hut = parse_hut(r#"gelmek[$=root]~"iyor""#, "test.hut").unwrap();
+        let (hut, _sm) = parse_hut(r#"gelmek[$=root]~"iyor""#, "test.hut").unwrap();
         assert_eq!(hut.tokens.len(), 3);
         if let ast::Token::Ref(r) = &hut.tokens[0] {
             assert_eq!(r.entry_id.node, "gelmek");
@@ -1178,7 +1216,7 @@ mod tests {
 
     #[test]
     fn test_parse_hut_glue() {
-        let hut = parse_hut(r#""mal"~"bona" "hundo""#, "test.hut").unwrap();
+        let (hut, _sm) = parse_hut(r#""mal"~"bona" "hundo""#, "test.hut").unwrap();
         assert_eq!(hut.tokens.len(), 4);
         assert!(matches!(hut.tokens[0], ast::Token::Lit(_)));
         assert!(matches!(hut.tokens[1], ast::Token::Glue));
@@ -1191,7 +1229,7 @@ mod tests {
         let src = r#"@reference * from "lang.hu"
 "The" cat walk[tense=present, person=3, number=sg] "."
 "#;
-        let hut = parse_hut(src, "test.hut").unwrap();
+        let (hut, _sm) = parse_hut(src, "test.hut").unwrap();
         assert_eq!(hut.references.len(), 1);
         assert_eq!(hut.references[0].path.node, "lang.hu");
         assert!(hut.tokens.len() >= 3);
@@ -1202,7 +1240,7 @@ mod tests {
         let src = r#"@reference * as en from "english.hu"
 en.cat en.walk[tense=present] "."
 "#;
-        let hut = parse_hut(src, "test.hut").unwrap();
+        let (hut, _sm) = parse_hut(src, "test.hut").unwrap();
         assert_eq!(hut.references.len(), 1);
         // Check namespace on the entry ref
         if let ast::Token::Ref(r) = &hut.tokens[0] {

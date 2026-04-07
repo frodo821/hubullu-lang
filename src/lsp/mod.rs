@@ -1408,7 +1408,7 @@ fn try_load_hut_project(
         .to_path_buf();
 
     // Parse the .hut to extract @reference directives.
-    let hut_file = match crate::render::parse_hut(hut_text, &hut_file_path.to_string_lossy()) {
+    let (hut_file, _hut_source_map) = match crate::render::parse_hut(hut_text, &hut_file_path.to_string_lossy()) {
         Ok(h) => h,
         Err(_) => return,
     };

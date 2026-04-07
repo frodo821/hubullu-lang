@@ -195,7 +195,7 @@ fn main() {
                     }
                 };
 
-                let hut_file = match hubullu::render::parse_hut(&source, &input.to_string_lossy()) {
+                let (hut_file, hut_source_map) = match hubullu::render::parse_hut(&source, &input.to_string_lossy()) {
                     Ok(h) => h,
                     Err(msg) => {
                         eprintln!("{}", msg);
@@ -234,7 +234,7 @@ fn main() {
                     }
                 };
 
-                let parts = match hubullu::render::resolve(&hut_file.tokens, &ctx) {
+                let parts = match hubullu::render::resolve(&hut_file.tokens, &ctx, &hut_source_map) {
                     Ok(p) => p,
                     Err(msg) => {
                         eprintln!("{}", msg);

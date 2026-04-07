@@ -53,7 +53,7 @@ pub fn hut_reference_links(
     hut_filename: &str,
     phase1: Option<&Phase1Result>,
 ) -> Vec<DocumentLink> {
-    let hut_file = match crate::render::parse_hut(hut_text, hut_filename) {
+    let (hut_file, _hut_source_map) = match crate::render::parse_hut(hut_text, hut_filename) {
         Ok(h) => h,
         Err(_) => return Vec::new(),
     };
