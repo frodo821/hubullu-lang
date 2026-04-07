@@ -1034,4 +1034,300 @@ mod tests {
         assert!(matches!(&result.forms[0].1, CellResult::Form(s) if s == "foo"),
             "expected 'foo', got {:?}", result.forms[0].1);
     }
+
+    // ===================================================================
+    // Error path tests
+    // ===================================================================
+
+    #[test]
+    fn test_enumerate_cells_empty_axis_values() {
+        let axes = vec!["t".to_string()];
+        let mut axis_values = HashMap::new();
+        axis_values.insert("t".to_string(), Vec::<String>::new());
+
+        let err = enumerate_cells(&axes, &axis_values).unwrap_err();
+        assert!(err.message.contains("has no values"));
+    }
+
+    #[test]
+    fn test_enumerate_cells_missing_axis() {
+        let axes = vec!["missing".to_string()];
+        let axis_values: HashMap<String, Vec<String>> = HashMap::new();
+
+        let err = enumerate_cells(&axes, &axis_values).unwrap_err();
+        assert!(err.message.contains("has no values defined"));
+    }
+
+    #[test]
+    fn test_no_rule_matches_cell_error() {
+        let rules = vec![
+            make_rule(&[("tense", "present")], false, "form_present"),
+        ];
+        let cells = vec![
+            Cell { tags: [("tense".to_string(), "past".to_string())].into() },
+        ];
+        let stems = HashMap::new();
+        let struct_stems = HashMap::new();
+
+        let err = evaluate_rules(&rules, &cells, &stems, &struct_stems, &NullResolver, &NullPhonResolver);
+        assert!(err.is_err());
+        let errors = err.unwrap_err();
+        assert!(errors[0].message.contains("no rule matches cell"));
+    }
+
+    #[test]
+    fn test_ambiguous_rule_match_error() {
+        let rules = vec![
+            make_rule(&[("tense", "present")], true, "form_a"),
+            make_rule(&[("tense", "present")], true, "form_b"),
+        ];
+        let cells = vec![
+            Cell { tags: [("tense".to_string(), "present".to_string())].into() },
+        ];
+        let stems = HashMap::new();
+        let struct_stems = HashMap::new();
+
+        let err = evaluate_rules(&rules, &cells, &stems, &struct_stems, &NullResolver, &NullPhonResolver);
+        assert!(err.is_err());
+        let errors = err.unwrap_err();
+        assert!(errors[0].message.contains("ambiguous rule match"));
+    }
+
+    #[test]
+    fn test_undefined_stem_in_template() {
+        let span = make_span();
+        let rules = vec![InflectionRule {
+            condition: TagConditionList {
+                conditions: vec![TagCondition {
+                    axis: make_ident("tense"),
+                    value: make_ident("present"),
+                }],
+                wildcard: true,
+                span,
+            },
+            rhs: Spanned::new(
+                RuleRhs::Template(Template {
+                    segments: vec![TemplateSegment::Stem(make_ident("nonexistent"))],
+                    span,
+                }),
+                span,
+            ),
+        }];
+        let cells = vec![
+            Cell { tags: [("tense".to_string(), "present".to_string())].into() },
+        ];
+        let stems = HashMap::new();
+        let struct_stems = HashMap::new();
+
+        let err = evaluate_rules(&rules, &cells, &stems, &struct_stems, &NullResolver, &NullPhonResolver);
+        assert!(err.is_err());
+        let errors = err.unwrap_err();
+        assert!(errors[0].message.contains("undefined stem"));
+    }
+
+    #[test]
+    fn test_delegate_target_not_found() {
+        let span = make_span();
+        let rules = vec![InflectionRule {
+            condition: TagConditionList {
+                conditions: vec![TagCondition {
+                    axis: make_ident("tense"),
+                    value: make_ident("present"),
+                }],
+                wildcard: true,
+                span,
+            },
+            rhs: Spanned::new(
+                RuleRhs::Delegate(Delegate {
+                    target: make_ident("missing_target"),
+                    tags: vec![],
+                    stem_mapping: vec![],
+                }),
+                span,
+            ),
+        }];
+        let cells = vec![
+            Cell { tags: [("tense".to_string(), "present".to_string())].into() },
+        ];
+        let stems = HashMap::new();
+        let struct_stems = HashMap::new();
+
+        let err = evaluate_rules(&rules, &cells, &stems, &struct_stems, &NullResolver, &NullPhonResolver);
+        assert!(err.is_err());
+        let errors = err.unwrap_err();
+        assert!(errors[0].message.contains("delegate target"));
+        assert!(errors[0].message.contains("not found"));
+    }
+
+    #[test]
+    fn test_phonrule_not_found_in_apply() {
+        let span = make_span();
+        let apply = ApplyExpr::PhonApply {
+            rule: make_ident("nonexistent_rule"),
+            inner: Box::new(ApplyExpr::Cell),
+        };
+
+        let rules = vec![make_rule(&[("tense", "present")], true, "fox")];
+        let cells = vec![
+            Cell { tags: [("tense".to_string(), "present".to_string())].into() },
+        ];
+        let stems = HashMap::new();
+        let struct_stems = HashMap::new();
+
+        let err = evaluate_rules_with_overrides(
+            &rules, &[], Some(&apply), &cells, &stems, &struct_stems,
+            &NullResolver, &NullPhonResolver,
+        );
+        assert!(err.is_err());
+        let errors = err.unwrap_err();
+        assert!(errors[0].message.contains("phonrule"));
+        assert!(errors[0].message.contains("not found"));
+    }
+
+    #[test]
+    fn test_phonrule_not_found_in_rhs() {
+        let span = make_span();
+        let rules = vec![InflectionRule {
+            condition: TagConditionList {
+                conditions: vec![TagCondition {
+                    axis: make_ident("tense"),
+                    value: make_ident("present"),
+                }],
+                wildcard: true,
+                span,
+            },
+            rhs: Spanned::new(
+                RuleRhs::PhonApply {
+                    rule: make_ident("missing_rule"),
+                    inner: Box::new(Spanned::new(
+                        RuleRhs::Template(Template {
+                            segments: vec![TemplateSegment::Lit("form".to_string())],
+                            span,
+                        }),
+                        span,
+                    )),
+                },
+                span,
+            ),
+        }];
+        let cells = vec![
+            Cell { tags: [("tense".to_string(), "present".to_string())].into() },
+        ];
+        let stems = HashMap::new();
+        let struct_stems = HashMap::new();
+
+        let err = evaluate_rules(&rules, &cells, &stems, &struct_stems, &NullResolver, &NullPhonResolver);
+        assert!(err.is_err());
+        let errors = err.unwrap_err();
+        assert!(errors[0].message.contains("phonrule"));
+        assert!(errors[0].message.contains("not found"));
+    }
+
+    #[test]
+    fn test_render_template_undefined_slot() {
+        let span = make_span();
+        let tmpl = Template {
+            segments: vec![TemplateSegment::Slot {
+                stem: make_ident("root"),
+                slot: make_ident("missing_slot"),
+            }],
+            span,
+        };
+        let stems = HashMap::new();
+        let mut struct_stems = HashMap::new();
+        struct_stems.insert("root".to_string(), [("s1".to_string(), "a".to_string())].into());
+
+        let err = render_template(&tmpl, &stems, &struct_stems).unwrap_err();
+        assert!(err.message.contains("undefined slot"));
+    }
+
+    #[test]
+    fn test_render_template_undefined_structural_stem() {
+        let span = make_span();
+        let tmpl = Template {
+            segments: vec![TemplateSegment::Slot {
+                stem: make_ident("missing_stem"),
+                slot: make_ident("s1"),
+            }],
+            span,
+        };
+        let stems = HashMap::new();
+        let struct_stems = HashMap::new();
+
+        let err = render_template(&tmpl, &stems, &struct_stems).unwrap_err();
+        assert!(err.message.contains("undefined structural stem"));
+    }
+
+    #[test]
+    fn test_compose_slot_not_defined() {
+        let span = make_span();
+        let compose = ComposeBody {
+            chain: ComposeExpr::Slot(make_ident("undefined_slot")),
+            slots: vec![],
+            overrides: vec![],
+        };
+        let cells = vec![
+            Cell { tags: [("tense".to_string(), "present".to_string())].into() },
+        ];
+        let stems = HashMap::new();
+        let struct_stems = HashMap::new();
+
+        let err = evaluate_compose(&compose, &[], &cells, &stems, &struct_stems, &NullPhonResolver);
+        assert!(err.is_err());
+        let errors = err.unwrap_err();
+        assert!(errors[0].message.contains("slot") && errors[0].message.contains("not defined"));
+    }
+
+    #[test]
+    fn test_compose_no_rule_matches_slot() {
+        let span = make_span();
+        let compose = ComposeBody {
+            chain: ComposeExpr::Slot(make_ident("prefix")),
+            slots: vec![SlotDef {
+                name: make_ident("prefix"),
+                rules: vec![
+                    make_rule(&[("tense", "present")], false, "pre"),
+                ],
+            }],
+            overrides: vec![],
+        };
+        let cells = vec![
+            Cell { tags: [("tense".to_string(), "past".to_string())].into() },
+        ];
+        let stems = HashMap::new();
+        let struct_stems = HashMap::new();
+
+        let err = evaluate_compose(&compose, &[], &cells, &stems, &struct_stems, &NullPhonResolver);
+        assert!(err.is_err());
+        let errors = err.unwrap_err();
+        assert!(errors[0].message.contains("no rule matches slot"));
+    }
+
+    #[test]
+    fn test_compose_phonrule_not_found() {
+        let span = make_span();
+        let compose = ComposeBody {
+            chain: ComposeExpr::PhonApply {
+                rule: make_ident("missing_rule"),
+                inner: Box::new(ComposeExpr::Slot(make_ident("s"))),
+            },
+            slots: vec![SlotDef {
+                name: make_ident("s"),
+                rules: vec![
+                    make_rule(&[("tense", "present")], true, "form"),
+                ],
+            }],
+            overrides: vec![],
+        };
+        let cells = vec![
+            Cell { tags: [("tense".to_string(), "present".to_string())].into() },
+        ];
+        let stems = HashMap::new();
+        let struct_stems = HashMap::new();
+
+        let err = evaluate_compose(&compose, &[], &cells, &stems, &struct_stems, &NullPhonResolver);
+        assert!(err.is_err());
+        let errors = err.unwrap_err();
+        assert!(errors[0].message.contains("phonrule") && errors[0].message.contains("not found"));
+    }
 }

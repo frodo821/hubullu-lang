@@ -122,3 +122,147 @@ impl SourceMap {
         self.files[id.0 as usize].line_starts.len()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_map(source: &str) -> (SourceMap, FileId) {
+        let mut sm = SourceMap::new();
+        let id = sm.add_file(PathBuf::from("test.hu"), source.to_string());
+        (sm, id)
+    }
+
+    #[test]
+    fn add_file_returns_sequential_ids() {
+        let mut sm = SourceMap::new();
+        let id0 = sm.add_file(PathBuf::from("a.hu"), "aaa".into());
+        let id1 = sm.add_file(PathBuf::from("b.hu"), "bbb".into());
+        assert_eq!(id0.0, 0);
+        assert_eq!(id1.0, 1);
+        assert_eq!(sm.file_count(), 2);
+    }
+
+    #[test]
+    fn source_and_path() {
+        let (sm, id) = make_map("hello world");
+        assert_eq!(sm.source(id), "hello world");
+        assert_eq!(sm.path(id), Path::new("test.hu"));
+    }
+
+    #[test]
+    fn line_col_single_line() {
+        let (sm, id) = make_map("abcdef");
+        assert_eq!(sm.line_col(id, 0), (1, 1)); // first char
+        assert_eq!(sm.line_col(id, 3), (1, 4)); // 'd'
+        assert_eq!(sm.line_col(id, 5), (1, 6)); // 'f'
+    }
+
+    #[test]
+    fn line_col_multi_line() {
+        let (sm, id) = make_map("abc\ndef\nghi");
+        // line 1: abc\n (offsets 0..3)
+        assert_eq!(sm.line_col(id, 0), (1, 1));
+        assert_eq!(sm.line_col(id, 2), (1, 3));
+        // line 2: def\n (offsets 4..7)
+        assert_eq!(sm.line_col(id, 4), (2, 1));
+        assert_eq!(sm.line_col(id, 6), (2, 3));
+        // line 3: ghi (offsets 8..10)
+        assert_eq!(sm.line_col(id, 8), (3, 1));
+        assert_eq!(sm.line_col(id, 10), (3, 3));
+    }
+
+    #[test]
+    fn line_col_multibyte_utf8() {
+        // 日本語: each char is 3 bytes in UTF-8
+        let (sm, id) = make_map("あいう\nえお");
+        // 'あ' = offset 0, 'い' = offset 3, 'う' = offset 6
+        assert_eq!(sm.line_col(id, 0), (1, 1));
+        assert_eq!(sm.line_col(id, 3), (1, 4));
+        assert_eq!(sm.line_col(id, 6), (1, 7));
+        // '\n' at offset 9, 'え' at offset 10
+        assert_eq!(sm.line_col(id, 10), (2, 1));
+    }
+
+    #[test]
+    fn line_text_basic() {
+        let (sm, id) = make_map("first\nsecond\nthird");
+        assert_eq!(sm.line_text(id, 1), "first");
+        assert_eq!(sm.line_text(id, 2), "second");
+        assert_eq!(sm.line_text(id, 3), "third");
+    }
+
+    #[test]
+    fn line_text_out_of_bounds() {
+        let (sm, id) = make_map("one\ntwo");
+        assert_eq!(sm.line_text(id, 99), "");
+    }
+
+    #[test]
+    fn offset_at_roundtrip() {
+        let (sm, id) = make_map("abc\ndef\nghi");
+        // (2, 2) should map to offset 5 ('e')
+        assert_eq!(sm.offset_at(id, 2, 2), Some(5));
+        // roundtrip
+        assert_eq!(sm.line_col(id, 5), (2, 2));
+    }
+
+    #[test]
+    fn offset_at_out_of_bounds() {
+        let (sm, id) = make_map("abc");
+        assert_eq!(sm.offset_at(id, 0, 1), None); // line 0 invalid
+        assert_eq!(sm.offset_at(id, 1, 0), None); // col 0 invalid
+        assert_eq!(sm.offset_at(id, 5, 1), None); // line too large
+        assert_eq!(sm.offset_at(id, 1, 100), None); // col beyond source
+    }
+
+    #[test]
+    fn source_slice_valid() {
+        let (sm, id) = make_map("hello world");
+        assert_eq!(sm.source_slice(id, 0, 5), Some("hello"));
+        assert_eq!(sm.source_slice(id, 6, 11), Some("world"));
+    }
+
+    #[test]
+    fn source_slice_out_of_bounds() {
+        let (sm, id) = make_map("abc");
+        assert_eq!(sm.source_slice(id, 0, 100), None);
+    }
+
+    #[test]
+    fn file_ids_iterator() {
+        let mut sm = SourceMap::new();
+        sm.add_file(PathBuf::from("a.hu"), "a".into());
+        sm.add_file(PathBuf::from("b.hu"), "b".into());
+        sm.add_file(PathBuf::from("c.hu"), "c".into());
+        let ids: Vec<FileId> = sm.file_ids().collect();
+        assert_eq!(ids.len(), 3);
+        assert_eq!(ids[0].0, 0);
+        assert_eq!(ids[2].0, 2);
+    }
+
+    #[test]
+    fn source_len_and_line_count() {
+        let (sm, id) = make_map("abc\ndef");
+        assert_eq!(sm.source_len(id), 7);
+        assert_eq!(sm.line_count(id), 2); // 2 line starts
+    }
+
+    #[test]
+    fn empty_source() {
+        let (sm, id) = make_map("");
+        assert_eq!(sm.source(id), "");
+        assert_eq!(sm.source_len(id), 0);
+        assert_eq!(sm.line_count(id), 1); // one line start at offset 0
+        assert_eq!(sm.line_col(id, 0), (1, 1));
+        assert_eq!(sm.line_text(id, 1), "");
+    }
+
+    #[test]
+    fn trailing_newline() {
+        let (sm, id) = make_map("abc\n");
+        assert_eq!(sm.line_count(id), 2);
+        assert_eq!(sm.line_text(id, 1), "abc");
+        assert_eq!(sm.line_text(id, 2), "");
+    }
+}

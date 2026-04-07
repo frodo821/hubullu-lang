@@ -819,6 +819,651 @@ entry beta {
 }
 
 // =========================================================================
+// Phase 2 direct tests
+// =========================================================================
+
+/// Helper: run phase1+phase2 from temp files and return Phase2Result.
+fn run_p1_p2(files: &[(&str, &str)]) -> (hubullu::phase1::Phase1Result, hubullu::phase2::Phase2Result) {
+    let dir = tempfile::tempdir().unwrap();
+    for (fname, content) in files {
+        std::fs::write(dir.path().join(fname), content).unwrap();
+    }
+    let entry_path = dir.path().join(files[0].0);
+    let p1 = hubullu::phase1::run_phase1(&entry_path, std::collections::HashMap::new());
+    assert!(!p1.diagnostics.has_errors(), "phase1 errors: {}", p1.diagnostics.render_all(&p1.source_map));
+    let p2 = hubullu::phase2::run_phase2(&p1);
+    (p1, p2)
+}
+
+#[test]
+fn test_phase2_extend_resolution() {
+    let (_, p2) = run_p1_p2(&[(
+        "main.hu",
+        r#"
+tagaxis pos {
+  role: classificatory
+}
+@extend pos_vals for tagaxis pos {
+  noun { display: { en: "Noun" } }
+  verb { display: { en: "Verb" } }
+}
+"#,
+    )]);
+
+    assert!(!p2.diagnostics.has_errors());
+    let pos_axis = p2.axes.get("pos").expect("pos axis should exist");
+    assert_eq!(pos_axis.values, vec!["noun", "verb"]);
+    let noun_display = pos_axis.display.get("noun").unwrap();
+    assert_eq!(noun_display, &vec![("en".to_string(), "Noun".to_string())]);
+}
+
+#[test]
+fn test_phase2_extend_unknown_axis_error() {
+    let (p1, p2) = run_p1_p2(&[(
+        "main.hu",
+        r#"
+@extend vals for tagaxis nonexistent {
+  a {}
+}
+"#,
+    )]);
+
+    assert!(p2.diagnostics.has_errors());
+    let msg = p2.diagnostics.render_all(&p1.source_map);
+    assert!(msg.contains("unknown tagaxis"), "should report unknown axis, got: {}", msg);
+}
+
+#[test]
+fn test_phase2_entry_expansion_basic() {
+    let (_, p2) = run_p1_p2(&[(
+        "main.hu",
+        r#"
+tagaxis t {
+  role: inflectional
+}
+@extend tv for tagaxis t {
+  a {}
+  b {}
+}
+inflection cls for {t} {
+  [t=a] -> `xA`
+  [t=b] -> `xB`
+}
+entry foo {
+  headword: "foo"
+  inflection_class: cls
+  meaning: "test"
+}
+"#,
+    )]);
+
+    assert!(!p2.diagnostics.has_errors(), "unexpected errors");
+    assert_eq!(p2.entries.len(), 1);
+    let entry = &p2.entries[0];
+    assert_eq!(entry.name, "foo");
+    assert_eq!(entry.headword, "foo");
+    assert_eq!(entry.meaning, "test");
+    assert_eq!(entry.forms.len(), 2);
+
+    let form_strs: Vec<&str> = entry.forms.iter().map(|f| f.form_str.as_str()).collect();
+    assert!(form_strs.contains(&"xA"));
+    assert!(form_strs.contains(&"xB"));
+}
+
+#[test]
+fn test_phase2_entry_no_inflection() {
+    let (_, p2) = run_p1_p2(&[(
+        "main.hu",
+        r#"
+entry bar {
+  headword: "bar"
+  meaning: "a bar"
+}
+"#,
+    )]);
+
+    assert!(!p2.diagnostics.has_errors());
+    assert_eq!(p2.entries.len(), 1);
+    assert_eq!(p2.entries[0].forms.len(), 0);
+}
+
+#[test]
+fn test_phase2_derived_from_dag_check() {
+    let (p1, p2) = run_p1_p2(&[(
+        "main.hu",
+        r#"
+entry a {
+  headword: "a"
+  meaning: "a"
+  etymology { derived_from: b }
+}
+entry b {
+  headword: "b"
+  meaning: "b"
+  etymology { derived_from: a }
+}
+"#,
+    )]);
+
+    assert!(p2.diagnostics.has_errors());
+    let msg = p2.diagnostics.render_all(&p1.source_map);
+    assert!(msg.contains("cyclic derived_from"), "should detect cycle, got: {}", msg);
+}
+
+#[test]
+fn test_phase2_inflection_unknown_class_error() {
+    let (p1, p2) = run_p1_p2(&[(
+        "main.hu",
+        r#"
+entry foo {
+  headword: "foo"
+  inflection_class: nonexistent
+  meaning: "test"
+}
+"#,
+    )]);
+
+    assert!(p2.diagnostics.has_errors());
+    let msg = p2.diagnostics.render_all(&p1.source_map);
+    assert!(msg.contains("not found"), "should report missing inflection class, got: {}", msg);
+}
+
+#[test]
+fn test_phase2_multiple_meanings() {
+    let (_, p2) = run_p1_p2(&[(
+        "main.hu",
+        r#"
+entry poly {
+  headword: "poly"
+  meanings {
+    m1 { "first meaning" }
+    m2 { "second meaning" }
+  }
+}
+"#,
+    )]);
+
+    assert!(!p2.diagnostics.has_errors());
+    let entry = &p2.entries[0];
+    assert_eq!(entry.meaning, "first meaning"); // first meaning used as primary
+    assert_eq!(entry.meanings.len(), 2);
+    assert_eq!(entry.meanings[0], ("m1".to_string(), "first meaning".to_string()));
+    assert_eq!(entry.meanings[1], ("m2".to_string(), "second meaning".to_string()));
+}
+
+#[test]
+fn test_phase2_inline_inflection() {
+    let (_, p2) = run_p1_p2(&[(
+        "main.hu",
+        r#"
+tagaxis t {
+  role: inflectional
+}
+@extend tv for tagaxis t {
+  x {}
+  y {}
+}
+entry baz {
+  headword: "baz"
+  meaning: "baz"
+  inflect for {t} {
+    [t=x] -> `bazX`
+    [t=y] -> `bazY`
+  }
+}
+"#,
+    )]);
+
+    assert!(!p2.diagnostics.has_errors());
+    assert_eq!(p2.entries[0].forms.len(), 2);
+    assert!(p2.entries[0].inflection_class.is_none());
+}
+
+#[test]
+fn test_phase2_render_config_defaults() {
+    let (_, p2) = run_p1_p2(&[(
+        "main.hu",
+        r#"
+entry x {
+  headword: "x"
+  meaning: "x"
+}
+"#,
+    )]);
+
+    assert_eq!(p2.render_config.separator, " ");
+    assert_eq!(p2.render_config.no_separator_before, ".,;:!?");
+}
+
+#[test]
+fn test_phase2_render_config_custom() {
+    let (_, p2) = run_p1_p2(&[(
+        "main.hu",
+        r#"
+@render {
+  separator: "-"
+  no_separator_before: "."
+}
+entry x {
+  headword: "x"
+  meaning: "x"
+}
+"#,
+    )]);
+
+    assert_eq!(p2.render_config.separator, "-");
+    assert_eq!(p2.render_config.no_separator_before, ".");
+}
+
+#[test]
+fn test_phase2_inflection_metadata_collected() {
+    let (_, p2) = run_p1_p2(&[(
+        "main.hu",
+        r#"
+tagaxis t {
+  role: inflectional
+}
+@extend tv for tagaxis t { x {} }
+inflection my_cls display { en: "My Class", ja: "クラス" } for {t} {
+  [t=x] -> `form`
+}
+"#,
+    )]);
+
+    assert!(!p2.diagnostics.has_errors());
+    assert_eq!(p2.inflections.len(), 1);
+    let infl = &p2.inflections[0];
+    assert_eq!(infl.name, "my_cls");
+    assert_eq!(infl.axes, vec!["t"]);
+    assert!(infl.display.contains(&("en".to_string(), "My Class".to_string())));
+    assert!(infl.display.contains(&("ja".to_string(), "クラス".to_string())));
+}
+
+// =========================================================================
+// Emit SQLite tests
+// =========================================================================
+
+#[test]
+fn test_emit_schema_tables_exist() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("main.hu");
+    let output = dir.path().join("schema.huc");
+    std::fs::write(&input, r#"
+entry x {
+  headword: "x"
+  meaning: "x"
+}
+"#).unwrap();
+
+    hubullu::compile(&input, &output).unwrap();
+    let conn = Connection::open(&output).unwrap();
+
+    // Verify all expected tables exist
+    let tables: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            .unwrap();
+        stmt.query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
+    };
+
+    let expected_core = [
+        "compile_meta", "entries", "entries_fts",
+        "entry_meanings", "entry_tags",
+        "forms", "headword_scripts", "inflection_axes",
+        "inflection_display", "inflection_meta",
+        "links", "name_resolution", "render_config", "stems",
+        "tagaxis_meta",
+    ];
+    for t in &expected_core {
+        assert!(tables.contains(&t.to_string()), "missing table: {}", t);
+    }
+}
+
+#[test]
+fn test_emit_indexes_exist() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("main.hu");
+    let output = dir.path().join("idx.huc");
+    std::fs::write(&input, r#"
+entry x { headword: "x" meaning: "x" }
+"#).unwrap();
+
+    hubullu::compile(&input, &output).unwrap();
+    let conn = Connection::open(&output).unwrap();
+
+    let indexes: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%' ORDER BY name")
+            .unwrap();
+        stmt.query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
+    };
+
+    let expected_idx = [
+        "idx_entries_name", "idx_forms_entry", "idx_forms_form",
+        "idx_links_src", "idx_links_dst", "idx_stems_entry",
+        "idx_entry_tags", "idx_entry_tags_axis",
+        "idx_inflection_display", "idx_inflection_axes",
+        "idx_name_resolution_hash",
+    ];
+    for idx in &expected_idx {
+        assert!(indexes.contains(&idx.to_string()), "missing index: {}", idx);
+    }
+}
+
+#[test]
+fn test_emit_tags_stored_correctly() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("main.hu");
+    let output = dir.path().join("tags.huc");
+    std::fs::write(&input, r#"
+tagaxis pos { role: classificatory }
+@extend pv for tagaxis pos {
+  noun {}
+  verb {}
+}
+entry w {
+  headword: "w"
+  tags: [pos=noun]
+  meaning: "word"
+}
+"#).unwrap();
+
+    hubullu::compile(&input, &output).unwrap();
+    let conn = Connection::open(&output).unwrap();
+
+    let (axis, value): (String, String) = conn
+        .query_row(
+            "SELECT axis, value FROM entry_tags WHERE entry_id = (SELECT id FROM entries WHERE name = 'w')",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(axis, "pos");
+    assert_eq!(value, "noun");
+}
+
+#[test]
+fn test_emit_forms_tag_format() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("main.hu");
+    let output = dir.path().join("formtag.huc");
+    std::fs::write(&input, r#"
+tagaxis t { role: inflectional }
+@extend tv for tagaxis t { a {} }
+inflection c for {t} {
+  [t=a] -> `form_a`
+}
+entry e {
+  headword: "e"
+  inflection_class: c
+  meaning: "e"
+}
+"#).unwrap();
+
+    hubullu::compile(&input, &output).unwrap();
+    let conn = Connection::open(&output).unwrap();
+
+    let tags: String = conn
+        .query_row(
+            "SELECT tags FROM forms WHERE entry_id = (SELECT id FROM entries WHERE name = 'e')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(tags, "t=a");
+}
+
+#[test]
+fn test_emit_fts_search() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("main.hu");
+    let output = dir.path().join("fts.huc");
+    std::fs::write(&input, r#"
+entry alpha {
+  headword: "alpha"
+  meaning: "first letter"
+}
+entry beta {
+  headword: "beta"
+  meaning: "second letter"
+}
+"#).unwrap();
+
+    hubullu::compile(&input, &output).unwrap();
+    let conn = Connection::open(&output).unwrap();
+
+    // Search by headword
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM entries_fts WHERE entries_fts MATCH 'alpha'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 1);
+
+    // Search by meaning
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM entries_fts WHERE entries_fts MATCH 'letter'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 2);
+}
+
+#[test]
+fn test_emit_etymology_and_links() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("main.hu");
+    let output = dir.path().join("ety.huc");
+    std::fs::write(&input, r#"
+entry parent {
+  headword: "parent"
+  meaning: "parent word"
+  etymology {
+    proto: "*proto"
+    note: "from old language"
+  }
+}
+entry child {
+  headword: "child"
+  meaning: "child word"
+  etymology { derived_from: parent }
+}
+"#).unwrap();
+
+    hubullu::compile(&input, &output).unwrap();
+    let conn = Connection::open(&output).unwrap();
+
+    // Check etymology fields
+    let (proto, note): (String, String) = conn
+        .query_row(
+            "SELECT etymology_proto, etymology_note FROM entries WHERE name = 'parent'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(proto, "*proto");
+    assert_eq!(note, "from old language");
+
+    // Check derived_from link
+    let link_type: String = conn
+        .query_row(
+            "SELECT link_type FROM links WHERE src_entry_id = (SELECT id FROM entries WHERE name = 'child')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(link_type, "derived_from");
+}
+
+#[test]
+fn test_emit_inflection_meta() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("main.hu");
+    let output = dir.path().join("inflmeta.huc");
+    std::fs::write(&input, r#"
+tagaxis t { role: inflectional }
+tagaxis n { role: inflectional }
+@extend tv for tagaxis t { a {} }
+@extend nv for tagaxis n { x {} }
+inflection cls display { en: "My Class" } for {t, n} {
+  [t=a, n=x] -> `form`
+}
+entry e {
+  headword: "e"
+  inflection_class: cls
+  meaning: "e"
+}
+"#).unwrap();
+
+    hubullu::compile(&input, &output).unwrap();
+    let conn = Connection::open(&output).unwrap();
+
+    // Check inflection_meta
+    let infl_name: String = conn
+        .query_row("SELECT name FROM inflection_meta", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(infl_name, "cls");
+
+    // Check inflection_display
+    let display: String = conn
+        .query_row("SELECT display_text FROM inflection_display WHERE display_lang = 'en'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(display, "My Class");
+
+    // Check inflection_axes
+    let axes: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT axis_name FROM inflection_axes ORDER BY axis_name")
+            .unwrap();
+        stmt.query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
+    };
+    assert_eq!(axes, vec!["n", "t"]);
+}
+
+#[test]
+fn test_emit_stems_stored() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("main.hu");
+    let output = dir.path().join("stems.huc");
+    std::fs::write(&input, r#"
+tagaxis t { role: inflectional }
+@extend tv for tagaxis t { a {} }
+inflection cls for {t} {
+  requires stems: root, past
+  [t=a] -> `{root}`
+}
+entry w {
+  headword: "w"
+  stems { root: "wr", past: "wt" }
+  inflection_class: cls
+  meaning: "w"
+}
+"#).unwrap();
+
+    hubullu::compile(&input, &output).unwrap();
+    let conn = Connection::open(&output).unwrap();
+
+    let stems: Vec<(String, String)> = {
+        let mut stmt = conn
+            .prepare("SELECT stem_name, stem_value FROM stems WHERE entry_id = (SELECT id FROM entries WHERE name = 'w') ORDER BY stem_name")
+            .unwrap();
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
+    };
+    assert_eq!(stems, vec![
+        ("past".to_string(), "wt".to_string()),
+        ("root".to_string(), "wr".to_string()),
+    ]);
+}
+
+#[test]
+fn test_emit_render_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("main.hu");
+    let output = dir.path().join("rc.huc");
+    std::fs::write(&input, r#"
+@render {
+  separator: "·"
+  no_separator_before: "!"
+}
+entry x { headword: "x" meaning: "x" }
+"#).unwrap();
+
+    hubullu::compile(&input, &output).unwrap();
+    let conn = Connection::open(&output).unwrap();
+
+    let sep: String = conn
+        .query_row("SELECT value FROM render_config WHERE key = 'separator'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(sep, "·");
+
+    let nsb: String = conn
+        .query_row("SELECT value FROM render_config WHERE key = 'no_separator_before'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(nsb, "!");
+}
+
+#[test]
+fn test_emit_name_resolution() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("main.hu");
+    let output = dir.path().join("nr.huc");
+    std::fs::write(&input, r#"
+entry hello { headword: "hello" meaning: "greeting" }
+entry world { headword: "world" meaning: "planet" }
+"#).unwrap();
+
+    hubullu::compile(&input, &output).unwrap();
+    let conn = Connection::open(&output).unwrap();
+
+    let nr_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM name_resolution", [], |r| r.get(0))
+        .unwrap();
+    assert!(nr_count >= 2, "name_resolution should have entries for 'hello' and 'world'");
+}
+
+#[test]
+fn test_emit_headword_scripts() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("main.hu");
+    let output = dir.path().join("scripts.huc");
+    std::fs::write(&input, r#"
+entry multi {
+  headword { default: "word", alt: "wörd" }
+  meaning: "test"
+}
+"#).unwrap();
+
+    hubullu::compile(&input, &output).unwrap();
+    let conn = Connection::open(&output).unwrap();
+
+    let headword: String = conn
+        .query_row("SELECT headword FROM entries WHERE name = 'multi'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(headword, "word");
+
+    let scripts: Vec<(String, String)> = {
+        let mut stmt = conn
+            .prepare("SELECT script_name, script_value FROM headword_scripts WHERE entry_id = (SELECT id FROM entries WHERE name = 'multi') ORDER BY script_name")
+            .unwrap();
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
+    };
+    assert_eq!(scripts.len(), 2);
+    assert!(scripts.contains(&("default".to_string(), "word".to_string())));
+    assert!(scripts.contains(&("alt".to_string(), "wörd".to_string())));
+}
+
+// =========================================================================
 // Standard library imports (std: scheme)
 // =========================================================================
 

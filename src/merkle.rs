@@ -449,3 +449,203 @@ fn resolve_symbol_name(
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    /// Helper: run phase1 from temp files and compute Merkle hashes.
+    fn compute_from_sources(files: &[(&str, &str)]) -> (Phase1Result, MerkleHashes) {
+        let dir = tempfile::tempdir().unwrap();
+        for (fname, content) in files {
+            std::fs::write(dir.path().join(fname), content).unwrap();
+        }
+        let entry_path = dir.path().join(files[0].0);
+        let p1 = crate::phase1::run_phase1(&entry_path, HashMap::new());
+        assert!(!p1.diagnostics.has_errors(), "phase1 errors: {}", p1.diagnostics.render_all(&p1.source_map));
+        let hashes = compute(&p1);
+        (p1, hashes)
+    }
+
+    #[test]
+    fn test_ast_hash_deterministic() {
+        let a = ast_hash(&"hello");
+        let b = ast_hash(&"hello");
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn test_ast_hash_differs_for_different_values() {
+        let a = ast_hash(&"hello");
+        let b = ast_hash(&"world");
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn test_merkle_leaf_deterministic() {
+        let a = merkle_leaf(&"test");
+        let b = merkle_leaf(&"test");
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn test_merkle_leaf_differs() {
+        let a = merkle_leaf(&"x");
+        let b = merkle_leaf(&"y");
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn test_compute_entry_hashes() {
+        let (_, hashes) = compute_from_sources(&[(
+            "main.hu",
+            r#"
+tagaxis t { role: inflectional }
+@extend tv for tagaxis t { a {} }
+inflection cls for {t} {
+  [t=a] -> `form`
+}
+entry foo {
+  headword: "foo"
+  inflection_class: cls
+  meaning: "test"
+}
+entry bar {
+  headword: "bar"
+  inflection_class: cls
+  meaning: "bar"
+}
+"#,
+        )]);
+
+        assert_eq!(hashes.entries.len(), 2);
+        // Each entry should have a distinct hash
+        let hashes_vec: Vec<_> = hashes.entries.values().collect();
+        assert_ne!(hashes_vec[0], hashes_vec[1]);
+    }
+
+    #[test]
+    fn test_compute_inflection_hash_stable() {
+        let (_, h1) = compute_from_sources(&[(
+            "main.hu",
+            r#"
+tagaxis t { role: inflectional }
+@extend tv for tagaxis t { a {} }
+inflection cls for {t} { [t=a] -> `form` }
+entry e { headword: "e" inflection_class: cls meaning: "e" }
+"#,
+        )]);
+        let (_, h2) = compute_from_sources(&[(
+            "main.hu",
+            r#"
+tagaxis t { role: inflectional }
+@extend tv for tagaxis t { a {} }
+inflection cls for {t} { [t=a] -> `form` }
+entry e { headword: "e" inflection_class: cls meaning: "e" }
+"#,
+        )]);
+
+        assert_eq!(h1.inflections.get("cls"), h2.inflections.get("cls"));
+    }
+
+    #[test]
+    fn test_compute_tagaxis_hashes() {
+        let (_, hashes) = compute_from_sources(&[(
+            "main.hu",
+            r#"
+tagaxis t { role: inflectional }
+tagaxis n { role: inflectional }
+"#,
+        )]);
+
+        assert_eq!(hashes.tagaxes.len(), 2);
+        assert!(hashes.tagaxes.contains_key("t"));
+        assert!(hashes.tagaxes.contains_key("n"));
+        assert_ne!(hashes.tagaxes["t"], hashes.tagaxes["n"]);
+    }
+
+    #[test]
+    fn test_compute_extends_by_axis() {
+        let (_, hashes) = compute_from_sources(&[(
+            "main.hu",
+            r#"
+tagaxis t { role: inflectional }
+@extend tv for tagaxis t { a {} b {} }
+"#,
+        )]);
+
+        assert!(hashes.extends_by_axis.contains_key("t"));
+    }
+
+    #[test]
+    fn test_entry_hash_changes_when_inflection_changes() {
+        let (_, h1) = compute_from_sources(&[(
+            "main.hu",
+            r#"
+tagaxis t { role: inflectional }
+@extend tv for tagaxis t { a {} }
+inflection cls for {t} { [t=a] -> `formA` }
+entry e { headword: "e" inflection_class: cls meaning: "e" }
+"#,
+        )]);
+        let (_, h2) = compute_from_sources(&[(
+            "main.hu",
+            r#"
+tagaxis t { role: inflectional }
+@extend tv for tagaxis t { a {} }
+inflection cls for {t} { [t=a] -> `formB` }
+entry e { headword: "e" inflection_class: cls meaning: "e" }
+"#,
+        )]);
+
+        // Inflection hash should differ
+        assert_ne!(h1.inflections["cls"], h2.inflections["cls"]);
+        // Entry hash should differ (depends on inflection)
+        let e1: Vec<_> = h1.entries.values().collect();
+        let e2: Vec<_> = h2.entries.values().collect();
+        assert_ne!(e1[0], e2[0]);
+    }
+
+    #[test]
+    fn test_entry_hash_changes_when_extend_changes() {
+        let (_, h1) = compute_from_sources(&[(
+            "main.hu",
+            r#"
+tagaxis t { role: inflectional }
+@extend tv for tagaxis t { a {} }
+inflection cls for {t} { [_] -> `f` }
+entry e { headword: "e" inflection_class: cls meaning: "e" }
+"#,
+        )]);
+        let (_, h2) = compute_from_sources(&[(
+            "main.hu",
+            r#"
+tagaxis t { role: inflectional }
+@extend tv for tagaxis t { a {} b {} }
+inflection cls for {t} { [_] -> `f` }
+entry e { headword: "e" inflection_class: cls meaning: "e" }
+"#,
+        )]);
+
+        assert_ne!(h1.extends_by_axis["t"], h2.extends_by_axis["t"]);
+        let e1: Vec<_> = h1.entries.values().collect();
+        let e2: Vec<_> = h2.entries.values().collect();
+        assert_ne!(e1[0], e2[0]);
+    }
+
+    #[test]
+    fn test_phonrule_hashes() {
+        let (_, hashes) = compute_from_sources(&[(
+            "main.hu",
+            r#"
+phonrule pr {
+  class V = ["a", "e"]
+  V -> null / _ #
+}
+"#,
+        )]);
+
+        assert!(hashes.phonrules.contains_key("pr"));
+    }
+}

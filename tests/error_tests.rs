@@ -277,3 +277,295 @@ fn test_unsupported_import_scheme() {
     let errors = compile_error("errors/unsupported_scheme.hu");
     assert_error_contains(&errors, "unsupported import scheme");
 }
+
+// =========================================================================
+// Phase 2 errors (via temp files)
+// =========================================================================
+
+/// Helper: write temp files, compile, and return the error string.
+fn compile_error_from_sources(files: &[(&str, &str)]) -> String {
+    let dir = tempfile::tempdir().unwrap();
+    for (fname, content) in files {
+        std::fs::write(dir.path().join(fname), content).unwrap();
+    }
+    let entry_path = dir.path().join(files[0].0);
+    let output = dir.path().join("out.huc");
+    let result = hubullu::compile(&entry_path, &output);
+    result.expect_err("expected compile error but got Ok")
+}
+
+#[test]
+fn test_duplicate_extend_values() {
+    let errors = compile_error_from_sources(&[(
+        "main.hu",
+        r#"
+tagaxis t { role: inflectional }
+@extend a for tagaxis t { x {} }
+@extend b for tagaxis t { x {} }
+"#,
+    )]);
+    assert_error_contains(&errors, "added by multiple @extends");
+}
+
+#[test]
+fn test_inflection_undeclared_axis_in_rule() {
+    let errors = compile_error_from_sources(&[(
+        "main.hu",
+        r#"
+tagaxis t { role: inflectional }
+@extend tv for tagaxis t { a {} }
+inflection cls for {t} {
+  [bad_axis=a] -> `form`
+}
+entry e { headword: "e" inflection_class: cls meaning: "e" }
+"#,
+    )]);
+    assert_error_contains(&errors, "not in for {} declaration");
+}
+
+#[test]
+fn test_phonrule_class_union_undefined() {
+    let errors = compile_error_from_sources(&[(
+        "main.hu",
+        r#"
+phonrule pr {
+  class V = ["a", "e"]
+  class ALL = V | MISSING
+  V -> null / _ #
+}
+"#,
+    )]);
+    assert_error_contains(&errors, "class union references undefined class");
+}
+
+#[test]
+fn test_phonrule_from_undefined_class() {
+    let errors = compile_error_from_sources(&[(
+        "main.hu",
+        r#"
+phonrule pr {
+  MISSING -> null / _ #
+}
+"#,
+    )]);
+    assert_error_contains(&errors, "rewrite rule references undefined class");
+}
+
+#[test]
+fn test_phonrule_to_undefined_map() {
+    let errors = compile_error_from_sources(&[(
+        "main.hu",
+        r#"
+phonrule pr {
+  class V = ["a", "e"]
+  V -> MISSING / _ #
+}
+"#,
+    )]);
+    assert_error_contains(&errors, "rewrite rule references undefined map");
+}
+
+#[test]
+fn test_phonrule_context_undefined_class() {
+    let errors = compile_error_from_sources(&[(
+        "main.hu",
+        r#"
+phonrule pr {
+  class V = ["a", "e"]
+  V -> null / MISSING _
+}
+"#,
+    )]);
+    assert_error_contains(&errors, "context references undefined class");
+}
+
+#[test]
+fn test_stem_slot_mismatch() {
+    let errors = compile_error_from_sources(&[(
+        "main.hu",
+        r#"
+tagaxis t { role: structural }
+@extend tv for tagaxis t {
+  a { slots: [s1, s2, s3] }
+}
+inflection cls for {t} {
+  requires stems: root [t=a]
+  [t=a] -> `{root.s1}`
+}
+entry e {
+  headword: "e"
+  stems { root: "ab" }
+  inflection_class: cls
+  meaning: "e"
+}
+"#,
+    )]);
+    assert_error_contains(&errors, "stem length mismatch");
+}
+
+#[test]
+fn test_axis_no_values() {
+    let errors = compile_error_from_sources(&[(
+        "main.hu",
+        r#"
+tagaxis t { role: inflectional }
+inflection cls for {t} {
+  [t=x] -> `form`
+}
+entry e {
+  headword: "e"
+  inflection_class: cls
+  meaning: "e"
+}
+"#,
+    )]);
+    assert_error_contains(&errors, "has no values");
+}
+
+#[test]
+fn test_delegate_target_not_found() {
+    let errors = compile_error_from_sources(&[(
+        "main.hu",
+        r#"
+tagaxis t { role: inflectional }
+@extend tv for tagaxis t { a {} }
+inflection cls for {t} {
+  [t=a] -> nonexistent[t=a]
+}
+entry e {
+  headword: "e"
+  inflection_class: cls
+  meaning: "e"
+}
+"#,
+    )]);
+    assert_error_contains(&errors, "delegate target");
+    assert_error_contains(&errors, "not found");
+}
+
+#[test]
+fn test_template_undefined_stem() {
+    let errors = compile_error_from_sources(&[(
+        "main.hu",
+        r#"
+tagaxis t { role: inflectional }
+@extend tv for tagaxis t { a {} }
+inflection cls for {t} {
+  [t=a] -> `{nonexistent}`
+}
+entry e {
+  headword: "e"
+  stems {}
+  inflection_class: cls
+  meaning: "e"
+}
+"#,
+    )]);
+    assert_error_contains(&errors, "undefined stem");
+}
+
+#[test]
+fn test_inflection_references_undeclared_axis() {
+    let errors = compile_error_from_sources(&[(
+        "main.hu",
+        r#"
+tagaxis t { role: inflectional }
+@extend tv for tagaxis t { a {} }
+inflection cls for {t} {
+  [nonexistent=a] -> `form`
+}
+entry e { headword: "e" inflection_class: cls meaning: "e" }
+"#,
+    )]);
+    assert_error_contains(&errors, "not in for {} declaration");
+}
+
+// =========================================================================
+// Parser errors (via parse_source)
+// =========================================================================
+
+#[test]
+fn test_unknown_tagaxis_index_kind() {
+    let errors = parse_errors(
+        r#"tagaxis foo {
+  role: inflectional
+  index: foobar
+}"#,
+    );
+    assert_error_contains(&errors, "unknown index kind");
+}
+
+#[test]
+fn test_unknown_tagaxis_field() {
+    let errors = parse_errors(
+        r#"tagaxis foo {
+  role: inflectional
+  badfield: "x"
+}"#,
+    );
+    assert_error_contains(&errors, "unknown tagaxis field");
+}
+
+#[test]
+fn test_headword_bad_syntax() {
+    let errors = parse_errors(
+        r#"entry foo {
+  headword 123
+  meaning: "test"
+}"#,
+    );
+    assert_error_contains(&errors, "expected");
+}
+
+#[test]
+fn test_unexpected_extend_value_field() {
+    let errors = parse_errors(
+        r#"tagaxis t { role: inflectional }
+@extend ev for tagaxis t {
+  x { badfield: "x" }
+}"#,
+    );
+    assert_error_contains(&errors, "unexpected field in @extend value");
+}
+
+#[test]
+fn test_entry_missing_both_headword_and_meaning() {
+    let errors = parse_errors(
+        r#"entry foo {
+  tags: []
+}"#,
+    );
+    // Should report missing headword (first required field)
+    assert_error_contains(&errors, "missing");
+}
+
+// =========================================================================
+// Phase 1 errors (via temp files)
+// =========================================================================
+
+#[test]
+fn test_export_symbol_not_found() {
+    let errors = compile_error_from_sources(&[
+        ("main.hu", r#"
+@export reference nonexistent from "dep.hu"
+"#),
+        ("dep.hu", r#"
+entry hello { headword: "hello" meaning: "hi" }
+"#),
+    ]);
+    assert_error_contains(&errors, "not found in imported file");
+}
+
+#[test]
+fn test_cannot_export_entry_via_use() {
+    let errors = compile_error_from_sources(&[
+        ("main.hu", r#"
+@use * from "dep.hu"
+@export use hello from "dep.hu"
+"#),
+        ("dep.hu", r#"
+entry hello { headword: "hello" meaning: "hi" }
+"#),
+    ]);
+    assert_error_contains(&errors, "cannot");
+}
