@@ -83,7 +83,7 @@ pub enum Item {
     TagAxis(TagAxis),
     Extend(Extend),
     Inflection(Inflection),
-    Entry(Entry),
+    Entry(Box<Entry>),
     PhonRule(PhonRule),
     Render(RenderConfig),
 }

@@ -191,7 +191,7 @@ impl Parser {
             }
             TokenKind::Ident(s) if s == "entry" => {
                 self.advance();
-                Item::Entry(self.parse_entry()?)
+                Item::Entry(Box::new(self.parse_entry()?))
             }
             TokenKind::Ident(s) if s == "phonrule" => {
                 self.advance();
@@ -1519,48 +1519,47 @@ impl Parser {
             }
 
             // Check for closing tag </name>
-            if matches!(self.peek(), TokenKind::Lt) {
-                if self.tokens.get(self.pos + 1)
+            if matches!(self.peek(), TokenKind::Lt)
+                && self.tokens.get(self.pos + 1)
                     .map(|t| matches!(t.node, TokenKind::Slash))
                     .unwrap_or(false)
-                {
-                    // Consume < and /
-                    self.advance(); // <
-                    self.advance(); // /
-                    let close_name = if matches!(self.peek(), TokenKind::Ident(_)) {
-                        self.parse_hyphenated_name()
-                    } else {
-                        "?".to_string()
-                    };
-                    if let Some(tag) = inside_tag {
-                        if close_name == tag {
-                            if matches!(self.peek(), TokenKind::Gt) {
-                                self.advance(); // >
-                            } else {
-                                self.errors.push(self.error(format!(
-                                    "expected '>' after </{}>",
-                                    tag
-                                )));
-                            }
-                            break;
+            {
+                // Consume < and /
+                self.advance(); // <
+                self.advance(); // /
+                let close_name = if matches!(self.peek(), TokenKind::Ident(_)) {
+                    self.parse_hyphenated_name()
+                } else {
+                    "?".to_string()
+                };
+                if let Some(tag) = inside_tag {
+                    if close_name == tag {
+                        if matches!(self.peek(), TokenKind::Gt) {
+                            self.advance(); // >
                         } else {
                             self.errors.push(self.error(format!(
-                                "mismatched closing tag: expected </{}>, found </{}>",
-                                tag, close_name
+                                "expected '>' after </{}>",
+                                tag
                             )));
-                            if matches!(self.peek(), TokenKind::Gt) {
-                                self.advance(); // >
-                            }
-                            continue;
                         }
+                        break;
                     } else {
                         self.errors.push(self.error(format!(
-                            "unexpected closing tag </{}> without matching opening tag",
-                            close_name
+                            "mismatched closing tag: expected </{}>, found </{}>",
+                            tag, close_name
                         )));
-                        if matches!(self.peek(), TokenKind::Gt) { self.advance(); }
+                        if matches!(self.peek(), TokenKind::Gt) {
+                            self.advance(); // >
+                        }
                         continue;
                     }
+                } else {
+                    self.errors.push(self.error(format!(
+                        "unexpected closing tag </{}> without matching opening tag",
+                        close_name
+                    )));
+                    if matches!(self.peek(), TokenKind::Gt) { self.advance(); }
+                    continue;
                 }
             }
 
