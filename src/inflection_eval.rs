@@ -426,7 +426,7 @@ fn resolve_delegate(
     let cells = vec![delegate_cell];
     let result = match &target_body {
         InflectionBody::Rules(body) => {
-            evaluate_rules(&body.rules, &cells, &delegate_stems, &delegate_struct_stems, resolver, phon_resolver)
+            evaluate_rules_with_overrides(&body.rules, &[], body.apply.as_ref(), &cells, &delegate_stems, &delegate_struct_stems, resolver, phon_resolver)
         }
         InflectionBody::Compose(comp) => {
             evaluate_compose(comp, &[], &cells, &delegate_stems, &delegate_struct_stems, phon_resolver)
