@@ -208,7 +208,7 @@ pub fn compute(p1: &Phase1Result) -> MerkleHashes {
                     pr_deps.sort();
                     for pr_name in &pr_deps {
                         // Resolve phonrule name via symbol table
-                        let resolved = resolve_phonrule_name(p1, file_id, &pr_name);
+                        let resolved = resolve_phonrule_name(p1, file_id, pr_name);
                         if let Some(h) =
                             resolved.as_ref().and_then(|n| hashes.phonrules.get(n))
                         {
@@ -221,7 +221,7 @@ pub fn compute(p1: &Phase1Result) -> MerkleHashes {
                     del_deps.sort();
                     for del_name in &del_deps {
                         let resolved =
-                            resolve_inflection_name(p1, file_id, &del_name);
+                            resolve_inflection_name(p1, file_id, del_name);
                         if let Some(h) =
                             resolved.as_ref().and_then(|n| hashes.inflections.get(n))
                         {
@@ -239,6 +239,49 @@ pub fn compute(p1: &Phase1Result) -> MerkleHashes {
                     }
                 }
                 None => {}
+            }
+
+            // Mix in phonrule and delegate hashes from forms_override
+            if !entry.forms_override.is_empty() {
+                let mut fo_pr_deps: Vec<String> = entry
+                    .forms_override
+                    .iter()
+                    .flat_map(|rule| {
+                        let mut refs = HashSet::new();
+                        collect_phonrules_from_rhs(&rule.rhs.node, &mut refs);
+                        refs
+                    })
+                    .collect();
+                fo_pr_deps.sort();
+                fo_pr_deps.dedup();
+                for pr_name in &fo_pr_deps {
+                    let resolved = resolve_phonrule_name(p1, file_id, pr_name);
+                    if let Some(h) =
+                        resolved.as_ref().and_then(|n| hashes.phonrules.get(n))
+                    {
+                        sha.update(h);
+                    }
+                }
+                let mut fo_del_deps: Vec<String> = entry
+                    .forms_override
+                    .iter()
+                    .flat_map(|rule| {
+                        let mut refs = HashSet::new();
+                        collect_delegates_from_rhs(&rule.rhs.node, &mut refs);
+                        refs
+                    })
+                    .collect();
+                fo_del_deps.sort();
+                fo_del_deps.dedup();
+                for del_name in &fo_del_deps {
+                    let resolved =
+                        resolve_inflection_name(p1, file_id, del_name);
+                    if let Some(h) =
+                        resolved.as_ref().and_then(|n| hashes.inflections.get(n))
+                    {
+                        sha.update(h);
+                    }
+                }
             }
 
             // Mix in extend hashes for axes referenced in entry tags
@@ -302,9 +345,9 @@ fn for_each_item<'a>(p1: &'a Phase1Result, mut f: impl FnMut(FileId, &'a Item)) 
 /// Like `for_each_item` but also passes file_id through for entry resolution.
 fn for_each_item_with_file<'a>(
     p1: &'a Phase1Result,
-    mut f: impl FnMut(FileId, &'a Item),
+    f: impl FnMut(FileId, &'a Item),
 ) {
-    for_each_item(p1, |fid, item| f(fid, item));
+    for_each_item(p1, f);
 }
 
 /// Collect all named inflections keyed by canonical name, with their file_id.
@@ -647,5 +690,203 @@ phonrule pr {
         )]);
 
         assert!(hashes.phonrules.contains_key("pr"));
+    }
+
+    #[test]
+    fn test_entry_hash_changes_when_phonrule_changes() {
+        let (_, h1) = compute_from_sources(&[(
+            "main.hu",
+            r#"
+phonrule pr {
+  class V = ["a", "e"]
+  V -> null / _ #
+}
+tagaxis t { role: inflectional }
+@extend tv for tagaxis t { a {} }
+inflection cls for {t} {
+  apply pr(cell)
+  [t=a] -> `form`
+}
+entry e { headword: "e" inflection_class: cls meaning: "e" }
+"#,
+        )]);
+        let (_, h2) = compute_from_sources(&[(
+            "main.hu",
+            r#"
+phonrule pr {
+  class V = ["a", "e", "i"]
+  V -> null / _ #
+}
+tagaxis t { role: inflectional }
+@extend tv for tagaxis t { a {} }
+inflection cls for {t} {
+  apply pr(cell)
+  [t=a] -> `form`
+}
+entry e { headword: "e" inflection_class: cls meaning: "e" }
+"#,
+        )]);
+
+        // Phonrule hash should differ
+        assert_ne!(h1.phonrules["pr"], h2.phonrules["pr"]);
+        // Inflection hash should differ (depends on phonrule)
+        assert_ne!(h1.inflections["cls"], h2.inflections["cls"]);
+        // Entry hash should differ (depends on inflection)
+        let e1: Vec<_> = h1.entries.values().collect();
+        let e2: Vec<_> = h2.entries.values().collect();
+        assert_ne!(e1[0], e2[0]);
+    }
+
+    #[test]
+    fn test_entry_hash_changes_when_imported_phonrule_changes() {
+        let (_, h1) = compute_from_sources(&[(
+            "main.hu",
+            r#"
+@use * from "phon.hu"
+tagaxis t { role: inflectional }
+@extend tv for tagaxis t { a {} }
+inflection cls for {t} {
+  apply pr(cell)
+  [t=a] -> `form`
+}
+entry e { headword: "e" inflection_class: cls meaning: "e" }
+"#,
+        ), (
+            "phon.hu",
+            r#"
+phonrule pr {
+  class V = ["a", "e"]
+  V -> null / _ #
+}
+"#,
+        )]);
+        let (_, h2) = compute_from_sources(&[(
+            "main.hu",
+            r#"
+@use * from "phon.hu"
+tagaxis t { role: inflectional }
+@extend tv for tagaxis t { a {} }
+inflection cls for {t} {
+  apply pr(cell)
+  [t=a] -> `form`
+}
+entry e { headword: "e" inflection_class: cls meaning: "e" }
+"#,
+        ), (
+            "phon.hu",
+            r#"
+phonrule pr {
+  class V = ["a", "e", "i"]
+  V -> null / _ #
+}
+"#,
+        )]);
+
+        // Phonrule hash should differ
+        assert_ne!(h1.phonrules["pr"], h2.phonrules["pr"]);
+        // Inflection hash should differ
+        assert_ne!(h1.inflections["cls"], h2.inflections["cls"]);
+        // Entry hash should differ
+        let e1: Vec<_> = h1.entries.values().collect();
+        let e2: Vec<_> = h2.entries.values().collect();
+        assert_ne!(e1[0], e2[0]);
+    }
+
+    #[test]
+    fn test_entry_hash_changes_when_phonrule_in_rhs_changes() {
+        // phonrule used in rule RHS (not apply), e.g. [t=a] -> pr(`form`)
+        let (_, h1) = compute_from_sources(&[(
+            "main.hu",
+            r#"
+phonrule pr {
+  class V = ["a", "e"]
+  V -> null / _ #
+}
+tagaxis t { role: inflectional }
+@extend tv for tagaxis t { a {} }
+inflection cls for {t} {
+  [t=a] -> pr(`form`)
+}
+entry e { headword: "e" inflection_class: cls meaning: "e" }
+"#,
+        )]);
+        let (_, h2) = compute_from_sources(&[(
+            "main.hu",
+            r#"
+phonrule pr {
+  class V = ["a", "e", "i"]
+  V -> null / _ #
+}
+tagaxis t { role: inflectional }
+@extend tv for tagaxis t { a {} }
+inflection cls for {t} {
+  [t=a] -> pr(`form`)
+}
+entry e { headword: "e" inflection_class: cls meaning: "e" }
+"#,
+        )]);
+
+        assert_ne!(h1.phonrules["pr"], h2.phonrules["pr"]);
+        assert_ne!(h1.inflections["cls"], h2.inflections["cls"]);
+        let e1: Vec<_> = h1.entries.values().collect();
+        let e2: Vec<_> = h2.entries.values().collect();
+        assert_ne!(e1[0], e2[0]);
+    }
+
+    #[test]
+    fn test_entry_hash_changes_when_phonrule_in_forms_override_changes() {
+        // phonrule referenced only in forms_override, not in inflection class
+        let (_, h1) = compute_from_sources(&[(
+            "main.hu",
+            r#"
+phonrule pr {
+  class V = ["a", "e"]
+  V -> null / _ #
+}
+tagaxis t { role: inflectional }
+@extend tv for tagaxis t { a {} b {} }
+inflection cls for {t} {
+  [t=a] -> `formA`
+  [t=b] -> `formB`
+}
+entry e {
+  headword: "e"
+  inflection_class: cls
+  meaning: "e"
+  forms_override {
+    [t=a] -> pr(`override`)
+  }
+}
+"#,
+        )]);
+        let (_, h2) = compute_from_sources(&[(
+            "main.hu",
+            r#"
+phonrule pr {
+  class V = ["a", "e", "i"]
+  V -> null / _ #
+}
+tagaxis t { role: inflectional }
+@extend tv for tagaxis t { a {} b {} }
+inflection cls for {t} {
+  [t=a] -> `formA`
+  [t=b] -> `formB`
+}
+entry e {
+  headword: "e"
+  inflection_class: cls
+  meaning: "e"
+  forms_override {
+    [t=a] -> pr(`override`)
+  }
+}
+"#,
+        )]);
+
+        assert_ne!(h1.phonrules["pr"], h2.phonrules["pr"]);
+        // Entry hash should differ (phonrule referenced in forms_override)
+        let e1: Vec<_> = h1.entries.values().collect();
+        let e2: Vec<_> = h2.entries.values().collect();
+        assert_ne!(e1[0], e2[0], "entry hash should change when phonrule in forms_override changes");
     }
 }
