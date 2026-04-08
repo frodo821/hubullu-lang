@@ -1,6 +1,7 @@
 #![cfg(feature = "sqlite")]
 
 use std::path::PathBuf;
+use std::rc::Rc;
 
 fn fixture_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -481,8 +482,36 @@ entry e { headword: "e" inflection_class: cls meaning: "e" }
 }
 
 // =========================================================================
+// Inflection evaluation errors (phonrule / compose / delegate)
+// =========================================================================
+
+#[test]
+fn test_phonrule_not_found_in_apply() {
+    let errors = compile_error("errors/phonrule_not_found_apply.hu");
+    assert_error_contains(&errors, "phonrule 'harmony' not found");
+}
+
+#[test]
+fn test_no_rule_matches_slot() {
+    let errors = compile_error("errors/slot_no_rule_matches.hu");
+    assert_error_contains(&errors, "no rule matches slot");
+}
+
+// =========================================================================
 // Parser errors (via parse_source)
 // =========================================================================
+
+#[test]
+fn test_apply_expr_expected_phonrule_or_cell() {
+    let errors = parse_errors(
+        r#"tagaxis t { role: inflectional }
+inflection cls for {t} {
+  apply (cell)
+  [t=a] -> `form`
+}"#,
+    );
+    assert_error_contains(&errors, "expected phonrule name or 'cell' in apply expression");
+}
 
 #[test]
 fn test_unknown_tagaxis_index_kind() {
@@ -568,4 +597,149 @@ entry hello { headword: "hello" meaning: "hi" }
 "#),
     ]);
     assert_error_contains(&errors, "cannot");
+}
+
+#[test]
+fn test_export_undefined_symbol_from_scope() {
+    let errors = compile_error_from_sources(&[
+        ("main.hu", r#"
+tagaxis t { role: inflectional }
+@export use nonexistent
+"#),
+    ]);
+    assert_error_contains(&errors, "symbol 'nonexistent' not found in scope for @export");
+}
+
+// =========================================================================
+// Render errors (form-spec resolution via compile + .hut resolve)
+// =========================================================================
+
+/// Helper: compile a .hu source, write a .hut source, and resolve.
+/// Returns Ok(resolved text) or Err(error string).
+fn render_resolve(hu_source: &str, hut_source: &str) -> Result<String, String> {
+    let dir = tempfile::tempdir().unwrap();
+    let hu_path = dir.path().join("dict.hu");
+    let huc_path = dir.path().join("dict.huc");
+    std::fs::write(&hu_path, hu_source).unwrap();
+    hubullu::compile(&hu_path, &huc_path)?;
+
+    let hut_src = format!("@reference * from \"dict.hu\"\n{}", hut_source);
+    let (hut_file, source_map) = hubullu::render::parse_hut(&hut_src, "test.hut")?;
+
+    let conn = Rc::new(
+        rusqlite::Connection::open_with_flags(
+            &huc_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .map_err(|e| format!("cannot open huc: {}", e))?,
+    );
+    let source = hubullu::render::EntrySource { conn, name_map: None };
+    let ctx = hubullu::render::ResolveContext {
+        namespaced: std::collections::HashMap::new(),
+        default_sources: vec![source],
+    };
+
+    let parts = hubullu::render::resolve(&hut_file.tokens, &ctx, &source_map)?;
+    Ok(hubullu::render::smart_join(&parts, " ", ".,;:!?"))
+}
+
+#[test]
+fn test_render_form_spec_no_match() {
+    let hu = r#"
+tagaxis t { role: inflectional }
+@extend tv for tagaxis t { a {} b {} }
+inflection cls for {t} {
+  requires stems: root
+  [t=a] -> `{root}ed`
+  [t=b] -> `{root}ing`
+}
+entry walk {
+  headword: "walk"
+  stems { root: "walk" }
+  inflection_class: cls
+  meaning: "to walk"
+}
+"#;
+    let hut = "walk[t=c]";
+    let err = render_resolve(hu, hut).unwrap_err();
+    assert_error_contains(&err, "has no form matching");
+}
+
+#[test]
+fn test_render_form_spec_ambiguous() {
+    let hu = r#"
+tagaxis t { role: inflectional }
+tagaxis n { role: inflectional }
+@extend tv for tagaxis t { a {} b {} }
+@extend nv for tagaxis n { x {} y {} }
+inflection cls for {t, n} {
+  requires stems: root
+  [t=a, n=x] -> `{root}ax`
+  [t=a, n=y] -> `{root}ay`
+  [t=b, n=x] -> `{root}bx`
+  [t=b, n=y] -> `{root}by`
+}
+entry walk {
+  headword: "walk"
+  stems { root: "walk" }
+  inflection_class: cls
+  meaning: "to walk"
+}
+"#;
+    // t=a matches two cells: (t=a,n=x) and (t=a,n=y) — ambiguous
+    let hut = "walk[t=a]";
+    let err = render_resolve(hu, hut).unwrap_err();
+    assert_error_contains(&err, "ambiguous form spec");
+}
+
+#[test]
+fn test_render_form_spec_exact_match() {
+    let hu = r#"
+tagaxis t { role: inflectional }
+tagaxis n { role: inflectional }
+@extend tv for tagaxis t { a {} b {} }
+@extend nv for tagaxis n { x {} y {} }
+inflection cls for {t, n} {
+  requires stems: root
+  [t=a, n=x] -> `{root}ax`
+  [t=a, n=y] -> `{root}ay`
+  [t=b, n=x] -> `{root}bx`
+  [t=b, n=y] -> `{root}by`
+}
+entry walk {
+  headword: "walk"
+  stems { root: "walk" }
+  inflection_class: cls
+  meaning: "to walk"
+}
+"#;
+    // Fully specified — should resolve uniquely
+    let hut = "walk[t=a, n=x]";
+    let result = render_resolve(hu, hut).unwrap();
+    assert_eq!(result, "walkax");
+}
+
+#[test]
+fn test_render_form_spec_partial_unique() {
+    let hu = r#"
+tagaxis t { role: inflectional }
+tagaxis n { role: inflectional }
+@extend tv for tagaxis t { a {} }
+@extend nv for tagaxis n { x {} y {} }
+inflection cls for {t, n} {
+  requires stems: root
+  [t=a, n=x] -> `{root}ax`
+  [t=a, n=y] -> `{root}ay`
+}
+entry walk {
+  headword: "walk"
+  stems { root: "walk" }
+  inflection_class: cls
+  meaning: "to walk"
+}
+"#;
+    // n=x matches only one cell (t=a,n=x) — unique partial match
+    let hut = "walk[n=x]";
+    let result = render_resolve(hu, hut).unwrap();
+    assert_eq!(result, "walkax");
 }

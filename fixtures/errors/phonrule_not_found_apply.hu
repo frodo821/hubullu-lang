@@ -1,0 +1,13 @@
+tagaxis t { role: inflectional }
+@extend tv for tagaxis t { a {} }
+
+inflection cls for {t} {
+  apply harmony(cell)
+  [t=a] -> `form`
+}
+
+entry e {
+  headword: "e"
+  inflection_class: cls
+  meaning: "e"
+}

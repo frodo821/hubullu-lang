@@ -1,0 +1,17 @@
+tagaxis t { role: inflectional }
+@extend tv for tagaxis t { a {} b {} }
+
+inflection cls for {t} {
+  compose prefix + root
+  slot prefix {
+    [t=a] -> `pre`
+    # no rule for t=b
+  }
+}
+
+entry e {
+  headword: "e"
+  stems { root: "x" }
+  inflection_class: cls
+  meaning: "e"
+}
