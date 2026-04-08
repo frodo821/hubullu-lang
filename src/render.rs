@@ -18,6 +18,82 @@ use crate::parser::Parser;
 use crate::span::SourceMap;
 
 // ---------------------------------------------------------------------------
+// Form-spec matching helpers
+// ---------------------------------------------------------------------------
+
+/// Search forms for an entry and find the unique form matching the given
+/// tag conditions (subset match).  Returns an error when zero or multiple
+/// forms match.
+fn find_form_by_spec(
+    conn: &Connection,
+    db_name: &str,
+    form_spec: &ast::TagConditionList,
+    location: &str,
+    local_name: &str,
+) -> Result<String, String> {
+    let requested: Vec<(String, String)> = form_spec
+        .conditions
+        .iter()
+        .map(|c| (c.axis.node.clone(), c.value.node.clone()))
+        .collect();
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT f.form_str, f.tags FROM forms f \
+             JOIN entries e ON f.entry_id = e.id \
+             WHERE e.name = ?1",
+        )
+        .map_err(|e| format!("query failed: {}", e))?;
+    let mut rows = stmt
+        .query([db_name])
+        .map_err(|e| format!("query failed: {}", e))?;
+
+    let mut first: Option<String> = None;
+    while let Some(row) = rows.next().map_err(|e| format!("query failed: {}", e))? {
+        let form_str: String = row.get(0).map_err(|e| format!("read failed: {}", e))?;
+        let tags_str: String = row.get(1).map_err(|e| format!("read failed: {}", e))?;
+        let stored: Vec<(String, String)> = tags_str
+            .split(',')
+            .filter(|s| !s.is_empty())
+            .filter_map(|pair| {
+                let mut parts = pair.splitn(2, '=');
+                Some((parts.next()?.to_string(), parts.next()?.to_string()))
+            })
+            .collect();
+        let all_match = requested.iter().all(|(rk, rv)| {
+            stored.iter().any(|(sk, sv)| sk == rk && sv == rv)
+        });
+        if all_match {
+            if first.is_some() {
+                let tags_display = format_tags_display(form_spec);
+                return Err(format!(
+                    "{}: entry '{}' has ambiguous form spec [{}]",
+                    location, local_name, tags_display
+                ));
+            }
+            first = Some(form_str);
+        }
+    }
+
+    let tags_display = format_tags_display(form_spec);
+    first.ok_or_else(|| {
+        format!(
+            "{}: entry '{}' has no form matching [{}]",
+            location, local_name, tags_display
+        )
+    })
+}
+
+fn format_tags_display(form_spec: &ast::TagConditionList) -> String {
+    form_spec
+        .conditions
+        .iter()
+        .map(|c| format!("{}={}", c.axis.node, c.value.node))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+// ---------------------------------------------------------------------------
 // Parsing
 // ---------------------------------------------------------------------------
 
@@ -122,11 +198,11 @@ pub fn compile_cached(hu_path: &Path) -> Result<PathBuf, String> {
 // Entry source — one compiled .huc file with its import rules
 // ---------------------------------------------------------------------------
 
-struct EntrySource {
-    conn: Rc<Connection>,
+pub struct EntrySource {
+    pub conn: Rc<Connection>,
     /// `None` = glob (all entries visible); `Some(map)` = named imports
     /// where key = local name, value = name in the .huc file.
-    name_map: Option<HashMap<String, String>>,
+    pub name_map: Option<HashMap<String, String>>,
 }
 
 impl EntrySource {
@@ -159,9 +235,9 @@ impl EntrySource {
 /// `@reference` directives.
 pub struct ResolveContext {
     /// namespace name → entry source
-    namespaced: HashMap<String, EntrySource>,
+    pub namespaced: HashMap<String, EntrySource>,
     /// un-namespaced sources, searched in declaration order
-    default_sources: Vec<EntrySource>,
+    pub default_sources: Vec<EntrySource>,
 }
 
 impl ResolveContext {
@@ -734,61 +810,7 @@ pub fn resolve(
                         parts.push(ResolvedPart::Text(headword));
                     }
                     Some(form_spec) => {
-                        let mut requested: Vec<(String, String)> = form_spec
-                            .conditions
-                            .iter()
-                            .map(|c| (c.axis.node.clone(), c.value.node.clone()))
-                            .collect();
-                        requested.sort();
-
-                        let mut stmt = src
-                            .conn
-                            .prepare(
-                                "SELECT f.form_str, f.tags FROM forms f \
-                                 JOIN entries e ON f.entry_id = e.id \
-                                 WHERE e.name = ?1",
-                            )
-                            .map_err(|e| format!("query failed: {}", e))?;
-                        let mut rows = stmt
-                            .query([db_name])
-                            .map_err(|e| format!("query failed: {}", e))?;
-
-                        let mut found = None;
-                        while let Some(row) = rows
-                            .next()
-                            .map_err(|e| format!("query failed: {}", e))?
-                        {
-                            let form_str: String =
-                                row.get(0).map_err(|e| format!("read failed: {}", e))?;
-                            let tags_str: String =
-                                row.get(1).map_err(|e| format!("read failed: {}", e))?;
-                            let mut stored: Vec<(String, String)> = tags_str
-                                .split(',')
-                                .filter(|s| !s.is_empty())
-                                .filter_map(|pair| {
-                                    let mut parts = pair.splitn(2, '=');
-                                    Some((parts.next()?.to_string(), parts.next()?.to_string()))
-                                })
-                                .collect();
-                            stored.sort();
-                            if stored == requested {
-                                found = Some(form_str);
-                                break;
-                            }
-                        }
-
-                        let form_str = found.ok_or_else(|| {
-                            let tags_display = form_spec
-                                .conditions
-                                .iter()
-                                .map(|c| format!("{}={}", c.axis.node, c.value.node))
-                                .collect::<Vec<_>>()
-                                .join(", ");
-                            format!(
-                                "{}: entry '{}' has no form matching [{}]",
-                                at, local_name, tags_display
-                            )
-                        })?;
+                        let form_str = find_form_by_spec(&src.conn, db_name, form_spec, &at, local_name)?;
                         parts.push(ResolvedPart::Text(form_str));
                     }
                 } }
@@ -886,65 +908,8 @@ pub fn resolve_annotated(
                             });
                         }
                         Some(form_spec) => {
-                            let mut requested: Vec<(String, String)> = form_spec
-                                .conditions
-                                .iter()
-                                .map(|c| (c.axis.node.clone(), c.value.node.clone()))
-                                .collect();
-                            requested.sort();
-
-                            let mut stmt = src
-                                .conn
-                                .prepare(
-                                    "SELECT f.form_str, f.tags FROM forms f \
-                                     JOIN entries e ON f.entry_id = e.id \
-                                     WHERE e.name = ?1",
-                                )
-                                .map_err(|e| format!("query failed: {}", e))?;
-                            let mut rows = stmt
-                                .query([db_name])
-                                .map_err(|e| format!("query failed: {}", e))?;
-
-                            let mut found = None;
-                            while let Some(row) = rows
-                                .next()
-                                .map_err(|e| format!("query failed: {}", e))?
-                            {
-                                let form_str: String =
-                                    row.get(0).map_err(|e| format!("read failed: {}", e))?;
-                                let tags_str: String =
-                                    row.get(1).map_err(|e| format!("read failed: {}", e))?;
-                                let mut stored: Vec<(String, String)> = tags_str
-                                    .split(',')
-                                    .filter(|s| !s.is_empty())
-                                    .filter_map(|pair| {
-                                        let mut parts = pair.splitn(2, '=');
-                                        Some((
-                                            parts.next()?.to_string(),
-                                            parts.next()?.to_string(),
-                                        ))
-                                    })
-                                    .collect();
-                                stored.sort();
-                                if stored == requested {
-                                    found = Some(form_str);
-                                    break;
-                                }
-                            }
-
-                            let tags_display = form_spec
-                                .conditions
-                                .iter()
-                                .map(|c| format!("{}={}", c.axis.node, c.value.node))
-                                .collect::<Vec<_>>()
-                                .join(", ");
-
-                            let form_str = found.ok_or_else(|| {
-                                format!(
-                                    "{}: entry '{}' has no form matching [{}]",
-                                    at, local_name, tags_display
-                                )
-                            })?;
+                            let form_str = find_form_by_spec(&src.conn, db_name, form_spec, &at, local_name)?;
+                            let tags_display = format_tags_display(form_spec);
                             parts.push(AnnotatedPart::Entry {
                                 text: form_str,
                                 annotation: EntryAnnotation {

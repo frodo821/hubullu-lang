@@ -980,7 +980,7 @@ fn render_glossary_page(
 
     let mut body = String::new();
 
-    for (_, ann) in entries {
+    for ann in entries.values() {
         body.push_str(&format!(
             "<div class=\"entry-card\" id=\"entry-{}\">\n<h2>{}</h2>\n",
             html_escape(&ann.entry_name),
