@@ -205,37 +205,7 @@ pub fn run_lint_from_phase1(p1: &Phase1Result) -> Vec<LintDiagnostic> {
 /// Run all lint rules on a project starting from the given entry file.
 pub fn run_lint(entry_path: &Path) -> LintResult {
     let p1 = phase1::run_phase1(entry_path, Default::default());
-
-    let mut lints = Vec::new();
-
-    // Run single-file lints on each file
-    for (&file_id, file) in &p1.files {
-        let source = p1.source_map.source(file_id);
-        lint_single_file(file_id, file, source, &mut lints);
-        lint_source_format(file_id, source, &mut lints);
-    }
-
-    // Run cross-file lints using phase1 symbol table
-    lint_cross_file(&p1, &mut lints);
-
-    // Run lints that need resolved axis values (lightweight, no full phase2)
-    if !p1.diagnostics.has_errors() {
-        lint_with_resolved_axes(&p1, &mut lints);
-    }
-
-    // Filter suppressed lints
-    let suppressions = build_suppressions(&p1);
-    if !suppressions.is_empty() {
-        lints.retain(|lint| !is_suppressed(lint, &suppressions, &p1.source_map));
-    }
-
-    // Sort lints by file and position for stable output
-    lints.sort_by(|a, b| {
-        let span_a = a.diagnostic.labels.first().map(|l| (l.span.file_id.0, l.span.start));
-        let span_b = b.diagnostic.labels.first().map(|l| (l.span.file_id.0, l.span.start));
-        span_a.cmp(&span_b)
-    });
-
+    let lints = run_lint_from_phase1(&p1);
     LintResult {
         lints,
         compile_errors: p1.diagnostics,
@@ -375,7 +345,7 @@ fn lint_trailing_whitespace(file_id: FileId, source: &str, lints: &mut Vec<LintD
     let mut pos = 0;
 
     for line in source.split('\n') {
-        let trimmed_len = line.trim_end_matches(|c: char| c == ' ' || c == '\t').len();
+        let trimmed_len = line.trim_end_matches([' ', '\t']).len();
         if trimmed_len < line.len() {
             edits.push(SourceEdit {
                 file_id,
@@ -1158,7 +1128,7 @@ fn check_shadowed_rules(
     lints: &mut Vec<LintDiagnostic>,
 ) {
 
-    let cells = match inflection_eval::enumerate_cells(axes, &axis_values) {
+    let cells = match inflection_eval::enumerate_cells(axes, axis_values) {
         Ok(c) => c,
         Err(_) => return,
     };
@@ -1242,7 +1212,7 @@ fn check_incomplete_coverage(
     lints: &mut Vec<LintDiagnostic>,
 ) {
 
-    let cells = match inflection_eval::enumerate_cells(axes, &axis_values) {
+    let cells = match inflection_eval::enumerate_cells(axes, axis_values) {
         Ok(c) => c,
         Err(_) => return,
     };
