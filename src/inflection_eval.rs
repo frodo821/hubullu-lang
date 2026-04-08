@@ -203,6 +203,7 @@ pub fn evaluate_rules(
 ///
 /// If `apply` is `Some`, the phonrule expression is applied to every non-delegate cell
 /// after per-cell evaluation.
+#[allow(clippy::too_many_arguments)]
 pub fn evaluate_rules_with_overrides(
     rules: &[InflectionRule],
     overrides: &[InflectionRule],
@@ -287,6 +288,7 @@ fn apply_rule(
 
 /// Apply a matched rule, then apply the inflection-level `apply` expression if present.
 /// Delegate cells are skipped (the apply expression is not applied to them).
+#[allow(clippy::too_many_arguments)]
 fn apply_rule_with_apply(
     rule: &InflectionRule,
     cell: &Cell,

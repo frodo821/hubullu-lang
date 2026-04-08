@@ -57,7 +57,7 @@ pub fn find_references(
     }
 
     // Scan all files using cached tokens.
-    for (&fid, _) in &phase1.files {
+    for &fid in phase1.files.keys() {
         let file_tokens = match token_cache.get(&fid) {
             Some(t) => t,
             None => continue,
@@ -81,11 +81,11 @@ pub fn find_references(
                         name == &def.name
                     };
 
-                    if is_match {
-                        if include_declaration
+                    if is_match
+                        && (include_declaration
                             || tok.span.file_id != def.file_id
-                            || tok.span.start != def.span.start
-                        {
+                            || tok.span.start != def.span.start)
+                    {
                             let range =
                                 convert::span_to_range(&tok.span, &phase1.source_map);
                             let loc = Location {
@@ -95,7 +95,6 @@ pub fn find_references(
                             if !locations.contains(&loc) {
                                 locations.push(loc);
                             }
-                        }
                     }
                 }
             }
@@ -187,7 +186,7 @@ fn find_tag_value_references(
     }
 
     // Scan all files for `axis=value` patterns in token streams.
-    for (&fid, _) in &phase1.files {
+    for &fid in phase1.files.keys() {
         let file_tokens = match token_cache.get(&fid) {
             Some(t) => t,
             None => continue,

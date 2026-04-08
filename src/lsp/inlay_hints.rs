@@ -22,8 +22,7 @@ pub fn inlay_hints(
     let mut hints = Vec::new();
 
     for item_spanned in &file_ast.items {
-        match &item_spanned.node {
-            Item::Entry(entry) => {
+        if let Item::Entry(entry) = &item_spanned.node {
                 // Hints in examples.
                 for example in &entry.examples {
                     collect_example_hints(
@@ -43,8 +42,6 @@ pub fn inlay_hints(
                         collect_ref_hint(&cognate.entry, file_id, phase2, source_map, &mut hints);
                     }
                 }
-            }
-            _ => {}
         }
     }
 
@@ -424,6 +421,7 @@ fn parse_stem_spec(
 
 /// Parse `[axis=value, axis=value, ...]` from the token stream starting at `start`.
 /// Returns (conditions, next_index_after_rbracket, rbracket_end_offset).
+#[allow(clippy::type_complexity)]
 pub fn parse_bracket_conditions(
     tokens: &[Token],
     start: usize,
@@ -494,7 +492,7 @@ mod tests {
         })
     }
 
-    fn mk_lit(text: &str, s: usize, e: usize) -> ast::Token {
+    fn _mk_lit(text: &str, s: usize, e: usize) -> ast::Token {
         ast::Token::Lit(StringLit { node: text.to_string(), span: span(s, e) })
     }
 

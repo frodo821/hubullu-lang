@@ -463,7 +463,7 @@ impl ServerState {
             .find(|(_, proj)| proj.url_to_file_id.contains_key(uri.as_str()))
             .map(|(k, _)| k.clone());
         if let Some(key) = entry_key {
-            if let Some(entry_uri) = key.parse::<Uri>().ok() {
+            if let Ok(entry_uri) = key.parse::<Uri>() {
                 if let Some(path) = convert::uri_to_path(&entry_uri) {
                     let cache_root = path.parent().unwrap_or(&path);
                     if let Some(new_proj) = build_project_state(&path, cache_root) {
@@ -1021,6 +1021,7 @@ fn handle_rename(id: RequestId, req: Request, s: &ServerState) -> Response {
         })();
         if let Some((def_name, def_path)) = def_info {
             let current_uri = uri.as_str();
+            #[allow(clippy::mutable_key_type)]
             let changes = edit.changes.get_or_insert_with(Default::default);
             for (hut_uri_str, hut_proj) in &s.hut_projects {
                 if hut_uri_str == current_uri {
@@ -1095,17 +1096,16 @@ fn handle_set_display_mode(
         _ => EntryRefDisplayMode::InlayHint,
     };
 
-    let mut notifications = Vec::new();
-    // Send workspace/inlayHint/refresh notification.
-    notifications.push(Notification::new(
-        "workspace/inlayHint/refresh".into(),
-        serde_json::Value::Null,
-    ));
-    // Send hubullu/surfaceFormsRefresh notification.
-    notifications.push(Notification::new(
-        "hubullu/surfaceFormsRefresh".into(),
-        serde_json::Value::Null,
-    ));
+    let notifications = vec![
+        Notification::new(
+            "workspace/inlayHint/refresh".into(),
+            serde_json::Value::Null,
+        ),
+        Notification::new(
+            "hubullu/surfaceFormsRefresh".into(),
+            serde_json::Value::Null,
+        ),
+    ];
 
     (Response::new_ok(id, serde_json::Value::Null), notifications)
 }
@@ -1296,7 +1296,7 @@ fn workspace_root_from_init(init_params: &InitializeParams) -> Option<PathBuf> {
     init_params
         .root_uri
         .as_ref()
-        .and_then(|uri| convert::uri_to_path(uri))
+        .and_then(convert::uri_to_path)
 }
 
 fn try_analyze_project(root: &PathBuf) -> Option<ProjectState> {

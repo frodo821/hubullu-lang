@@ -223,7 +223,7 @@ enum Context {
 
 /// Collect preceding tokens for the given file and offset.
 /// Excludes the Eof token so that context detection sees the last real token.
-fn preceding_tokens<'a>(tokens: &'a [Token], file_id: FileId, offset: usize) -> Vec<&'a Token> {
+fn preceding_tokens(tokens: &[Token], file_id: FileId, offset: usize) -> Vec<&Token> {
     tokens
         .iter()
         .filter(|t| {
@@ -727,8 +727,9 @@ fn add_tag_axes(
     let mut found_any = false;
     if let Some(scope) = phase1.symbol_table.scope(scope_file_id) {
         for sym in scope.locals.values() {
-            if sym.kind == SymbolKind::TagAxis {
-                if allowed.map_or(true, |a| a.iter().any(|n| n == &sym.name)) {
+            if sym.kind == SymbolKind::TagAxis
+                && allowed.map_or(true, |a| a.iter().any(|n| n == &sym.name))
+            {
                     found_any = true;
                     items.push(CompletionItem {
                         label: sym.name.clone(),
@@ -737,12 +738,12 @@ fn add_tag_axes(
                         documentation: symbol_documentation(sym.file_id, sym.item_index, phase1),
                         ..Default::default()
                     });
-                }
             }
         }
         for imp in scope.imports.iter().chain(scope.exports.iter()) {
-            if imp.kind == SymbolKind::TagAxis {
-                if allowed.map_or(true, |a| a.iter().any(|n| n == &imp.local_name)) {
+            if imp.kind == SymbolKind::TagAxis
+                && allowed.map_or(true, |a| a.iter().any(|n| n == &imp.local_name))
+            {
                     found_any = true;
                     items.push(CompletionItem {
                         label: imp.local_name.clone(),
@@ -751,7 +752,6 @@ fn add_tag_axes(
                         documentation: symbol_documentation(imp.source_file, imp.item_index, phase1),
                         ..Default::default()
                     });
-                }
             }
         }
     }

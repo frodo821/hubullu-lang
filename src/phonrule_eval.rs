@@ -264,10 +264,8 @@ fn match_left_elem(
             if *cursor > 0 && chars[*cursor - 1] == BOUNDARY {
                 *cursor -= 1;
                 true
-            } else if *cursor == 0 {
-                true
             } else {
-                false
+                *cursor == 0
             }
         }
         PhonContextElem::WordStart => {
@@ -369,10 +367,8 @@ fn match_right_elem(
             if *cursor < chars.len() && chars[*cursor] == BOUNDARY {
                 *cursor += 1;
                 true
-            } else if *cursor >= chars.len() {
-                true
             } else {
-                false
+                *cursor >= chars.len()
             }
         }
         PhonContextElem::WordStart => {

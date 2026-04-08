@@ -49,10 +49,11 @@ pub fn rename(
     let resolved = scope.resolve(&old_name);
     let def = resolved.first()?;
 
+    #[allow(clippy::mutable_key_type)]
     let mut changes: HashMap<Uri, Vec<TextEdit>> = HashMap::new();
 
     // Scan all files using cached tokens.
-    for (&fid, _) in &phase1.files {
+    for &fid in phase1.files.keys() {
         let file_tokens = match token_cache.get(&fid) {
             Some(t) => t,
             None => continue,
@@ -91,6 +92,7 @@ pub fn rename(
         }
     }
 
+    #[allow(clippy::mutable_key_type)]
     Some(WorkspaceEdit {
         changes: Some(changes),
         ..Default::default()
@@ -101,6 +103,7 @@ pub fn rename(
 ///
 /// Used to rename occurrences in `.hut` files when the primary rename originates from
 /// a `.hu` file's project.
+#[allow(clippy::mutable_key_type)]
 pub fn rename_cross_project(
     target_name: &str,
     def_source_path: &Path,
@@ -109,6 +112,7 @@ pub fn rename_cross_project(
     token_cache: &HashMap<FileId, Vec<Token>>,
     scan_file_id: FileId,
 ) -> HashMap<Uri, Vec<TextEdit>> {
+    #[allow(clippy::mutable_key_type)]
     let mut changes: HashMap<Uri, Vec<TextEdit>> = HashMap::new();
 
     let file_tokens = match token_cache.get(&scan_file_id) {

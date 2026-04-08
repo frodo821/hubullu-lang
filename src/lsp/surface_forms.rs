@@ -34,8 +34,7 @@ pub fn surface_forms(
     let mut items = Vec::new();
 
     for item_spanned in &file_ast.items {
-        match &item_spanned.node {
-            Item::Entry(entry) => {
+        if let Item::Entry(entry) = &item_spanned.node {
                 for example in &entry.examples {
                     collect_example_surface_forms(
                         &example.tokens, file_id, phase2, source_map, &mut items,
@@ -49,8 +48,6 @@ pub fn surface_forms(
                         collect_ref_surface_form(&cognate.entry, file_id, phase2, source_map, &mut items);
                     }
                 }
-            }
-            _ => {}
         }
     }
 
@@ -171,6 +168,7 @@ fn emit_surface_form_segments(
 }
 
 /// Emit a SurfaceFormItem from accumulated parts and reset state.
+#[allow(clippy::too_many_arguments)]
 fn flush_segment(
     parts: &mut Vec<String>,
     tooltip_parts: &mut Vec<String>,
@@ -316,7 +314,7 @@ mod tests {
         })
     }
 
-    fn mk_lit(text: &str, s: usize, e: usize) -> ast::Token {
+    fn _mk_lit(text: &str, s: usize, e: usize) -> ast::Token {
         ast::Token::Lit(StringLit { node: text.to_string(), span: span(s, e) })
     }
 
@@ -413,25 +411,5 @@ mod tests {
             ], 0, 15),
         ];
         assert_eq!(surface_forms_for(&tokens, &p2), vec!["onetwo"]);
-    }
-}
-
-fn token_span_start(tok: &ast::Token, file_id: FileId) -> Option<usize> {
-    match tok {
-        ast::Token::Ref(r) if r.span.file_id == file_id => Some(r.span.start),
-        ast::Token::Lit(lit) if lit.span.file_id == file_id => Some(lit.span.start),
-        ast::Token::Tag { span, .. } if span.file_id == file_id => Some(span.start),
-        ast::Token::SelfClosingTag { span, .. } if span.file_id == file_id => Some(span.start),
-        _ => None,
-    }
-}
-
-fn token_span_end(tok: &ast::Token, file_id: FileId) -> Option<usize> {
-    match tok {
-        ast::Token::Ref(r) if r.span.file_id == file_id => Some(r.span.end),
-        ast::Token::Lit(lit) if lit.span.file_id == file_id => Some(lit.span.end),
-        ast::Token::Tag { span, .. } if span.file_id == file_id => Some(span.end),
-        ast::Token::SelfClosingTag { span, .. } if span.file_id == file_id => Some(span.end),
-        _ => None,
     }
 }

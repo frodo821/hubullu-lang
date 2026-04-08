@@ -75,7 +75,7 @@ impl<'a> Lexer<'a> {
             if ch == '#' {
                 // # is a comment only if preceded by whitespace or at start of input.
                 // After a non-whitespace char (e.g. `faren#motion`), it's a Hash token.
-                if self.prev_char.is_none() || self.prev_char.map_or(false, |c| c.is_whitespace()) {
+                if self.prev_char.is_none() || self.prev_char.is_some_and(|c| c.is_whitespace()) {
                     while self.pos < self.source.len()
                         && self.source.as_bytes()[self.pos] != b'\n'
                     {

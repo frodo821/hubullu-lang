@@ -57,6 +57,7 @@ pub fn code_actions(
                 character: 0,
             };
 
+            #[allow(clippy::mutable_key_type)]
             let mut changes = HashMap::new();
             changes.insert(uri.clone(), vec![TextEdit {
                 range: Range { start: insert_pos, end: insert_pos },
@@ -91,6 +92,7 @@ pub fn code_actions(
                 let suppress_line = format!("# @suppress entire-file: {}\n", ld.rule);
                 let insert_pos = lsp_types::Position { line: 0, character: 0 };
 
+                #[allow(clippy::mutable_key_type)]
                 let mut changes = HashMap::new();
                 changes.insert(uri.clone(), vec![TextEdit {
                     range: Range { start: insert_pos, end: insert_pos },

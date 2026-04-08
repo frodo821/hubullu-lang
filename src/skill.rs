@@ -61,7 +61,7 @@ pub fn list() -> Result<(), String> {
     let global_root = resolve_global_root().ok();
 
     // header
-    println!("{:<20} {:<9} {:<9} {}", "Name", "Project", "Global", "Description");
+    println!("{:<20} {:<9} {:<9} Description", "Name", "Project", "Global");
     println!("{}", "-".repeat(72));
 
     for skill in SKILLS {

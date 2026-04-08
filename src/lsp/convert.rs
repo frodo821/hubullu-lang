@@ -92,11 +92,7 @@ pub fn path_to_uri(path: &Path) -> Option<Uri> {
 /// Extract a filesystem path from a `file://` URI.
 pub fn uri_to_path(uri: &Uri) -> Option<std::path::PathBuf> {
     let s = uri.as_str();
-    if let Some(path) = s.strip_prefix("file://") {
-        Some(std::path::PathBuf::from(path))
-    } else {
-        None
-    }
+    s.strip_prefix("file://").map(std::path::PathBuf::from)
 }
 
 /// Strip leading `./` and `../` components from an import path so that

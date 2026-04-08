@@ -19,10 +19,10 @@ pub fn document_symbols(parse_result: &ParseResult) -> Vec<DocumentSymbol> {
         .file
         .items
         .iter()
-        .filter_map(|item_spanned| {
+        .map(|item_spanned| {
             let range = convert::span_to_range(&item_spanned.span, source_map);
             match &item_spanned.node {
-                Item::Entry(e) => Some(DocumentSymbol {
+                Item::Entry(e) => DocumentSymbol {
                     name: e.name.node.clone(),
                     detail: Some(entry_detail(e)),
                     kind: SymbolKind::CLASS,
@@ -31,8 +31,8 @@ pub fn document_symbols(parse_result: &ParseResult) -> Vec<DocumentSymbol> {
                     children: Some(entry_children(e, file_id, source_map)),
                     tags: None,
                     deprecated: None,
-                }),
-                Item::Inflection(i) => Some(DocumentSymbol {
+                },
+                Item::Inflection(i) => DocumentSymbol {
                     name: i.name.node.clone(),
                     detail: Some(inflection_detail(i)),
                     kind: SymbolKind::FUNCTION,
@@ -41,8 +41,8 @@ pub fn document_symbols(parse_result: &ParseResult) -> Vec<DocumentSymbol> {
                     children: None,
                     tags: None,
                     deprecated: None,
-                }),
-                Item::TagAxis(t) => Some(DocumentSymbol {
+                },
+                Item::TagAxis(t) => DocumentSymbol {
                     name: t.name.node.clone(),
                     detail: Some(format!("{:?}", t.role.node).to_lowercase()),
                     kind: SymbolKind::ENUM,
@@ -51,8 +51,8 @@ pub fn document_symbols(parse_result: &ParseResult) -> Vec<DocumentSymbol> {
                     children: None,
                     tags: None,
                     deprecated: None,
-                }),
-                Item::Extend(ext) => Some(DocumentSymbol {
+                },
+                Item::Extend(ext) => DocumentSymbol {
                     name: ext.name.node.clone(),
                     detail: Some(format!("on {}", ext.target_axis.node)),
                     kind: SymbolKind::MODULE,
@@ -61,8 +61,8 @@ pub fn document_symbols(parse_result: &ParseResult) -> Vec<DocumentSymbol> {
                     children: Some(extend_children(ext, source_map)),
                     tags: None,
                     deprecated: None,
-                }),
-                Item::PhonRule(p) => Some(DocumentSymbol {
+                },
+                Item::PhonRule(p) => DocumentSymbol {
                     name: p.name.node.clone(),
                     detail: Some(format!(
                         "{} rules",
@@ -74,14 +74,14 @@ pub fn document_symbols(parse_result: &ParseResult) -> Vec<DocumentSymbol> {
                     children: None,
                     tags: None,
                     deprecated: None,
-                }),
+                },
                 Item::Use(imp) | Item::Reference(imp) => {
                     let kind_str = if matches!(&item_spanned.node, Item::Use(_)) {
                         "@use"
                     } else {
                         "@reference"
                     };
-                    Some(DocumentSymbol {
+                    DocumentSymbol {
                         name: format!("{} \"{}\"", kind_str, imp.path.node),
                         detail: None,
                         kind: SymbolKind::NAMESPACE,
@@ -90,7 +90,7 @@ pub fn document_symbols(parse_result: &ParseResult) -> Vec<DocumentSymbol> {
                         children: None,
                         tags: None,
                         deprecated: None,
-                    })
+                    }
                 }
                 Item::Export(exp) => {
                     let sub = if exp.is_use { "use" } else { "reference" };
@@ -99,7 +99,7 @@ pub fn document_symbols(parse_result: &ParseResult) -> Vec<DocumentSymbol> {
                     } else {
                         format!("@export {}", sub)
                     };
-                    Some(DocumentSymbol {
+                    DocumentSymbol {
                         name,
                         detail: None,
                         kind: SymbolKind::NAMESPACE,
@@ -108,9 +108,9 @@ pub fn document_symbols(parse_result: &ParseResult) -> Vec<DocumentSymbol> {
                         children: None,
                         tags: None,
                         deprecated: None,
-                    })
+                    }
                 }
-                Item::Render(_) => Some(DocumentSymbol {
+                Item::Render(_) => DocumentSymbol {
                     name: "@render".into(),
                     detail: None,
                     kind: SymbolKind::PROPERTY,
@@ -119,7 +119,7 @@ pub fn document_symbols(parse_result: &ParseResult) -> Vec<DocumentSymbol> {
                     children: None,
                     tags: None,
                     deprecated: None,
-                }),
+                },
             }
         })
         .collect()
