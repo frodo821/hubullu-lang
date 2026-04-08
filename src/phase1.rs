@@ -173,6 +173,37 @@ impl Phase1Ctx {
         self.load_file_recursive_inner(path, is_use, Some(import_span))
     }
 
+    /// Emit a "circular @use detected" diagnostic.
+    fn emit_circular_use_error(&mut self, import_span: Option<crate::ast::Span>) {
+        let mut diag = Diagnostic::error(format!(
+            "circular @use detected: {}",
+            self.use_stack
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(" -> ")
+        ));
+        if let Some(span) = import_span {
+            diag = diag.with_label(span, "imported here");
+        }
+        self.diagnostics.add(diag);
+    }
+
+    /// Lex and parse a file that has already been added to the source map.
+    fn lex_and_parse(&mut self, file_id: FileId) -> File {
+        let lexer = Lexer::new(self.source_map.source(file_id), file_id);
+        let (tokens, lex_errors) = lexer.tokenize();
+        for e in lex_errors {
+            self.diagnostics.add(e);
+        }
+        let parser = Parser::new(tokens, file_id);
+        let (file, parse_errors) = parser.parse();
+        for e in parse_errors {
+            self.diagnostics.add(e);
+        }
+        file
+    }
+
     /// Classify an import path and dispatch to the appropriate loader.
     fn resolve_import(
         &mut self,
@@ -259,17 +290,7 @@ impl Phase1Ctx {
         self.path_to_id.insert(synthetic, file_id);
 
         // Lex & parse
-        let lexer = Lexer::new(self.source_map.source(file_id), file_id);
-        let (tokens, lex_errors) = lexer.tokenize();
-        for e in lex_errors {
-            self.diagnostics.add(e);
-        }
-
-        let parser = Parser::new(tokens, file_id);
-        let (file, parse_errors) = parser.parse();
-        for e in parse_errors {
-            self.diagnostics.add(e);
-        }
+        let file = self.lex_and_parse(file_id);
 
         // Register local symbols
         for (idx, item) in file.items.iter().enumerate() {
@@ -332,36 +353,14 @@ impl Phase1Ctx {
         // Check if already loaded
         if let Some(&id) = self.path_to_id.get(&path) {
             if is_use && self.use_stack.contains(&path) {
-                let mut diag = Diagnostic::error(format!(
-                    "circular @use detected: {}",
-                    self.use_stack
-                        .iter()
-                        .map(|p| p.display().to_string())
-                        .collect::<Vec<_>>()
-                        .join(" -> ")
-                ));
-                if let Some(span) = import_span {
-                    diag = diag.with_label(span, "imported here");
-                }
-                self.diagnostics.add(diag);
+                self.emit_circular_use_error(import_span);
                 return None;
             }
             return Some(id);
         }
 
         if is_use && self.use_stack.contains(&path) {
-            let mut diag = Diagnostic::error(format!(
-                "circular @use detected: {}",
-                self.use_stack
-                    .iter()
-                    .map(|p| p.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(" -> ")
-            ));
-            if let Some(span) = import_span {
-                diag = diag.with_label(span, "imported here");
-            }
-            self.diagnostics.add(diag);
+            self.emit_circular_use_error(import_span);
             return None;
         }
 
@@ -397,30 +396,10 @@ impl Phase1Ctx {
                 cached_file
             } else {
                 log::debug!("phase1: AST cache miss for {}", path.display());
-                let lexer = Lexer::new(self.source_map.source(file_id), file_id);
-                let (tokens, lex_errors) = lexer.tokenize();
-                for e in lex_errors {
-                    self.diagnostics.add(e);
-                }
-                let parser = Parser::new(tokens, file_id);
-                let (file, parse_errors) = parser.parse();
-                for e in parse_errors {
-                    self.diagnostics.add(e);
-                }
-                file
+                self.lex_and_parse(file_id)
             }
         } else {
-            let lexer = Lexer::new(self.source_map.source(file_id), file_id);
-            let (tokens, lex_errors) = lexer.tokenize();
-            for e in lex_errors {
-                self.diagnostics.add(e);
-            }
-            let parser = Parser::new(tokens, file_id);
-            let (file, parse_errors) = parser.parse();
-            for e in parse_errors {
-                self.diagnostics.add(e);
-            }
-            file
+            self.lex_and_parse(file_id)
         };
 
         // Register local symbols (hoisted declarations)
@@ -580,7 +559,7 @@ impl Phase1Ctx {
                     } else {
                         // Check if the symbol exists but is the wrong kind
                         let source_scope = self.symbol_table.scope(from_file);
-                        let exists_wrong_kind = source_scope.map_or(false, |s| {
+                        let exists_wrong_kind = source_scope.is_some_and(|s| {
                             s.locals.contains_key(name) || s.exports.iter().any(|e| e.local_name == *name)
                         });
                         if exists_wrong_kind {

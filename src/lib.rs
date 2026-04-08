@@ -162,8 +162,6 @@ pub fn lex_source(source: &str, filename: &str) -> (Vec<Token>, Vec<Diagnostic>,
 /// `<output>.cache` file.
 #[cfg(feature = "sqlite")]
 pub fn compile(entry_path: &Path, output_path: &Path) -> Result<(), String> {
-    use std::collections::HashSet;
-
     log::info!("compiling {} → {}", entry_path.display(), output_path.display());
 
     // Load cache (before phase1, so AST cache can be used)
@@ -180,26 +178,10 @@ pub fn compile(entry_path: &Path, output_path: &Path) -> Result<(), String> {
         return Err(p1.diagnostics.render_all(&p1.source_map));
     }
 
-    // Compute Merkle hashes for all items
+    // Compute Merkle hashes and diff against cache
     log::debug!("computing Merkle hashes");
     let merkle = merkle::compute(&p1);
-
-    // Diff: find entries whose Merkle hash changed (or are new)
-    let mut entries_to_resolve: HashSet<(std::path::PathBuf, String)> = HashSet::new();
-    let mut cached_entries: Vec<phase2::ResolvedEntry> = Vec::new();
-
-    for (key, new_hash) in &merkle.entries {
-        if let Some((old_hash, resolved)) = cached_entry_state.get(key) {
-            if old_hash == new_hash {
-                log::trace!("cache hit: {}:{}", key.0.display(), key.1);
-                cached_entries.push(resolved.clone());
-                continue;
-            }
-        }
-        log::trace!("cache miss: {}:{}", key.0.display(), key.1);
-        entries_to_resolve.insert(key.clone());
-    }
-    log::debug!("cache: {} hit(s), {} miss(es)", cached_entries.len(), entries_to_resolve.len());
+    let (entries_to_resolve, cached_entries) = diff_entries(&merkle, &cached_entry_state);
 
     // Phase 2: full if no cache hits at all, incremental otherwise
     let p2 = if cached_entries.is_empty() {
@@ -216,20 +198,8 @@ pub fn compile(entry_path: &Path, output_path: &Path) -> Result<(), String> {
         return Err(p2.diagnostics.render_all(&p1.source_map));
     }
 
-    // Compute output fingerprint from all Merkle entry hashes to detect no-op builds.
-    let output_fingerprint = {
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        let mut sorted_keys: Vec<_> = merkle.entries.keys().collect();
-        sorted_keys.sort();
-        for key in sorted_keys {
-            hasher.update(merkle.entries[key]);
-        }
-        let result: [u8; 32] = hasher.finalize().into();
-        result
-    };
-
-    // Check if emit can be skipped (output unchanged and .huc file exists)
+    // Emit if output changed
+    let output_fingerprint = compute_output_fingerprint(&merkle);
     let prev_fingerprint = cache.as_ref().and_then(|c| c.load_meta("output_fingerprint"));
     let emit_needed = prev_fingerprint.as_deref() != Some(&output_fingerprint[..])
         || !output_path.exists();
@@ -244,7 +214,69 @@ pub fn compile(entry_path: &Path, output_path: &Path) -> Result<(), String> {
         log::info!("emit: skipped (output unchanged)");
     }
 
-    // Update cache (failure is non-fatal)
+    // Persist cache (failure is non-fatal)
+    persist_cache(&cache_path, cache, &p1, &p2, &merkle, &output_fingerprint);
+
+    log::info!("done");
+
+    Ok(())
+}
+
+/// Diff Merkle entry hashes against cached state, returning entries that need
+/// re-resolution and entries that can be reused from cache.
+#[cfg(feature = "sqlite")]
+fn diff_entries(
+    merkle: &merkle::MerkleHashes,
+    cached_entry_state: &std::collections::HashMap<
+        (std::path::PathBuf, String),
+        ([u8; 32], phase2::ResolvedEntry),
+    >,
+) -> (
+    std::collections::HashSet<(std::path::PathBuf, String)>,
+    Vec<phase2::ResolvedEntry>,
+) {
+    let mut entries_to_resolve = std::collections::HashSet::new();
+    let mut cached_entries = Vec::new();
+
+    for (key, new_hash) in &merkle.entries {
+        if let Some((old_hash, resolved)) = cached_entry_state.get(key) {
+            if old_hash == new_hash {
+                log::trace!("cache hit: {}:{}", key.0.display(), key.1);
+                cached_entries.push(resolved.clone());
+                continue;
+            }
+        }
+        log::trace!("cache miss: {}:{}", key.0.display(), key.1);
+        entries_to_resolve.insert(key.clone());
+    }
+    log::debug!("cache: {} hit(s), {} miss(es)", cached_entries.len(), entries_to_resolve.len());
+
+    (entries_to_resolve, cached_entries)
+}
+
+/// Compute a deterministic fingerprint from all Merkle entry hashes.
+#[cfg(feature = "sqlite")]
+fn compute_output_fingerprint(merkle: &merkle::MerkleHashes) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    let mut sorted_keys: Vec<_> = merkle.entries.keys().collect();
+    sorted_keys.sort();
+    for key in sorted_keys {
+        hasher.update(merkle.entries[key]);
+    }
+    hasher.finalize().into()
+}
+
+/// Save entry data, AST cache, and output fingerprint to the cache file.
+#[cfg(feature = "sqlite")]
+fn persist_cache(
+    cache_path: &Path,
+    cache: Option<cache::Cache>,
+    p1: &phase1::Phase1Result,
+    p2: &phase2::Phase2Result,
+    merkle: &merkle::MerkleHashes,
+    output_fingerprint: &[u8; 32],
+) {
     let cache_data: Vec<(std::path::PathBuf, String, [u8; 32], phase2::ResolvedEntry)> = p2
         .entries
         .iter()
@@ -256,7 +288,6 @@ pub fn compile(entry_path: &Path, output_path: &Path) -> Result<(), String> {
         })
         .collect();
 
-    // Collect AST data for cache persistence
     let ast_data: Vec<(std::path::PathBuf, [u8; 32], span::FileId, ast::File)> = p1
         .path_to_id
         .iter()
@@ -267,14 +298,10 @@ pub fn compile(entry_path: &Path, output_path: &Path) -> Result<(), String> {
         })
         .collect();
 
-    if let Some(c) = cache.or_else(|| cache::Cache::open(&cache_path)) {
+    if let Some(c) = cache.or_else(|| cache::Cache::open(cache_path)) {
         let _ = c.save(&cache_data, &ast_data);
-        let _ = c.save_meta("output_fingerprint", &output_fingerprint);
+        let _ = c.save_meta("output_fingerprint", output_fingerprint);
     }
-
-    log::info!("done");
-
-    Ok(())
 }
 
 /// Derive the cache file path from the output path.

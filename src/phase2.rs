@@ -194,7 +194,7 @@ impl<'a> Phase2Ctx<'a> {
 
     fn resolve_extends(&mut self) {
         // First collect all tagaxis definitions
-        for (_file_id, file) in &self.p1.files {
+        for file in self.p1.files.values() {
             for item in &file.items {
                 if let Item::TagAxis(ta) = &item.node {
                     self.axes.entry(ta.name.node.clone()).or_default();
@@ -263,7 +263,7 @@ impl<'a> Phase2Ctx<'a> {
     // -----------------------------------------------------------------------
 
     fn validate_inflections(&mut self) {
-        for (_file_id, file) in &self.p1.files {
+        for file in self.p1.files.values() {
             for item in &file.items {
                 if let Item::Inflection(infl) = &item.node {
                     self.validate_inflection(infl);
@@ -340,7 +340,7 @@ impl<'a> Phase2Ctx<'a> {
     // -----------------------------------------------------------------------
 
     fn collect_inflections(&mut self) {
-        for (_file_id, file) in &self.p1.files {
+        for file in self.p1.files.values() {
             for item in &file.items {
                 if let Item::Inflection(infl) = &item.node {
                     self.inflections.push(ResolvedInflection {
@@ -362,7 +362,7 @@ impl<'a> Phase2Ctx<'a> {
     // -----------------------------------------------------------------------
 
     fn validate_phonrules(&mut self) {
-        for (_file_id, file) in &self.p1.files {
+        for file in self.p1.files.values() {
             for item in &file.items {
                 if let Item::PhonRule(pr) = &item.node {
                     self.validate_phonrule(pr);
@@ -492,7 +492,7 @@ impl<'a> Phase2Ctx<'a> {
             .flat_map(|(&fid, file)| {
                 file.items.iter().filter_map(move |item| {
                     if let Item::Entry(e) = &item.node {
-                        Some((fid, e.clone()))
+                        Some((fid, (**e).clone()))
                     } else {
                         None
                     }
@@ -526,7 +526,7 @@ impl<'a> Phase2Ctx<'a> {
                     if let Item::Entry(e) = &item.node {
                         let key = (path.clone(), e.name.node.clone());
                         if entries_to_resolve.contains(&key) {
-                            Some((fid, e.clone()))
+                            Some((fid, (**e).clone()))
                         } else {
                             None
                         }
@@ -543,6 +543,52 @@ impl<'a> Phase2Ctx<'a> {
     }
 
     fn resolve_entry(&mut self, file_id: FileId, entry: &Entry) {
+        let (headword, headword_scripts) = Self::extract_headword(entry);
+
+        let tags: Vec<(String, String)> = entry
+            .tags
+            .iter()
+            .map(|tc| (tc.axis.node.clone(), tc.value.node.clone()))
+            .collect();
+
+        let (meaning, meanings) = Self::extract_meanings(entry);
+
+        let stems: HashMap<String, String> = entry
+            .stems
+            .iter()
+            .map(|s| (s.name.node.clone(), s.value.node.clone()))
+            .collect();
+
+        let forms = self.expand_inflection_forms(file_id, entry, &stems);
+
+        let inflection_class = match &entry.inflection {
+            Some(EntryInflection::Class(class_name)) => Some(class_name.node.clone()),
+            _ => None,
+        };
+
+        let etymology_proto = entry.etymology.as_ref().and_then(|e| e.proto.as_ref().map(|s| s.node.clone()));
+        let etymology_note = entry.etymology.as_ref().and_then(|e| e.note.as_ref().map(|s| s.node.clone()));
+        let links = Self::collect_links(entry);
+
+        self.entries.push(ResolvedEntry {
+            name: entry.name.node.clone(),
+            source_file: self.p1.source_map.path(file_id).to_path_buf(),
+            headword,
+            headword_scripts,
+            tags,
+            inflection_class,
+            meaning,
+            meanings,
+            stems,
+            forms,
+            links,
+            etymology_proto,
+            etymology_note,
+        });
+    }
+
+    /// Extract the default headword and per-script headword map from an entry.
+    fn extract_headword(entry: &Entry) -> (String, HashMap<String, String>) {
         let headword = match &entry.headword {
             Headword::Simple(s) => s.node.clone(),
             Headword::MultiScript(scripts) => {
@@ -564,13 +610,12 @@ impl<'a> Phase2Ctx<'a> {
                 .collect(),
         };
 
-        let tags: Vec<(String, String)> = entry
-            .tags
-            .iter()
-            .map(|tc| (tc.axis.node.clone(), tc.value.node.clone()))
-            .collect();
+        (headword, headword_scripts)
+    }
 
-        let (meaning, meanings) = match &entry.meaning {
+    /// Extract the primary meaning and the full meanings list from an entry.
+    fn extract_meanings(entry: &Entry) -> (String, Vec<(String, String)>) {
+        match &entry.meaning {
             MeaningDef::Single(s) => (s.node.clone(), Vec::new()),
             MeaningDef::Multiple(entries) => {
                 let first = entries
@@ -583,160 +628,168 @@ impl<'a> Phase2Ctx<'a> {
                     .collect();
                 (first, all)
             }
-        };
+        }
+    }
 
-        // Build stems map
-        let stems: HashMap<String, String> = entry
-            .stems
-            .iter()
-            .map(|s| (s.name.node.clone(), s.value.node.clone()))
-            .collect();
-
-        // Expand forms
+    /// Expand inflection forms for an entry, returning resolved forms.
+    fn expand_inflection_forms(
+        &mut self,
+        file_id: FileId,
+        entry: &Entry,
+        stems: &HashMap<String, String>,
+    ) -> Vec<ResolvedForm> {
         let mut forms = Vec::new();
 
-        if let Some(infl) = &entry.inflection {
-            let (axes, body, stem_reqs, infl_span) = match infl {
-                EntryInflection::Class(class_name) => {
-                    // Find the inflection class
-                    if let Some(infl_def) = self.find_inflection(&class_name.node, file_id) {
-                        let axes: Vec<String> =
-                            infl_def.axes.iter().map(|a| a.node.clone()).collect();
-                        (axes, Some(infl_def.body.clone()), infl_def.required_stems.clone(), Some(infl_def.name.span))
-                    } else {
-                        self.diagnostics.add(
-                            Diagnostic::error(format!(
-                                "inflection class '{}' not found",
-                                class_name.node
-                            ))
-                            .with_label(class_name.span, "not found"),
-                        );
-                        (Vec::new(), None, Vec::new(), None)
-                    }
-                }
-                EntryInflection::Inline(inline) => {
+        let infl = match &entry.inflection {
+            Some(infl) => infl,
+            None => return forms,
+        };
+
+        let (axes, body, stem_reqs, infl_span) = match infl {
+            EntryInflection::Class(class_name) => {
+                if let Some(infl_def) = self.find_inflection(&class_name.node, file_id) {
                     let axes: Vec<String> =
-                        inline.axes.iter().map(|a| a.node.clone()).collect();
-                    (axes, Some(inline.body.clone()), Vec::new(), None)
+                        infl_def.axes.iter().map(|a| a.node.clone()).collect();
+                    (axes, Some(infl_def.body.clone()), infl_def.required_stems.clone(), Some(infl_def.name.span))
+                } else {
+                    self.diagnostics.add(
+                        Diagnostic::error(format!(
+                            "inflection class '{}' not found",
+                            class_name.node
+                        ))
+                        .with_label(class_name.span, "not found"),
+                    );
+                    return forms;
                 }
-            };
+            }
+            EntryInflection::Inline(inline) => {
+                let axes: Vec<String> =
+                    inline.axes.iter().map(|a| a.node.clone()).collect();
+                (axes, Some(inline.body.clone()), Vec::new(), None)
+            }
+        };
 
-            if let Some(body) = body {
-                // Filter out wildcard axes (axes never referenced in any rule
-                // condition or delegate PassThrough). They don't affect form
-                // output, so including them only produces duplicate rows.
-                let referenced = collect_referenced_axes(&body, &entry.forms_override);
-                let effective_axes: Vec<String> = axes
-                    .iter()
-                    .filter(|a| referenced.contains(a.as_str()))
-                    .cloned()
-                    .collect();
+        let body = match body {
+            Some(b) => b,
+            None => return forms,
+        };
 
-                let axis_values: HashMap<String, Vec<String>> = effective_axes
-                    .iter()
-                    .map(|a| {
-                        let vals = self
-                            .axes
-                            .get(a)
-                            .map(|ra| ra.values.clone())
-                            .unwrap_or_default();
-                        (a.clone(), vals)
-                    })
-                    .collect();
+        // Filter out wildcard axes not referenced in any rule condition or delegate.
+        let referenced = collect_referenced_axes(&body, &entry.forms_override);
+        let effective_axes: Vec<String> = axes
+            .iter()
+            .filter(|a| referenced.contains(a.as_str()))
+            .cloned()
+            .collect();
 
-                match enumerate_cells(&effective_axes, &axis_values) {
-                    Ok(cells) => {
-                        // Build struct_stems from required_stems constraints + axis slots
-                        let mut struct_stems: HashMap<String, HashMap<String, String>> = HashMap::new();
-                        for req in &stem_reqs {
-                            if req.constraint.is_empty() { continue; }
-                            let stem_val = match stems.get(&req.name.node) {
-                                Some(v) => v,
-                                None => continue,
-                            };
-                            for cond in &req.constraint {
-                                if let Some(axis) = self.axes.get(&cond.axis.node) {
-                                    if let Some(slot_names) = axis.slots.get(&cond.value.node) {
-                                        if slot_names.is_empty() { continue; }
-                                        let chars: Vec<String> = stem_val.chars().map(|c| c.to_string()).collect();
-                                        if chars.len() != slot_names.len() {
-                                            self.diagnostics.add(
-                                                Diagnostic::error(format!(
-                                                    "stem '{}' has {} characters but axis value '{}' expects {} slots",
-                                                    req.name.node, chars.len(), cond.value.node, slot_names.len()
-                                                ))
-                                                .with_label(req.name.span, "stem length mismatch"),
-                                            );
-                                            continue;
-                                        }
-                                        let slot_map: HashMap<String, String> = slot_names.iter()
-                                            .zip(chars.iter())
-                                            .map(|(name, ch)| (name.clone(), ch.clone()))
-                                            .collect();
-                                        struct_stems.insert(req.name.node.clone(), slot_map);
-                                    }
-                                }
-                            }
-                        }
-                        let resolver = Phase2Resolver { ctx: self, file_id };
-                        let phon_resolver = Phase2PhonResolver { ctx: self, file_id };
-                        let result = match &body {
-                            InflectionBody::Rules(body) => {
-                                evaluate_rules_with_overrides(
-                                    &body.rules, &entry.forms_override, body.apply.as_ref(), &cells, &stems, &struct_stems, &resolver, &phon_resolver,
-                                )
-                            }
-                            InflectionBody::Compose(comp) => {
-                                evaluate_compose(comp, &entry.forms_override, &cells, &stems, &struct_stems, &phon_resolver)
-                            }
-                        };
+        let axis_values: HashMap<String, Vec<String>> = effective_axes
+            .iter()
+            .map(|a| {
+                let vals = self
+                    .axes
+                    .get(a)
+                    .map(|ra| ra.values.clone())
+                    .unwrap_or_default();
+                (a.clone(), vals)
+            })
+            .collect();
 
-                        match result {
-                            Ok(paradigm) => {
-                                for (cell, cell_result) in paradigm.forms {
-                                    if let CellResult::Form(form_str) = cell_result {
-                                        let cell_tags: Vec<(String, String)> =
-                                            cell.tags.into_iter().collect();
-                                        forms.push(ResolvedForm {
-                                            form_str,
-                                            tags: cell_tags,
-                                        });
-                                    }
-                                }
-                            }
-                            Err(errors) => {
-                                for e in errors {
-                                    if e.labels.is_empty() {
-                                        // Defer label-less errors for grouping across entries.
-                                        self.deferred_infl_errors.push((e, infl_span, entry.name.clone()));
-                                    } else {
-                                        let mut e = e;
-                                        e.message = format!(
-                                            "entry '{}': {}", entry.name.node, e.message,
-                                        );
-                                        self.diagnostics.add(e);
-                                    }
-                                }
-                            }
-                        }
+        let cells = match enumerate_cells(&effective_axes, &axis_values) {
+            Ok(cells) => cells,
+            Err(e) => {
+                self.diagnostics.add(e);
+                return forms;
+            }
+        };
+
+        let struct_stems = self.build_struct_stems(&stem_reqs, stems);
+
+        let resolver = Phase2Resolver { ctx: self, file_id };
+        let phon_resolver = Phase2PhonResolver { ctx: self, file_id };
+        let result = match &body {
+            InflectionBody::Rules(body) => {
+                evaluate_rules_with_overrides(
+                    &body.rules, &entry.forms_override, body.apply.as_ref(), &cells, stems, &struct_stems, &resolver, &phon_resolver,
+                )
+            }
+            InflectionBody::Compose(comp) => {
+                evaluate_compose(comp, &entry.forms_override, &cells, stems, &struct_stems, &phon_resolver)
+            }
+        };
+
+        match result {
+            Ok(paradigm) => {
+                for (cell, cell_result) in paradigm.forms {
+                    if let CellResult::Form(form_str) = cell_result {
+                        let cell_tags: Vec<(String, String)> =
+                            cell.tags.into_iter().collect();
+                        forms.push(ResolvedForm {
+                            form_str,
+                            tags: cell_tags,
+                        });
                     }
-                    Err(e) => {
+                }
+            }
+            Err(errors) => {
+                for e in errors {
+                    if e.labels.is_empty() {
+                        self.deferred_infl_errors.push((e, infl_span, entry.name.clone()));
+                    } else {
+                        let mut e = e;
+                        e.message = format!(
+                            "entry '{}': {}", entry.name.node, e.message,
+                        );
                         self.diagnostics.add(e);
                     }
                 }
             }
         }
 
-        // Track inflection class name
-        let inflection_class = match &entry.inflection {
-            Some(EntryInflection::Class(class_name)) => Some(class_name.node.clone()),
-            _ => None,
-        };
+        forms
+    }
 
-        // Collect etymology text and links
-        let etymology_proto = entry.etymology.as_ref().and_then(|e| e.proto.as_ref().map(|s| s.node.clone()));
-        let etymology_note = entry.etymology.as_ref().and_then(|e| e.note.as_ref().map(|s| s.node.clone()));
+    /// Build structural stems mapping from required_stems constraints and axis slots.
+    fn build_struct_stems(
+        &mut self,
+        stem_reqs: &[StemReq],
+        stems: &HashMap<String, String>,
+    ) -> HashMap<String, HashMap<String, String>> {
+        let mut struct_stems: HashMap<String, HashMap<String, String>> = HashMap::new();
+        for req in stem_reqs {
+            if req.constraint.is_empty() { continue; }
+            let stem_val = match stems.get(&req.name.node) {
+                Some(v) => v,
+                None => continue,
+            };
+            for cond in &req.constraint {
+                if let Some(axis) = self.axes.get(&cond.axis.node) {
+                    if let Some(slot_names) = axis.slots.get(&cond.value.node) {
+                        if slot_names.is_empty() { continue; }
+                        let chars: Vec<String> = stem_val.chars().map(|c| c.to_string()).collect();
+                        if chars.len() != slot_names.len() {
+                            self.diagnostics.add(
+                                Diagnostic::error(format!(
+                                    "stem '{}' has {} characters but axis value '{}' expects {} slots",
+                                    req.name.node, chars.len(), cond.value.node, slot_names.len()
+                                ))
+                                .with_label(req.name.span, "stem length mismatch"),
+                            );
+                            continue;
+                        }
+                        let slot_map: HashMap<String, String> = slot_names.iter()
+                            .zip(chars.iter())
+                            .map(|(name, ch)| (name.clone(), ch.clone()))
+                            .collect();
+                        struct_stems.insert(req.name.node.clone(), slot_map);
+                    }
+                }
+            }
+        }
+        struct_stems
+    }
 
+    /// Collect all links (derived_from, cognates, examples) from an entry.
+    fn collect_links(entry: &Entry) -> Vec<ResolvedLink> {
         let mut links = Vec::new();
         if let Some(ety) = &entry.etymology {
             if let Some(derived) = &ety.derived_from {
@@ -762,22 +815,7 @@ impl<'a> Phase2Ctx<'a> {
                 }
             }
         }
-
-        self.entries.push(ResolvedEntry {
-            name: entry.name.node.clone(),
-            source_file: self.p1.source_map.path(file_id).to_path_buf(),
-            headword,
-            headword_scripts,
-            tags,
-            inflection_class,
-            meaning,
-            meanings,
-            stems,
-            forms,
-            links,
-            etymology_proto,
-            etymology_note,
-        });
+        links
     }
 
     /// Emit deferred inflection errors, grouping identical errors across entries.
@@ -839,7 +877,7 @@ impl<'a> Phase2Ctx<'a> {
 
     fn collect_render_config(&self) -> ResolvedRenderConfig {
         let mut config = ResolvedRenderConfig::default();
-        for (_file_id, file) in &self.p1.files {
+        for file in self.p1.files.values() {
             for item in &file.items {
                 if let Item::Render(rc) = &item.node {
                     if let Some(sep) = &rc.separator {
