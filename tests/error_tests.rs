@@ -693,6 +693,31 @@ entry walk {
 }
 
 #[test]
+fn test_render_form_spec_redundant_cells_dedupe() {
+    let hu = r#"
+tagaxis t { role: inflectional }
+tagaxis n { role: inflectional }
+@extend tv for tagaxis t { a {} b {} }
+@extend nv for tagaxis n { x {} y {} }
+inflection cls for {t, n} {
+  requires stems: root
+  [t=a, _] -> `{root}a`
+  [t=b, _] -> `{root}b`
+}
+entry walk {
+  headword: "walk"
+  stems { root: "walk" }
+  inflection_class: cls
+  meaning: "to walk"
+}
+"#;
+    // t=a matches (t=a,n=x)→walka and (t=a,n=y)→walka — same value, dedupe ok
+    let hut = "walk[t=a]";
+    let result = render_resolve(hu, hut).unwrap();
+    assert_eq!(result, "walka");
+}
+
+#[test]
 fn test_render_form_spec_exact_match() {
     let hu = r#"
 tagaxis t { role: inflectional }

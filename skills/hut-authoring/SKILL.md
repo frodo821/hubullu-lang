@@ -267,7 +267,7 @@ en.cat[number=pl] "=" la.feles[case=nom, number=pl]
 
 - Referencing an entry that doesn't exist in any `@reference`'d database
 - Using axis names or values not defined in the `.hu` file's tagaxis declarations
-- Form spec that matches zero or multiple forms (must be unambiguous)
+- Form spec that matches zero cells, or that matches multiple cells with **distinct** values (cells with the same value are deduplicated)
 - Forgetting `@reference` directive (no database to look up entries from)
 - Using `~` without adjacent tokens on both sides
 - Mismatched XML tags (opening tag without matching closing tag)

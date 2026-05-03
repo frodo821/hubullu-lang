@@ -22,8 +22,13 @@ use crate::span::SourceMap;
 // ---------------------------------------------------------------------------
 
 /// Search forms for an entry and find the unique form matching the given
-/// tag conditions (subset match).  Returns an error when zero or multiple
-/// forms match.
+/// tag conditions (subset match).
+///
+/// Multiple cells may match a partial form_spec (e.g. a `_`-wildcarded rule
+/// expands to many cells with identical values). Such matches are deduplicated
+/// by `form_str`: if every matching cell yields the same string, that string
+/// is returned. Only when matching cells yield *distinct* strings is the spec
+/// reported as ambiguous. Returns an error when zero forms match.
 fn find_form_by_spec(
     conn: &Connection,
     db_name: &str,
@@ -48,7 +53,7 @@ fn find_form_by_spec(
         .query([db_name])
         .map_err(|e| format!("query failed: {}", e))?;
 
-    let mut first: Option<String> = None;
+    let mut found: Option<String> = None;
     while let Some(row) = rows.next().map_err(|e| format!("query failed: {}", e))? {
         let form_str: String = row.get(0).map_err(|e| format!("read failed: {}", e))?;
         let tags_str: String = row.get(1).map_err(|e| format!("read failed: {}", e))?;
@@ -64,19 +69,22 @@ fn find_form_by_spec(
             stored.iter().any(|(sk, sv)| sk == rk && sv == rv)
         });
         if all_match {
-            if first.is_some() {
-                let tags_display = format_tags_display(form_spec);
-                return Err(format!(
-                    "{}: entry '{}' has ambiguous form spec [{}]",
-                    location, local_name, tags_display
-                ));
+            match &found {
+                Some(existing) if existing != &form_str => {
+                    let tags_display = format_tags_display(form_spec);
+                    return Err(format!(
+                        "{}: entry '{}' has ambiguous form spec [{}]",
+                        location, local_name, tags_display
+                    ));
+                }
+                Some(_) => {} // same value — silent dedupe
+                None => found = Some(form_str),
             }
-            first = Some(form_str);
         }
     }
 
     let tags_display = format_tags_display(form_spec);
-    first.ok_or_else(|| {
+    found.ok_or_else(|| {
         format!(
             "{}: entry '{}' has no form matching [{}]",
             location, local_name, tags_display
