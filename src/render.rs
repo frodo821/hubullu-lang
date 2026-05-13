@@ -1208,6 +1208,17 @@ mod tests {
         assert!(hut.tokens.len() >= 3);
     }
 
+    // F5: `;` is a statement separator in `.hu` only; `.hut` token lists are
+    // not statement-based, so a `;` should surface as a parse error.
+    #[test]
+    fn test_parse_hut_semicolon_is_error() {
+        let result = parse_hut(r#""a" ; "b""#, "test.hut");
+        assert!(
+            result.is_err(),
+            "expected `;` inside `.hut` to produce a parse error"
+        );
+    }
+
     #[test]
     fn test_parse_hut_with_namespaced_reference() {
         let src = r#"@reference * as en from "english.hu"

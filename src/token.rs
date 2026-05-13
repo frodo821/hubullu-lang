@@ -20,6 +20,7 @@ pub enum TokenKind {
     LParen,    // (
     RParen,    // )
     Colon,     // :
+    Semicolon, // ;
     Comma,     // ,
     Dot,       // .
     Hash,      // #
