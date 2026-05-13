@@ -121,6 +121,19 @@ fn create_schema(conn: &Connection) -> Result<(), Diagnostic> {
             FOREIGN KEY (inflection_id) REFERENCES inflection_meta(id)
         );
 
+        CREATE TABLE IF NOT EXISTS phonrule_meta (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            derived_from TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS phonrule_display (
+            phonrule_id INTEGER NOT NULL,
+            display_lang TEXT NOT NULL,
+            display_text TEXT NOT NULL,
+            FOREIGN KEY (phonrule_id) REFERENCES phonrule_meta(id)
+        );
+
         CREATE TABLE IF NOT EXISTS render_config (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -187,6 +200,24 @@ fn insert_data(conn: &Connection, p2: &Phase2Result) -> Result<(), Diagnostic> {
                 params![infl_id, axis_name],
             )
             .map_err(|e| Diagnostic::error(format!("insert inflection_axes failed: {}", e)))?;
+        }
+    }
+
+    // Insert phonrule metadata (display + derived_from). Informational only;
+    // the compiler does not consult these fields, but downstream tools may.
+    for pr in &p2.phonrules {
+        conn.execute(
+            "INSERT INTO phonrule_meta (name, derived_from) VALUES (?1, ?2)",
+            params![pr.name, pr.derived_from],
+        )
+        .map_err(|e| Diagnostic::error(format!("insert phonrule_meta failed: {}", e)))?;
+        let pr_id = conn.last_insert_rowid();
+        for (lang, text) in &pr.display {
+            conn.execute(
+                "INSERT INTO phonrule_display (phonrule_id, display_lang, display_text) VALUES (?1, ?2, ?3)",
+                params![pr_id, lang, text],
+            )
+            .map_err(|e| Diagnostic::error(format!("insert phonrule_display failed: {}", e)))?;
         }
     }
 

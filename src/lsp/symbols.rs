@@ -66,7 +66,7 @@ pub fn document_symbols(parse_result: &ParseResult) -> Vec<DocumentSymbol> {
                     name: p.name.node.clone(),
                     detail: Some(format!(
                         "{} rules",
-                        p.rules.len()
+                        p.rewrite_rules().count()
                     )),
                     kind: SymbolKind::OPERATOR,
                     range,

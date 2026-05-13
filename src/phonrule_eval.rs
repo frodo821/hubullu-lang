@@ -4,26 +4,82 @@
 //! morpheme-boundary–annotated strings. Morpheme boundaries are marked with
 //! `\0` characters; the engine scans characters near boundaries and applies
 //! context-sensitive rewrite rules.
+//!
+//! Phonrules can also compose other phonrules via `apply IDENT` statements in
+//! their body. Composition is recursive: when evaluating a phonrule whose body
+//! contains `apply Q`, the engine recurses into Q at that point in body order.
+//! Cycle detection happens upstream in phase2; the runtime guards against
+//! missing resolvers and (defensively) recursion depth.
 
 use crate::ast::*;
+use crate::error::Diagnostic;
+use crate::inflection_eval::PhonRuleResolver;
 
 /// Boundary marker character used internally between morphemes.
 pub const BOUNDARY: char = '\0';
 
 /// Apply a phonrule to an input string containing `\0` boundary markers.
+///
+/// This entry point does NOT resolve `apply IDENT` composition (no resolver
+/// available). Body `apply` items are silently skipped — callers wanting
+/// composition support must use [`apply_phonrule_with_resolver`].
 pub fn apply_phonrule(input: &str, phonrule: &PhonRule) -> String {
+    apply_phonrule_inner(input, phonrule, None::<&NullResolver>).unwrap_or_else(|_| input.to_string())
+}
+
+/// Apply a phonrule, resolving any `apply IDENT` body items through `resolver`.
+///
+/// Returns an error diagnostic if a referenced phonrule cannot be resolved.
+pub fn apply_phonrule_with_resolver(
+    input: &str,
+    phonrule: &PhonRule,
+    resolver: &dyn PhonRuleResolver,
+) -> Result<String, Diagnostic> {
+    apply_phonrule_inner(input, phonrule, Some(resolver))
+}
+
+/// No-op resolver type used as a zero-cost placeholder when no resolver is
+/// available. Marker only — never actually called.
+struct NullResolver;
+impl PhonRuleResolver for NullResolver {
+    fn resolve(&self, _name: &str) -> Option<&PhonRule> { None }
+}
+
+fn apply_phonrule_inner<R: PhonRuleResolver + ?Sized>(
+    input: &str,
+    phonrule: &PhonRule,
+    resolver: Option<&R>,
+) -> Result<String, Diagnostic> {
     let mut result = input.to_string();
-    for rule in &phonrule.rules {
-        // Apply iteratively until convergence (for cascading harmony)
-        loop {
-            let next = apply_rewrite_rule(&result, rule, phonrule);
-            if next == result {
-                break;
+    for item in &phonrule.body {
+        match item {
+            PhonBodyItem::Rewrite(rule) => {
+                // Apply iteratively until convergence (for cascading harmony)
+                loop {
+                    let next = apply_rewrite_rule(&result, rule, phonrule);
+                    if next == result {
+                        break;
+                    }
+                    result = next;
+                }
             }
-            result = next;
+            PhonBodyItem::Apply(apply) => {
+                let Some(resolver) = resolver else {
+                    // No resolver: skip composition silently (legacy callers).
+                    continue;
+                };
+                let target = resolver.resolve(&apply.rule.node).ok_or_else(|| {
+                    Diagnostic::error(format!(
+                        "phonrule '{}' not found (referenced from 'apply' in '{}')",
+                        apply.rule.node, phonrule.name.node
+                    ))
+                    .with_label(apply.rule.span, "not found")
+                })?;
+                result = apply_phonrule_inner(&result, target, Some(resolver))?;
+            }
         }
     }
-    result
+    Ok(result)
 }
 
 /// Check if the FROM pattern is an empty literal (insertion rule).
@@ -470,10 +526,17 @@ mod tests {
         Spanned::new(s.to_string(), make_span())
     }
 
+    /// Wrap a list of rewrite rules into a `PhonRule.body` (no `apply` items).
+    fn rewrite_body(rules: Vec<PhonRewriteRule>) -> Vec<PhonBodyItem> {
+        rules.into_iter().map(PhonBodyItem::Rewrite).collect()
+    }
+
     fn make_test_harmony() -> PhonRule {
         // A simplified Turkish vowel harmony phonrule
         PhonRule {
             name: make_ident("harmony"),
+            display: vec![],
+            derived_from: None,
             classes: vec![
                 CharClassDef {
                     name: make_ident("front"),
@@ -509,7 +572,7 @@ mod tests {
                     },
                 },
             ],
-            rules: vec![
+            body: rewrite_body(vec![
                 // V -> to_back / back !back* + !back* _
                 PhonRewriteRule {
                     from: PhonPattern::Class(make_ident("V")),
@@ -525,7 +588,7 @@ mod tests {
                     }),
                     span: make_span(),
                 },
-            ],
+            ]),
             span: make_span(),
         }
     }
@@ -575,6 +638,8 @@ mod tests {
     ) -> PhonRule {
         PhonRule {
             name: make_ident("wb_test"),
+            display: vec![],
+            derived_from: None,
             classes: vec![
                 CharClassDef {
                     name: make_ident("C"),
@@ -585,14 +650,14 @@ mod tests {
                 },
             ],
             maps: vec![],
-            rules: vec![
+            body: rewrite_body(vec![
                 PhonRewriteRule {
                     from,
                     to,
                     context: Some(context),
                     span: make_span(),
                 },
-            ],
+            ]),
             span: make_span(),
         }
     }
@@ -665,16 +730,18 @@ mod tests {
     ) -> PhonRule {
         PhonRule {
             name: make_ident("insert_test"),
+            display: vec![],
+            derived_from: None,
             classes,
             maps: vec![],
-            rules: vec![
+            body: rewrite_body(vec![
                 PhonRewriteRule {
                     from: PhonPattern::Literal(make_string_lit("")),
                     to: PhonReplacement::Literal(make_string_lit(to)),
                     context: Some(context),
                     span: make_span(),
                 },
-            ],
+            ]),
             span: make_span(),
         }
     }
@@ -788,9 +855,11 @@ mod tests {
         // "b" -> "p" / _ (C | $)  (devoice b before consonant or word end)
         let rule = PhonRule {
             name: make_ident("devoice"),
+            display: vec![],
+            derived_from: None,
             classes: vec![consonant_class(), vowel_class()],
             maps: vec![],
-            rules: vec![PhonRewriteRule {
+            body: rewrite_body(vec![PhonRewriteRule {
                 from: PhonPattern::Literal(make_string_lit("b")),
                 to: PhonReplacement::Literal(make_string_lit("p")),
                 context: Some(PhonContext {
@@ -801,7 +870,7 @@ mod tests {
                     ])],
                 }),
                 span: make_span(),
-            }],
+            }]),
             span: make_span(),
         };
         // word-final b → p (matches $)
@@ -817,9 +886,11 @@ mod tests {
         // "k" -> "g" / (^ | V) _  (voice k after vowel or at word start)
         let rule = PhonRule {
             name: make_ident("voice"),
+            display: vec![],
+            derived_from: None,
             classes: vec![consonant_class(), vowel_class()],
             maps: vec![],
-            rules: vec![PhonRewriteRule {
+            body: rewrite_body(vec![PhonRewriteRule {
                 from: PhonPattern::Literal(make_string_lit("k")),
                 to: PhonReplacement::Literal(make_string_lit("g")),
                 context: Some(PhonContext {
@@ -830,7 +901,7 @@ mod tests {
                     right: vec![],
                 }),
                 span: make_span(),
-            }],
+            }]),
             span: make_span(),
         };
         // word-initial k → g (matches ^)
@@ -847,9 +918,11 @@ mod tests {
         // "b" -> "p" / _ (C | V)* $  (devoice b if only C/V follow until end)
         let rule = PhonRule {
             name: make_ident("devoice2"),
+            display: vec![],
+            derived_from: None,
             classes: vec![consonant_class(), vowel_class()],
             maps: vec![],
-            rules: vec![PhonRewriteRule {
+            body: rewrite_body(vec![PhonRewriteRule {
                 from: PhonPattern::Literal(make_string_lit("b")),
                 to: PhonReplacement::Literal(make_string_lit("p")),
                 context: Some(PhonContext {
@@ -863,7 +936,7 @@ mod tests {
                     ],
                 }),
                 span: make_span(),
-            }],
+            }]),
             span: make_span(),
         };
         // All following chars are C or V → devoice
@@ -877,9 +950,11 @@ mod tests {
         // Rule: "k" -> "g" / _ V  (voice k before a vowel)
         let rule = PhonRule {
             name: make_ident("voicing"),
+            display: vec![],
+            derived_from: None,
             classes: vec![vowel_class()],
             maps: vec![],
-            rules: vec![PhonRewriteRule {
+            body: rewrite_body(vec![PhonRewriteRule {
                 from: PhonPattern::Literal(make_string_lit("k")),
                 to: PhonReplacement::Literal(make_string_lit("g")),
                 context: Some(PhonContext {
@@ -887,7 +962,7 @@ mod tests {
                     right: vec![PhonContextElem::Class(make_ident("V"))],
                 }),
                 span: make_span(),
-            }],
+            }]),
             span: make_span(),
         };
         // Without boundary: works normally
@@ -906,9 +981,11 @@ mod tests {
         // Rule: "b" -> "p" / _ "an"
         let rule = PhonRule {
             name: make_ident("lit_cross"),
+            display: vec![],
+            derived_from: None,
             classes: vec![],
             maps: vec![],
-            rules: vec![PhonRewriteRule {
+            body: rewrite_body(vec![PhonRewriteRule {
                 from: PhonPattern::Literal(make_string_lit("b")),
                 to: PhonReplacement::Literal(make_string_lit("p")),
                 context: Some(PhonContext {
@@ -916,7 +993,7 @@ mod tests {
                     right: vec![PhonContextElem::Literal(make_string_lit("an"))],
                 }),
                 span: make_span(),
-            }],
+            }]),
             span: make_span(),
         };
         // Without boundary
@@ -933,9 +1010,11 @@ mod tests {
         // Rule: "s" -> "z" / _ !V  (voice s before non-vowel)
         let rule = PhonRule {
             name: make_ident("neg_cross"),
+            display: vec![],
+            derived_from: None,
             classes: vec![vowel_class()],
             maps: vec![],
-            rules: vec![PhonRewriteRule {
+            body: rewrite_body(vec![PhonRewriteRule {
                 from: PhonPattern::Literal(make_string_lit("s")),
                 to: PhonReplacement::Literal(make_string_lit("z")),
                 context: Some(PhonContext {
@@ -943,12 +1022,140 @@ mod tests {
                     right: vec![PhonContextElem::NegClass(make_ident("V"))],
                 }),
                 span: make_span(),
-            }],
+            }]),
             span: make_span(),
         };
         // s before consonant across boundary
         assert_eq!(strip_boundaries(&apply_phonrule("s\0t", &rule)), "zt");
         // s before vowel across boundary: no change
         assert_eq!(strip_boundaries(&apply_phonrule("s\0a", &rule)), "sa");
+    }
+
+    // =====================================================================
+    // F3: phonrule composition (`apply IDENT` body items) — unit tests.
+    // =====================================================================
+
+    /// Test-only resolver: holds a flat list of phonrules and looks up by name.
+    struct VecResolver {
+        rules: Vec<PhonRule>,
+    }
+    impl PhonRuleResolver for VecResolver {
+        fn resolve(&self, name: &str) -> Option<&PhonRule> {
+            self.rules.iter().find(|r| r.name.node == name)
+        }
+    }
+
+    /// Build a phonrule with the given body items (no classes/maps).
+    fn make_phonrule(name: &str, body: Vec<PhonBodyItem>) -> PhonRule {
+        PhonRule {
+            name: make_ident(name),
+            display: vec![],
+            derived_from: None,
+            classes: vec![],
+            maps: vec![],
+            body,
+            span: make_span(),
+        }
+    }
+
+    /// Build a single rewrite-rule item: `from -> to` (no context).
+    fn rw(from: &str, to: &str) -> PhonBodyItem {
+        PhonBodyItem::Rewrite(PhonRewriteRule {
+            from: PhonPattern::Literal(make_string_lit(from)),
+            to: PhonReplacement::Literal(make_string_lit(to)),
+            context: None,
+            span: make_span(),
+        })
+    }
+
+    /// Build an apply item referencing the named phonrule.
+    fn ap(name: &str) -> PhonBodyItem {
+        PhonBodyItem::Apply(PhonApply {
+            rule: make_ident(name),
+            span: make_span(),
+        })
+    }
+
+    #[test]
+    fn test_f3_compose_two_levels_a_applies_b() {
+        // A: apply B
+        // B: "x" -> "y"
+        // input "fax" → "fay"
+        let b = make_phonrule("B", vec![rw("x", "y")]);
+        let a = make_phonrule("A", vec![ap("B")]);
+        let resolver = VecResolver { rules: vec![b, a.clone()] };
+        let result = apply_phonrule_with_resolver("fax", &a, &resolver).unwrap();
+        assert_eq!(result, "fay");
+    }
+
+    #[test]
+    fn test_f3_compose_three_level_chain() {
+        // A: apply B
+        // B: apply C
+        // C: "a" -> "o"
+        // input "fab" → A → B → C: "a" → "o" → "fob"
+        let c = make_phonrule("C", vec![rw("a", "o")]);
+        let b = make_phonrule("B", vec![ap("C")]);
+        let a = make_phonrule("A", vec![ap("B")]);
+        let resolver = VecResolver { rules: vec![c, b, a.clone()] };
+        let result = apply_phonrule_with_resolver("fab", &a, &resolver).unwrap();
+        assert_eq!(result, "fob");
+    }
+
+    #[test]
+    fn test_f3_compose_apply_and_inline_rewrite_mixed_order() {
+        // A:
+        //   "x" -> "y"      (1st: x → y)
+        //   apply B         (2nd: y → z)
+        //   "z" -> "ZZ"     (3rd: z → ZZ)
+        // B: "y" -> "z"
+        // input "fax":
+        //   step1 "x"→"y" → "fay"
+        //   step2 B: "y"→"z" → "faz"
+        //   step3 "z"→"ZZ" → "faZZ"
+        let b = make_phonrule("B", vec![rw("y", "z")]);
+        let a = make_phonrule(
+            "A",
+            vec![rw("x", "y"), ap("B"), rw("z", "ZZ")],
+        );
+        let resolver = VecResolver { rules: vec![b, a.clone()] };
+        let result = apply_phonrule_with_resolver("fax", &a, &resolver).unwrap();
+        assert_eq!(result, "faZZ");
+    }
+
+    #[test]
+    fn test_f3_compose_order_matters() {
+        // Inverted order: apply B first, then rewrite.
+        // A:
+        //   apply B          (B turns "y" → "z", but no "y" present yet)
+        //   "x" -> "y"       (now "x" → "y" — but B already ran)
+        // Result of A on "fax": A.apply B (no-op) → then "x"→"y" → "fay"
+        let b = make_phonrule("B", vec![rw("y", "z")]);
+        let a = make_phonrule("A", vec![ap("B"), rw("x", "y")]);
+        let resolver = VecResolver { rules: vec![b, a.clone()] };
+        let result = apply_phonrule_with_resolver("fax", &a, &resolver).unwrap();
+        assert_eq!(result, "fay");
+    }
+
+    #[test]
+    fn test_f3_compose_unresolved_apply_errors() {
+        // A applies "Q" which does not exist → error.
+        let a = make_phonrule("A", vec![ap("Q")]);
+        let resolver = VecResolver { rules: vec![a.clone()] };
+        let result = apply_phonrule_with_resolver("fax", &a, &resolver);
+        assert!(result.is_err());
+        let msg = format!("{:?}", result.unwrap_err());
+        assert!(msg.contains("Q") && msg.contains("not found"), "msg = {}", msg);
+    }
+
+    #[test]
+    fn test_f3_legacy_apply_phonrule_skips_apply_items() {
+        // The non-resolver entry point silently skips `apply` items so old
+        // callers don't break. Inline rewrites still run.
+        let a = make_phonrule("A", vec![ap("B"), rw("x", "y")]);
+        // No resolver provided to apply_phonrule — the apply is silently a no-op,
+        // and only the inline rewrite runs.
+        let result = apply_phonrule("fax", &a);
+        assert_eq!(result, "fay");
     }
 }

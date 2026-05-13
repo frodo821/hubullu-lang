@@ -618,16 +618,23 @@ fn classify_phonrule(pr: &ast::PhonRule, fid: FileId, map: &mut HashMap<(usize, 
             put(map, &v.span, fid, VARIABLE);
         }
     }
-    for rule in &pr.rules {
-        if let ast::PhonPattern::Class(c) = &rule.from {
-            put(map, &c.span, fid, TYPE);
-        }
-        if let ast::PhonReplacement::Map(m) = &rule.to {
-            put(map, &m.span, fid, TYPE);
-        }
-        if let Some(ref ctx) = rule.context {
-            classify_phon_context_elems(&ctx.left, fid, map);
-            classify_phon_context_elems(&ctx.right, fid, map);
+    for item in &pr.body {
+        match item {
+            ast::PhonBodyItem::Rewrite(rule) => {
+                if let ast::PhonPattern::Class(c) = &rule.from {
+                    put(map, &c.span, fid, TYPE);
+                }
+                if let ast::PhonReplacement::Map(m) = &rule.to {
+                    put(map, &m.span, fid, TYPE);
+                }
+                if let Some(ref ctx) = rule.context {
+                    classify_phon_context_elems(&ctx.left, fid, map);
+                    classify_phon_context_elems(&ctx.right, fid, map);
+                }
+            }
+            ast::PhonBodyItem::Apply(apply) => {
+                put(map, &apply.rule.span, fid, TYPE);
+            }
         }
     }
 }

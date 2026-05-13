@@ -53,6 +53,10 @@ pub struct Phase2Result {
     pub axes: HashMap<String, ResolvedAxis>,
     /// All resolved inflection class metadata.
     pub inflections: Vec<ResolvedInflection>,
+    /// All resolved phonrule metadata (display, derived_from).
+    /// Empty default for backward compat with old caches.
+    #[cfg_attr(feature = "serialization", serde(default))]
+    pub phonrules: Vec<ResolvedPhonRule>,
     /// All expanded entry data ready for SQLite emission.
     pub entries: Vec<ResolvedEntry>,
     /// Render configuration from `@render` directive.
@@ -102,6 +106,16 @@ pub struct ResolvedInflection {
     pub axes: Vec<String>,
 }
 
+/// Resolved phonrule metadata for emission (display + derived_from).
+/// Informational only; the compiler does not use these fields for evaluation.
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone)]
+pub struct ResolvedPhonRule {
+    pub name: String,
+    pub display: Vec<(String, String)>,
+    pub derived_from: Option<String>,
+}
+
 /// Run phase 2: resolve extends, validate inflections, expand entries, check DAG.
 pub fn run_phase2(p1: &Phase1Result) -> Phase2Result {
     let mut ctx = Phase2Ctx {
@@ -131,6 +145,7 @@ pub fn run_phase2(p1: &Phase1Result) -> Phase2Result {
     Phase2Result {
         axes: ctx.axes,
         inflections: ctx.inflections,
+        phonrules: collect_phonrules(p1),
         entries: ctx.entries,
         render_config,
         diagnostics: ctx.diagnostics,
@@ -170,6 +185,7 @@ pub fn run_phase2_incremental(
     Phase2Result {
         axes: ctx.axes,
         inflections: ctx.inflections,
+        phonrules: collect_phonrules(p1),
         entries: ctx.entries,
         render_config,
         diagnostics: ctx.diagnostics,
@@ -185,6 +201,53 @@ struct Phase2Ctx<'a> {
     /// Inflection errors deferred for grouping by (message, infl_span).
     /// Each element: (base diagnostic, inflection def span, entry name ident).
     deferred_infl_errors: Vec<(Diagnostic, Option<Span>, Ident)>,
+}
+
+/// Collect phonrule metadata (display, derived_from) from all source files.
+/// Pure helper used by both `run_phase2` and `run_phase2_incremental`.
+fn collect_phonrules(p1: &Phase1Result) -> Vec<ResolvedPhonRule> {
+    let mut out = Vec::new();
+    for file in p1.files.values() {
+        for item in &file.items {
+            if let Item::PhonRule(pr) = &item.node {
+                let display = pr
+                    .display
+                    .iter()
+                    .map(|(k, v)| (k.node.clone(), v.node.clone()))
+                    .collect();
+                out.push(ResolvedPhonRule {
+                    name: pr.name.node.clone(),
+                    display,
+                    derived_from: pr.derived_from.as_ref().map(|i| i.node.clone()),
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Free function: resolve a phonrule by name in the scope of `file_id`.
+/// Returns the phonrule and the file_id where it is defined. Borrows directly
+/// from `p1` so that callers can keep the borrow alive across `&mut self`
+/// access on a Phase2Ctx (the borrow comes from p1, not from self).
+fn find_phonrule_in<'a>(
+    p1: &'a Phase1Result,
+    name: &str,
+    file_id: FileId,
+) -> Option<&'a PhonRule> {
+    let scope = p1.symbol_table.scope(file_id)?;
+    for sym in scope.resolve(name) {
+        if sym.kind == SymbolKind::PhonRule {
+            if let Some(file) = p1.files.get(&sym.file_id) {
+                if let Some(item) = file.items.get(sym.item_index) {
+                    if let Item::PhonRule(pr) = &item.node {
+                        return Some(pr);
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 impl<'a> Phase2Ctx<'a> {
@@ -362,16 +425,19 @@ impl<'a> Phase2Ctx<'a> {
     // -----------------------------------------------------------------------
 
     fn validate_phonrules(&mut self) {
-        for file in self.p1.files.values() {
+        for (file_id, file) in &self.p1.files {
             for item in &file.items {
                 if let Item::PhonRule(pr) = &item.node {
-                    self.validate_phonrule(pr);
+                    self.validate_phonrule(pr, *file_id);
                 }
             }
         }
+
+        // Cycle detection across `apply` references.
+        self.detect_phonrule_cycles();
     }
 
-    fn validate_phonrule(&mut self, pr: &PhonRule) {
+    fn validate_phonrule(&mut self, pr: &PhonRule, file_id: FileId) {
         let class_names: HashSet<_> = pr.classes.iter().map(|c| &c.name.node).collect();
 
         // Validate union references
@@ -393,41 +459,153 @@ impl<'a> Phase2Ctx<'a> {
 
         let map_names: HashSet<_> = pr.maps.iter().map(|m| &m.name.node).collect();
 
-        // Validate rewrite rules
-        for rule in &pr.rules {
-            // FROM references
-            if let PhonPattern::Class(name) = &rule.from {
-                if !class_names.contains(&name.node) {
-                    self.diagnostics.add(
-                        Diagnostic::error(format!(
-                            "phonrule '{}': rewrite rule references undefined class '{}'",
-                            pr.name.node, name.node
-                        ))
-                        .with_label(name.span, "undefined class"),
-                    );
-                }
-            }
+        // Validate body items: rewrite rules and apply statements.
+        for item in &pr.body {
+            match item {
+                PhonBodyItem::Rewrite(rule) => {
+                    // FROM references
+                    if let PhonPattern::Class(name) = &rule.from {
+                        if !class_names.contains(&name.node) {
+                            self.diagnostics.add(
+                                Diagnostic::error(format!(
+                                    "phonrule '{}': rewrite rule references undefined class '{}'",
+                                    pr.name.node, name.node
+                                ))
+                                .with_label(name.span, "undefined class"),
+                            );
+                        }
+                    }
 
-            // TO references
-            if let PhonReplacement::Map(name) = &rule.to {
-                if !map_names.contains(&name.node) {
-                    self.diagnostics.add(
-                        Diagnostic::error(format!(
-                            "phonrule '{}': rewrite rule references undefined map '{}'",
-                            pr.name.node, name.node
-                        ))
-                        .with_label(name.span, "undefined map"),
-                    );
-                }
-            }
+                    // TO references
+                    if let PhonReplacement::Map(name) = &rule.to {
+                        if !map_names.contains(&name.node) {
+                            self.diagnostics.add(
+                                Diagnostic::error(format!(
+                                    "phonrule '{}': rewrite rule references undefined map '{}'",
+                                    pr.name.node, name.node
+                                ))
+                                .with_label(name.span, "undefined map"),
+                            );
+                        }
+                    }
 
-            // Context references
-            if let Some(ctx) = &rule.context {
-                for elem in ctx.left.iter().chain(ctx.right.iter()) {
-                    self.validate_context_elem(pr, elem, &class_names);
+                    // Context references
+                    if let Some(ctx) = &rule.context {
+                        for elem in ctx.left.iter().chain(ctx.right.iter()) {
+                            self.validate_context_elem(pr, elem, &class_names);
+                        }
+                    }
+                }
+                PhonBodyItem::Apply(apply) => {
+                    // The referenced phonrule must resolve in this file's scope.
+                    if self.find_phonrule(&apply.rule.node, file_id).is_none() {
+                        self.diagnostics.add(
+                            Diagnostic::error(format!(
+                                "phonrule '{}': apply references undefined phonrule '{}'",
+                                pr.name.node, apply.rule.node
+                            ))
+                            .with_label(apply.rule.span, "undefined phonrule"),
+                        );
+                    }
                 }
             }
         }
+    }
+
+    /// Detect cycles among `apply` references. Each phonrule is the source
+    /// scope for its own `apply` lookups, so the same name may resolve to
+    /// different phonrules depending on the importing file. We DFS from every
+    /// phonrule, threading the source file_id through resolution.
+    fn detect_phonrule_cycles(&mut self) {
+        // Collect all (file_id, phonrule_ref) pairs. The borrow lives via
+        // self.p1 (lifetime 'a), independent of self, so the subsequent
+        // &mut self call into dfs_phonrule is fine.
+        let mut all: Vec<(FileId, &'a PhonRule)> = Vec::new();
+        for (file_id, file) in &self.p1.files {
+            for item in &file.items {
+                if let Item::PhonRule(pr) = &item.node {
+                    all.push((*file_id, pr));
+                }
+            }
+        }
+
+        // Walk each as a root; report cycles using the visited stack.
+        // We key cycle membership by (file_id, phonrule pointer) to avoid
+        // reporting cycles multiple times — once reported, mark seen-cycle pairs.
+        let mut reported: HashSet<(FileId, *const PhonRule)> = HashSet::new();
+
+        for (file_id, root) in all {
+            let mut stack: Vec<(FileId, *const PhonRule, String, Span)> = Vec::new();
+            let mut on_stack: HashSet<(FileId, *const PhonRule)> = HashSet::new();
+            self.dfs_phonrule(file_id, root, &mut stack, &mut on_stack, &mut reported);
+        }
+    }
+
+    fn dfs_phonrule(
+        &mut self,
+        file_id: FileId,
+        pr: &'a PhonRule,
+        stack: &mut Vec<(FileId, *const PhonRule, String, Span)>,
+        on_stack: &mut HashSet<(FileId, *const PhonRule)>,
+        reported: &mut HashSet<(FileId, *const PhonRule)>,
+    ) {
+        let key = (file_id, pr as *const PhonRule);
+        if on_stack.contains(&key) {
+            // Cycle: emit diagnostic if not already reported for this entry node.
+            if !reported.contains(&key) {
+                let names: Vec<&str> = stack
+                    .iter()
+                    .skip_while(|(f, p, _, _)| (*f, *p) != key)
+                    .map(|(_, _, n, _)| n.as_str())
+                    .collect();
+                let mut cycle = names.join(" -> ");
+                if !cycle.is_empty() {
+                    cycle.push_str(&format!(" -> {}", pr.name.node));
+                }
+                // Use the span of the apply statement that closed the cycle if available.
+                let label_span = stack
+                    .last()
+                    .map(|(_, _, _, sp)| *sp)
+                    .unwrap_or(pr.name.span);
+                self.diagnostics.add(
+                    Diagnostic::error(format!(
+                        "phonrule cycle detected: {}",
+                        cycle
+                    ))
+                    .with_label(label_span, "cycle"),
+                );
+                reported.insert(key);
+            }
+            return;
+        }
+
+        on_stack.insert(key);
+        stack.push((file_id, pr as *const PhonRule, pr.name.node.clone(), pr.name.span));
+
+        for apply in pr.applies() {
+            // Resolve directly from p1 so the &PhonRule borrow is independent
+            // of `self` (avoids borrow checker conflict with `&mut self`).
+            if let Some(target) = find_phonrule_in(self.p1, &apply.rule.node, file_id) {
+                // Cycle detection threads the current file_id as the resolution
+                // scope. This matches eval-time behavior (Phase2PhonResolver
+                // is constructed per-entry with that entry's file_id).
+                let saved_last_span = stack.last_mut().map(|t| {
+                    let prev = t.3;
+                    t.3 = apply.rule.span;
+                    prev
+                });
+                self.dfs_phonrule(file_id, target, stack, on_stack, reported);
+                if let Some(prev) = saved_last_span {
+                    if let Some(t) = stack.last_mut() {
+                        t.3 = prev;
+                    }
+                }
+            }
+            // If unresolved, that's already reported by validate_phonrule.
+        }
+
+        stack.pop();
+        on_stack.remove(&key);
     }
 
     fn validate_context_elem(
@@ -460,23 +638,8 @@ impl<'a> Phase2Ctx<'a> {
         }
     }
 
-    fn find_phonrule(&self, name: &str, file_id: FileId) -> Option<&PhonRule> {
-        if let Some(scope) = self.p1.symbol_table.scope(file_id) {
-            let resolved = scope.resolve(name);
-            for sym in resolved {
-                if sym.kind == SymbolKind::PhonRule {
-                    if let Some(file) = self.p1.files.get(&sym.file_id) {
-                        if let Some(item) = file.items.get(sym.item_index) {
-                            if let Item::PhonRule(pr) = &item.node {
-                                return Some(pr);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        None
+    fn find_phonrule(&self, name: &str, file_id: FileId) -> Option<&'a PhonRule> {
+        find_phonrule_in(self.p1, name, file_id)
     }
 
     // -----------------------------------------------------------------------
