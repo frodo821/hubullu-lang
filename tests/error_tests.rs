@@ -93,6 +93,37 @@ fn test_unexpected_character() {
     assert_error_contains(&errors, "expected top-level item");
 }
 
+// F5: semicolons are only legal at top-level statement boundaries.
+// Inside a phonrule body, a stray `;` should surface as a parse error.
+// (`parse_errors` already asserts that diagnostics were produced.)
+#[test]
+fn test_semicolon_inside_phonrule_body() {
+    let _ = parse_errors(r#"phonrule q { "a" -> ; "b" }"#);
+}
+
+#[test]
+fn test_semicolon_inside_tagaxis_field() {
+    let _ = parse_errors(r#"tagaxis tense { role: ; inflectional }"#);
+}
+
+#[test]
+fn test_semicolons_at_top_level_ok() {
+    // Statement-boundary semicolons must NOT produce any errors.
+    let result = hubullu::parse_source(
+        r#"tagaxis a { role: inflectional }; tagaxis b { role: classificatory };"#,
+        "test.hu",
+    );
+    assert!(
+        !result.has_errors(),
+        "unexpected errors: {:?}",
+        result
+            .diagnostics
+            .iter()
+            .map(|d| d.render(&result.source_map))
+            .collect::<Vec<_>>()
+    );
+}
+
 // =========================================================================
 // Parser errors (via parse_source)
 // =========================================================================

@@ -114,6 +114,44 @@ fn test_simple_compile() {
     assert!(entry_id > 0, "entry should have a positive integer ID");
 }
 
+/// F5: same as `test_simple_compile`, but the fixture has `;` separators
+/// sprinkled between top-level declarations. Output should be identical.
+#[test]
+fn test_semicolons_compile() {
+    let input = fixture_path("semicolons/main.hu");
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("semicolons.huc");
+
+    let result = hubullu::compile(&input, &output);
+    assert!(result.is_ok(), "compile failed: {:?}", result.err());
+
+    let conn = Connection::open(&output).unwrap();
+
+    let entry_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM entries", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(entry_count, 2, "expected 2 entries");
+
+    // Same inflected form as the canonical fixture.
+    let form: String = conn
+        .query_row(
+            "SELECT form_str FROM forms WHERE entry_id = (SELECT id FROM entries WHERE name = 'faren') AND tags LIKE '%tense=present%' AND tags LIKE '%number=sg%'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(form, "fars");
+
+    let form_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM forms WHERE entry_id = (SELECT id FROM entries WHERE name = 'faren')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(form_count, 4);
+}
+
 #[test]
 fn test_inline_inflection() {
     let dir = tempfile::tempdir().unwrap();

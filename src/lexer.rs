@@ -182,6 +182,10 @@ impl<'a> Lexer<'a> {
                 self.advance();
                 Some(self.make_token(TokenKind::Colon, start, self.pos))
             }
+            ';' => {
+                self.advance();
+                Some(self.make_token(TokenKind::Semicolon, start, self.pos))
+            }
             ',' => {
                 self.advance();
                 Some(self.make_token(TokenKind::Comma, start, self.pos))
@@ -765,6 +769,36 @@ mod tests {
                 TokenKind::Ident("foo".into()),
                 TokenKind::DoubleSlash,
                 TokenKind::Ident("bar".into()),
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_semicolon() {
+        let tokens = lex("; ;;");
+        assert_eq!(
+            tokens,
+            vec![
+                TokenKind::Semicolon,
+                TokenKind::Semicolon,
+                TokenKind::Semicolon,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_semicolon_between_idents() {
+        let tokens = lex("foo;bar ; baz");
+        assert_eq!(
+            tokens,
+            vec![
+                TokenKind::Ident("foo".into()),
+                TokenKind::Semicolon,
+                TokenKind::Ident("bar".into()),
+                TokenKind::Semicolon,
+                TokenKind::Ident("baz".into()),
                 TokenKind::Eof,
             ]
         );

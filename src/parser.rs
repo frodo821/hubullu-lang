@@ -31,6 +31,8 @@ impl Parser {
     /// Consume the parser and return the AST plus any diagnostics.
     pub fn parse(mut self) -> (File, Vec<Diagnostic>) {
         let mut items = Vec::with_capacity(16);
+        // Allow leading semicolons (also handles an all-semicolon file).
+        self.skip_semicolons();
         while !self.at_eof() {
             match self.parse_item() {
                 Ok(item) => items.push(item),
@@ -39,8 +41,19 @@ impl Parser {
                     self.recover_to_top_level();
                 }
             }
+            // Statement boundary: consume any number of `;` separators.
+            self.skip_semicolons();
         }
         (File { items }, self.errors)
+    }
+
+    /// Consume any consecutive `;` tokens.  Called at statement boundaries
+    /// (top-level item separators).  Semicolons appearing elsewhere are left
+    /// to surface as parse errors.
+    fn skip_semicolons(&mut self) {
+        while matches!(self.peek(), TokenKind::Semicolon) {
+            self.advance();
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -139,10 +152,12 @@ impl Parser {
     }
 
     fn recover_to_top_level(&mut self) {
-        // Skip tokens until we find something that looks like a top-level start.
+        // Skip tokens until we find something that looks like a top-level start
+        // or a semicolon (statement boundary).
         loop {
             match self.peek() {
                 TokenKind::Eof => break,
+                TokenKind::Semicolon => break,
                 TokenKind::AtUse | TokenKind::AtReference | TokenKind::AtExport | TokenKind::AtExtend | TokenKind::AtRender => break,
                 TokenKind::Ident(s) if matches!(s.as_str(), "tagaxis" | "inflection" | "entry" | "phonrule") => {
                     break
@@ -2211,5 +2226,96 @@ mod tests {
             }
             other => panic!("expected Reference, got {:?}", other),
         }
+    }
+
+    // -------------------------------------------------------------------
+    // F5: semicolon statement separator
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_semicolon_between_top_level_items() {
+        let (file, errors) = parse_str(
+            r#"
+            tagaxis tense { role: inflectional };
+            tagaxis number { role: inflectional };
+            "#,
+        );
+        assert!(errors.is_empty(), "errors: {:?}", errors);
+        assert_eq!(file.items.len(), 2);
+    }
+
+    #[test]
+    fn test_semicolon_oneliner() {
+        // Multiple statements on one line separated by `;`.
+        let (file, errors) = parse_str(
+            r#"tagaxis a { role: inflectional }; tagaxis b { role: inflectional }; tagaxis c { role: classificatory }"#,
+        );
+        assert!(errors.is_empty(), "errors: {:?}", errors);
+        assert_eq!(file.items.len(), 3);
+    }
+
+    #[test]
+    fn test_multiple_and_leading_trailing_semicolons() {
+        // Leading, trailing, and consecutive `;` are all benign at top level.
+        let (file, errors) = parse_str(
+            r#";;tagaxis a { role: inflectional } ;;; tagaxis b { role: inflectional } ;;"#,
+        );
+        assert!(errors.is_empty(), "errors: {:?}", errors);
+        assert_eq!(file.items.len(), 2);
+    }
+
+    #[test]
+    fn test_only_semicolons_is_empty_file() {
+        let (file, errors) = parse_str(";;; ; ;");
+        assert!(errors.is_empty(), "errors: {:?}", errors);
+        assert_eq!(file.items.len(), 0);
+    }
+
+    #[test]
+    fn test_semicolon_inside_block_is_error() {
+        // Block-level `;` between phonrule body items is NOT allowed in phase 1.
+        let (_file, errors) = parse_str(
+            r#"phonrule q { "a" -> "b"; "c" -> "d" }"#,
+        );
+        assert!(
+            !errors.is_empty(),
+            "expected error for `;` inside phonrule body"
+        );
+    }
+
+    #[test]
+    fn test_semicolon_inside_field_value_is_error() {
+        // `;` between a field name and value should error.
+        let (_file, errors) = parse_str(
+            r#"tagaxis tense { role: ; inflectional }"#,
+        );
+        assert!(
+            !errors.is_empty(),
+            "expected error for `;` inside field"
+        );
+    }
+
+    #[test]
+    fn test_semicolon_inside_expression_is_error() {
+        // `;` between `->` and the replacement should error.
+        let (_file, errors) = parse_str(
+            r#"phonrule q { "a" -> ; "b" }"#,
+        );
+        assert!(
+            !errors.is_empty(),
+            "expected error for `;` inside rewrite expression"
+        );
+    }
+
+    #[test]
+    fn test_semicolon_inside_parens_is_error() {
+        // `;` inside `[...]` list should error.
+        let (_file, errors) = parse_str(
+            r#"phonrule q { class V = ["a"; "b"] }"#,
+        );
+        assert!(
+            !errors.is_empty(),
+            "expected error for `;` inside bracket list"
+        );
     }
 }
