@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ast::*;
 use crate::error::Diagnostic;
-use crate::phonrule_eval::{apply_phonrule, strip_boundaries, BOUNDARY};
+use crate::phonrule_eval::{apply_phonrule_with_resolver, strip_boundaries, BOUNDARY};
 
 /// A single cell in the paradigm (one combination of axis values).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -324,7 +324,7 @@ fn eval_apply_expr(
                         Diagnostic::error(format!("phonrule '{}' not found", rule.node))
                             .with_label(rule.span, "not found")
                     })?;
-                    Ok(CellResult::Form(apply_phonrule(&s, pr)))
+                    Ok(CellResult::Form(apply_phonrule_with_resolver(&s, pr, phon_resolver)?))
                 }
                 CellResult::Null => Ok(CellResult::Null),
             }
@@ -365,7 +365,7 @@ fn apply_rule_rhs(
             let inner_result = apply_rule_rhs(&inner.node, cell, stems, struct_stems, resolver, phon_resolver, tmpl_cache)?;
             match inner_result {
                 CellResult::Form(s) => {
-                    let applied = apply_phonrule(&s, pr);
+                    let applied = apply_phonrule_with_resolver(&s, pr, phon_resolver)?;
                     Ok(CellResult::Form(applied))
                 }
                 CellResult::Null => Ok(CellResult::Null),
@@ -616,7 +616,7 @@ fn eval_compose_expr(
             })?;
             match eval_compose_expr(inner, slots, cell, stems, struct_stems, phon_resolver)? {
                 Some(s) => {
-                    let applied = apply_phonrule(&s, pr);
+                    let applied = apply_phonrule_with_resolver(&s, pr, phon_resolver)?;
                     Ok(Some(applied))
                 }
                 None => Ok(None),
@@ -867,14 +867,16 @@ mod tests {
         let span = make_span();
         PhonRule {
             name: make_ident(name),
+            display: vec![],
+            derived_from: None,
             classes: vec![],
             maps: vec![],
-            rules: vec![PhonRewriteRule {
+            body: vec![PhonBodyItem::Rewrite(PhonRewriteRule {
                 from: PhonPattern::Literal(Spanned::new(from.to_string(), span)),
                 to: PhonReplacement::Literal(Spanned::new(to.to_string(), span)),
                 context: None,
                 span,
-            }],
+            })],
             span,
         }
     }

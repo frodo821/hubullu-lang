@@ -380,6 +380,49 @@ phonrule pr {
     assert_error_contains(&errors, "context references undefined class");
 }
 
+// -----------------------------------------------------------------------
+// F3: phonrule composition (apply IDENT) errors.
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_f3_phonrule_apply_undefined() {
+    let errors = compile_error("errors/phonrule_apply_undefined.hu");
+    assert_error_contains(&errors, "apply references undefined phonrule");
+    assert_error_contains(&errors, "missing_rule");
+}
+
+#[test]
+fn test_f3_phonrule_direct_cycle() {
+    let errors = compile_error("errors/phonrule_cycle.hu");
+    assert_error_contains(&errors, "phonrule cycle detected");
+}
+
+#[test]
+fn test_f3_phonrule_self_cycle() {
+    let errors = compile_error_from_sources(&[(
+        "main.hu",
+        r#"
+phonrule a {
+  apply a
+}
+"#,
+    )]);
+    assert_error_contains(&errors, "phonrule cycle detected");
+}
+
+#[test]
+fn test_f3_phonrule_three_way_cycle() {
+    let errors = compile_error_from_sources(&[(
+        "main.hu",
+        r#"
+phonrule a { apply b }
+phonrule b { apply c }
+phonrule c { apply a }
+"#,
+    )]);
+    assert_error_contains(&errors, "phonrule cycle detected");
+}
+
 #[test]
 fn test_stem_slot_mismatch() {
     let errors = compile_error_from_sources(&[(

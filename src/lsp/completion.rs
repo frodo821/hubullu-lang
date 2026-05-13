@@ -794,7 +794,7 @@ fn symbol_detail(sym_file_id: FileId, item_index: usize, phase1: &Phase1Result) 
             format!("on {} — {}", ext.target_axis.node, values.join(", "))
         }
         Item::PhonRule(p) => {
-            format!("{} classes, {} rules", p.classes.len(), p.rules.len())
+            format!("{} classes, {} rules", p.classes.len(), p.rewrite_rules().count())
         }
         _ => return None,
     })
@@ -974,7 +974,7 @@ fn format_phonrule_doc(p: &ast::PhonRule) -> String {
     format!(
         "```hubullu\nphonrule {}\n```\n---\n\
          **classes**: {}, **maps**: {}, **rules**: {}",
-        p.name.node, p.classes.len(), p.maps.len(), p.rules.len()
+        p.name.node, p.classes.len(), p.maps.len(), p.rewrite_rules().count()
     )
 }
 

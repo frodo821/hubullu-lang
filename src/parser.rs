@@ -880,27 +880,86 @@ impl Parser {
 
         let mut classes = Vec::new();
         let mut maps = Vec::new();
-        let mut rules = Vec::new();
+        let mut body: Vec<PhonBodyItem> = Vec::new();
+        let mut display: DisplayMap = Vec::new();
+        let mut derived_from: Option<Ident> = None;
 
         while !matches!(self.peek(), TokenKind::RBrace | TokenKind::Eof) {
             if self.at_ident("class") {
                 classes.push(self.parse_char_class()?);
             } else if self.at_ident("map") {
                 maps.push(self.parse_phon_map()?);
+            } else if self.at_ident("apply") && self.is_apply_stmt_ahead() {
+                // `apply IDENT` — compose another phonrule at this position.
+                let apply_start = self.current_span().start;
+                self.advance(); // consume "apply"
+                let rule_name = self.expect_ident()?;
+                body.push(PhonBodyItem::Apply(PhonApply {
+                    rule: rule_name,
+                    span: self.span_from(apply_start),
+                }));
+            } else if self.at_field("display") {
+                // `display: { en: "..." }` — informational metadata.
+                self.advance(); // consume "display"
+                self.expect(&TokenKind::Colon)?;
+                display = self.parse_display_map()?;
+            } else if self.at_field("derived_from") {
+                // `derived_from: IDENT` — informational metadata.
+                self.advance(); // consume "derived_from"
+                self.expect(&TokenKind::Colon)?;
+                derived_from = Some(self.expect_ident()?);
             } else {
                 // Must be a rewrite rule
-                rules.push(self.parse_phon_rewrite_rule()?);
+                body.push(PhonBodyItem::Rewrite(self.parse_phon_rewrite_rule()?));
             }
         }
 
         self.expect(&TokenKind::RBrace)?;
         Ok(PhonRule {
             name,
+            display,
+            derived_from,
             classes,
             maps,
-            rules,
+            body,
             span: self.span_from(start),
         })
+    }
+
+    /// Returns true if the current token is `IDENT` and the very next token is
+    /// `:` — i.e. this is a `field: value` introducer (distinct from a rewrite
+    /// rule that would have `IDENT ->`).
+    fn at_field(&self, name: &str) -> bool {
+        if !self.at_ident(name) {
+            return false;
+        }
+        matches!(
+            self.tokens.get(self.pos + 1).map(|t| &t.node),
+            Some(TokenKind::Colon)
+        )
+    }
+
+    /// Returns true if the current token sequence is `apply IDENT` (and the
+    /// following token is NOT `->`, which would mean `apply` is being used as a
+    /// rewrite-rule LHS class name). Used inside phonrule bodies to
+    /// disambiguate the `apply IDENT` statement from a rewrite rule.
+    fn is_apply_stmt_ahead(&self) -> bool {
+        if !self.at_ident("apply") {
+            return false;
+        }
+        // peek at pos+1 (after "apply") and pos+2 (after the ident)
+        let next = self.tokens.get(self.pos + 1).map(|t| &t.node);
+        let after = self.tokens.get(self.pos + 2).map(|t| &t.node);
+        // If `apply` is followed by `->`, it's a rewrite rule with `apply` as LHS class.
+        if matches!(next, Some(TokenKind::Arrow)) {
+            return false;
+        }
+        // Need `apply IDENT` followed by something that is NOT `->`
+        // (an IDENT followed by -> would mean the IDENT is itself a rewrite LHS).
+        match next {
+            Some(TokenKind::Ident(_)) => !matches!(after, Some(TokenKind::Arrow)),
+            _ => false,
+        }
     }
 
     /// Parse `class NAME = ["a", "b"] | class NAME = A | B`

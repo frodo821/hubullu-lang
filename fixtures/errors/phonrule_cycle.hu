@@ -1,0 +1,9 @@
+# F3: phonrule cycle detection — A apply B, B apply A.
+
+phonrule a {
+  apply b
+}
+
+phonrule b {
+  apply a
+}

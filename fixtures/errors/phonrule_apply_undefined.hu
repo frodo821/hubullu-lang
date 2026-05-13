@@ -1,0 +1,5 @@
+# F3: `apply` references an undefined phonrule.
+
+phonrule a {
+  apply missing_rule
+}

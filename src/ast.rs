@@ -203,14 +203,66 @@ pub struct ExtendValue {
 // ---------------------------------------------------------------------------
 
 /// A `phonrule` block defining phonological rewrite rules.
+///
+/// Class and map definitions are order-independent (lookup tables establishing
+/// names available to rules in this block). Rewrite rules and `apply` statements
+/// share declaration order — they live together in `body` so that mixing them
+/// preserves intent (e.g. `class V = [...]; apply Q; "œ" -> "e"` runs Q before
+/// the rewrite).
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PhonRule {
     pub name: Ident,
+    /// Optional human-readable display names. Informational metadata only.
+    pub display: DisplayMap,
+    /// `derived_from: proto` — informational only, not used by the compiler.
+    pub derived_from: Option<Ident>,
     pub classes: Vec<CharClassDef>,
     pub maps: Vec<PhonMapDef>,
-    pub rules: Vec<PhonRewriteRule>,
+    /// Ordered body items: rewrite rules and `apply <other>` statements,
+    /// interleaved in declaration order.
+    pub body: Vec<PhonBodyItem>,
     pub span: Span,
+}
+
+/// A single ordered body item of a phonrule.
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum PhonBodyItem {
+    Rewrite(PhonRewriteRule),
+    Apply(PhonApply),
+}
+
+/// `apply OTHER` statement inside a phonrule body. Composes another phonrule
+/// into this one at the position the statement appears in body declaration
+/// order.
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PhonApply {
+    pub rule: Ident,
+    pub span: Span,
+}
+
+impl PhonRule {
+    /// Convenience iterator yielding only the rewrite rules in declaration
+    /// order, skipping any `apply` statements. Useful for places that don't
+    /// care about composition semantics (e.g. validation passes that only
+    /// inspect rewrite refs).
+    pub fn rewrite_rules(&self) -> impl Iterator<Item = &PhonRewriteRule> {
+        self.body.iter().filter_map(|it| match it {
+            PhonBodyItem::Rewrite(r) => Some(r),
+            PhonBodyItem::Apply(_) => None,
+        })
+    }
+
+    /// Convenience iterator yielding only the apply statements in declaration
+    /// order.
+    pub fn applies(&self) -> impl Iterator<Item = &PhonApply> {
+        self.body.iter().filter_map(|it| match it {
+            PhonBodyItem::Rewrite(_) => None,
+            PhonBodyItem::Apply(a) => Some(a),
+        })
+    }
 }
 
 /// `class front = ["e", "i"]` or `class V = front | back`

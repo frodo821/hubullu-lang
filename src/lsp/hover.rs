@@ -168,7 +168,7 @@ fn format_tagaxis(t: &ast::TagAxis) -> String {
 fn format_phonrule(p: &ast::PhonRule) -> String {
     let class_count = p.classes.len();
     let map_count = p.maps.len();
-    let rule_count = p.rules.len();
+    let rule_count = p.rewrite_rules().count();
 
     format!(
         "```hubullu\nphonrule {}\n```\n---\n**classes**: {}, **maps**: {}, **rules**: {}",

@@ -1464,6 +1464,105 @@ entry multi {
 }
 
 // =========================================================================
+// F3: phonrule composition end-to-end
+// =========================================================================
+
+/// Compose two phonrules through `apply IDENT` inside a phonrule body, and
+/// verify that the resulting form reflects both rules. Also covers `display:`
+/// and `derived_from:` field parsing / SQLite persistence.
+#[test]
+fn test_f3_phonrule_composition_end_to_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("main.hu");
+    let output = dir.path().join("f3.huc");
+
+    std::fs::write(
+        &input,
+        r#"
+tagaxis tense { role: inflectional }
+@extend tv for tagaxis tense {
+  present {}
+  past {}
+}
+
+phonrule base {
+  "x" -> "y"
+}
+
+phonrule daughter {
+  display: { en: "Daughter dialect" }
+  derived_from: base
+  apply base
+  "y" -> "z"
+}
+
+inflection cls for {tense} {
+  apply daughter(cell)
+  [tense=present] -> `fax`
+  [tense=past] -> `fay`
+}
+
+entry e {
+  headword: "e"
+  inflection_class: cls
+  meaning: "test"
+}
+"#,
+    )
+    .unwrap();
+
+    let result = hubullu::compile(&input, &output);
+    assert!(result.is_ok(), "compile failed: {:?}", result.err());
+
+    let conn = Connection::open(&output).unwrap();
+
+    // Form for present: "fax" → daughter applies base ("x"->"y") → "fay" → then rewrite ("y"->"z") → "faz"
+    let present_form: String = conn
+        .query_row(
+            "SELECT form_str FROM forms
+             WHERE entry_id = (SELECT id FROM entries WHERE name = 'e')
+               AND tags LIKE '%tense=present%'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(present_form, "faz", "expected daughter composition to chain base then own rewrite");
+
+    // Form for past: "fay" → daughter: base("x"->"y") is no-op on "fay", then "y"->"z" → "faz"
+    let past_form: String = conn
+        .query_row(
+            "SELECT form_str FROM forms
+             WHERE entry_id = (SELECT id FROM entries WHERE name = 'e')
+               AND tags LIKE '%tense=past%'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(past_form, "faz");
+
+    // Verify phonrule metadata persisted to SQLite.
+    let display_text: String = conn
+        .query_row(
+            "SELECT display_text FROM phonrule_display
+             JOIN phonrule_meta ON phonrule_meta.id = phonrule_display.phonrule_id
+             WHERE phonrule_meta.name = 'daughter' AND display_lang = 'en'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(display_text, "Daughter dialect");
+
+    let derived_from: String = conn
+        .query_row(
+            "SELECT derived_from FROM phonrule_meta WHERE name = 'daughter'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(derived_from, "base");
+}
+
+// =========================================================================
 // Standard library imports (std: scheme)
 // =========================================================================
 

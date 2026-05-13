@@ -46,13 +46,74 @@ pub fn compute(p1: &Phase1Result) -> MerkleHashes {
         entries: HashMap::new(),
     };
 
-    // Phase 1: hash all phonrules (leaf nodes)
-    for_each_item(p1, |_, item| {
-        if let Item::PhonRule(pr) = item {
-            let h = merkle_leaf(pr);
-            hashes.phonrules.insert(pr.name.node.clone(), h);
+    // Phase 1: hash all phonrules. Phonrules can compose other phonrules via
+    // `apply IDENT` body items, so we topologically sort by these edges and
+    // mix dependency hashes in (mirroring inflection-delegate handling).
+    {
+        // Collect (canonical_name → (file_id, &PhonRule)). Names are canonical
+        // (resolved through the symbol table at definition site).
+        let mut pr_items: HashMap<String, (FileId, &PhonRule)> = HashMap::new();
+        for_each_item_with_file(p1, |file_id, item| {
+            if let Item::PhonRule(pr) = item {
+                pr_items.insert(pr.name.node.clone(), (file_id, pr));
+            }
+        });
+
+        // Build apply edges: (depended-on → depender). Resolve names via the
+        // depender's file scope so imported phonrules work.
+        let mut apply_edges: Vec<(String, String)> = Vec::new();
+        for (name, (file_id, pr)) in &pr_items {
+            for apply in pr.applies() {
+                if let Some(canonical) =
+                    resolve_phonrule_name(p1, *file_id, &apply.rule.node)
+                {
+                    apply_edges.push((canonical, name.clone()));
+                }
+            }
         }
-    });
+        // Topological order; on cycle, process in arbitrary order (phase2
+        // reports the cycle as a hard error so caching correctness is moot).
+        let topo_order = match dag::check_dag(&apply_edges) {
+            Ok(sorted) => sorted,
+            Err(_) => pr_items.keys().cloned().collect(),
+        };
+        let ordered: Vec<String> = {
+            let mut v: Vec<String> = topo_order;
+            for name in pr_items.keys() {
+                if !v.contains(name) {
+                    v.push(name.clone());
+                }
+            }
+            v
+        };
+        let mut processed: HashSet<&str> = HashSet::new();
+        for name in &ordered {
+            if processed.contains(name.as_str()) {
+                continue;
+            }
+            processed.insert(name);
+            if let Some((file_id, pr)) = pr_items.get(name) {
+                let self_hash = ast_hash(pr);
+                let mut sha = Sha256::new();
+                sha.update(self_hash.to_le_bytes());
+
+                // Mix in hashes of phonrules referenced via `apply` (sorted).
+                let mut deps: Vec<String> = pr
+                    .applies()
+                    .filter_map(|a| resolve_phonrule_name(p1, *file_id, &a.rule.node))
+                    .collect();
+                deps.sort();
+                deps.dedup();
+                for dep in &deps {
+                    if let Some(h) = hashes.phonrules.get(dep) {
+                        sha.update(h);
+                    }
+                }
+
+                hashes.phonrules.insert(name.clone(), sha.finalize().into());
+            }
+        }
+    }
 
     // Phase 2: hash all tagaxes (leaf nodes)
     for_each_item(p1, |_, item| {
@@ -690,6 +751,40 @@ phonrule pr {
         )]);
 
         assert!(hashes.phonrules.contains_key("pr"));
+    }
+
+    #[test]
+    fn test_phonrule_hash_changes_when_applied_phonrule_changes() {
+        // F3: phonrule A `apply B`. When B's body changes, A's hash must
+        // also change so that downstream entries see fresh data.
+        let (_, h1) = compute_from_sources(&[(
+            "main.hu",
+            r#"
+phonrule b { "x" -> "y" }
+phonrule a {
+  apply b
+  "y" -> "z"
+}
+"#,
+        )]);
+        let (_, h2) = compute_from_sources(&[(
+            "main.hu",
+            r#"
+phonrule b { "x" -> "Y" }
+phonrule a {
+  apply b
+  "y" -> "z"
+}
+"#,
+        )]);
+
+        // b changed → b's hash differs
+        assert_ne!(h1.phonrules["b"], h2.phonrules["b"]);
+        // a depends on b via `apply` → a's hash must differ too
+        assert_ne!(
+            h1.phonrules["a"], h2.phonrules["a"],
+            "phonrule a should be invalidated when applied phonrule b changes"
+        );
     }
 
     #[test]
