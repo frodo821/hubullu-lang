@@ -991,6 +991,292 @@ pub fn read_render_config(ctx: &ResolveContext) -> (String, String) {
 }
 
 // ---------------------------------------------------------------------------
+// Phonrule chain (F1b)
+// ---------------------------------------------------------------------------
+
+/// Per-`.hut` phonrule context. Holds the phase1/phase2 state that backs
+/// `@apply` lookups for the file-level phonrule chain (F1b).
+///
+/// Constructed once per `.hut` render; the `PhonRuleResolver` impl borrows
+/// from the inner `Phase1Result` / `PhonemeInventory`, so the context must
+/// outlive any call to [`apply_phonrule_chain`].
+pub struct HutPhonContext {
+    p1: crate::phase1::Phase1Result,
+    virtual_file_id: crate::span::FileId,
+    inventory: crate::phoneme::PhonemeInventory,
+}
+
+impl HutPhonContext {
+    /// Build the context by running phase1/phase2 against the `.hut` file's
+    /// `@reference` + `@use` directives. Returns `Err` if phase1 emits any
+    /// diagnostic (e.g. missing `@use` target).
+    pub fn build(hut_file: &HutFile, hut_dir: &Path) -> Result<Self, String> {
+        let p1 = crate::phase1::run_phase1_virtual_with_uses(
+            &hut_file.references,
+            &hut_file.uses,
+            hut_dir,
+        );
+        if p1.diagnostics.has_errors() {
+            return Err(p1.diagnostics.render_all(&p1.source_map));
+        }
+        let virtual_path = hut_dir.join("<hut-virtual>");
+        let virtual_file_id = p1
+            .path_to_id
+            .get(&virtual_path)
+            .copied()
+            .ok_or_else(|| "internal: virtual .hut file not registered".to_string())?;
+        let p2 = crate::phase2::run_phase2(&p1);
+        if p2.diagnostics.has_errors() {
+            return Err(p2.diagnostics.render_all(&p1.source_map));
+        }
+        Ok(Self {
+            p1,
+            virtual_file_id,
+            inventory: p2.phonemes,
+        })
+    }
+
+    /// PhonRuleResolver backed by this context.
+    pub fn resolver(&self) -> HutPhonResolver<'_> {
+        HutPhonResolver { ctx: self }
+    }
+}
+
+/// `PhonRuleResolver` implementation backed by a [`HutPhonContext`].
+pub struct HutPhonResolver<'a> {
+    ctx: &'a HutPhonContext,
+}
+
+impl<'a> crate::inflection_eval::PhonRuleResolver for HutPhonResolver<'a> {
+    fn resolve(&self, name: &str) -> Option<&crate::ast::PhonRule> {
+        let scope = self.ctx.p1.symbol_table.scope(self.ctx.virtual_file_id)?;
+        for sym in scope.resolve(name) {
+            if sym.kind == crate::symbol_table::SymbolKind::PhonRule {
+                if let Some(file) = self.ctx.p1.files.get(&sym.file_id) {
+                    if let Some(item) = file.items.get(sym.item_index) {
+                        if let crate::ast::Item::PhonRule(pr) = &item.node {
+                            return Some(pr);
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn inventory(&self) -> Option<&crate::phoneme::PhonemeInventory> {
+        Some(&self.ctx.inventory)
+    }
+}
+
+/// Apply the file-level `@apply` phonrule chain (F1b) to a resolved part list.
+///
+/// `~` (Glue) is reinterpreted as an *agglutination marker*: a maximal run of
+/// `Text`-and-`Glue` parts forms one phonological word. For each phonological
+/// word:
+///   1. concatenate inner `Text` segments with [`phonrule_eval::BOUNDARY`]
+///      (`\0`) markers in place of each `Glue`;
+///   2. apply each phonrule in `apply_chain` order via
+///      [`apply_phonrule_with_resolver`];
+///   3. strip remaining boundary markers and collapse the run into a single
+///      `Text` part (the inner `Glue` markers are consumed — the word is now
+///      one token from the renderer's perspective).
+///
+/// `Newline` / tag parts terminate the current phonological word and are
+/// passed through unchanged. If `apply_chain` is empty the input is returned
+/// untouched — this preserves legacy `.hut` behaviour exactly.
+///
+/// `phonrules` are looked up in `apply_chain` order. Unknown names return an
+/// error string with source location of the `@apply` directive.
+pub fn apply_phonrule_chain(
+    parts: Vec<ResolvedPart>,
+    apply_chain: &[ast::Ident],
+    resolver: &dyn crate::inflection_eval::PhonRuleResolver,
+    source_map: &SourceMap,
+) -> Result<Vec<ResolvedPart>, String> {
+    if apply_chain.is_empty() {
+        return Ok(parts);
+    }
+
+    // Resolve every `@apply IDENT` to its PhonRule up front so we report
+    // missing names with their source location and avoid repeat lookups per
+    // phonological word.
+    let mut rules: Vec<&crate::ast::PhonRule> = Vec::with_capacity(apply_chain.len());
+    for ident in apply_chain {
+        match resolver.resolve(&ident.node) {
+            Some(rule) => rules.push(rule),
+            None => {
+                let at = loc(source_map, &ident.span);
+                return Err(format!(
+                    "{}: @apply refers to undefined phonrule '{}'",
+                    at, ident.node
+                ));
+            }
+        }
+    }
+
+    // Walk parts, grouping maximal Text/Glue runs into phonological words.
+    let mut out: Vec<ResolvedPart> = Vec::with_capacity(parts.len());
+    let mut i = 0;
+    while i < parts.len() {
+        match &parts[i] {
+            ResolvedPart::Text(_) => {
+                // Start of a phonological word. Collect the first Text plus
+                // any (`Glue+Text`) extensions. A `Text` *not* preceded by
+                // `Glue` is a new phonological word, so we stop the run.
+                let mut buf = String::new();
+                let mut have_first = false;
+                while i < parts.len() {
+                    match &parts[i] {
+                        ResolvedPart::Text(s) => {
+                            if have_first {
+                                // Two adjacent Text parts without a Glue
+                                // between them = separate phon words.
+                                break;
+                            }
+                            buf.push_str(s);
+                            have_first = true;
+                            i += 1;
+                        }
+                        ResolvedPart::Glue => {
+                            // Look ahead: extend the word only if the next
+                            // non-Glue part is another Text. Trailing Glue
+                            // (no following Text in the run) breaks out so
+                            // smart_join can still suppress the separator
+                            // the legacy way.
+                            let mut j = i;
+                            while j < parts.len() && matches!(parts[j], ResolvedPart::Glue) {
+                                j += 1;
+                            }
+                            if j < parts.len() {
+                                if let ResolvedPart::Text(s) = &parts[j] {
+                                    buf.push(crate::phonrule_eval::BOUNDARY);
+                                    buf.push_str(s);
+                                    i = j + 1;
+                                    continue;
+                                }
+                            }
+                            break;
+                        }
+                        _ => break,
+                    }
+                }
+                // Apply each phonrule in chain order, then strip boundaries.
+                let mut s = buf;
+                for rule in &rules {
+                    s = crate::phonrule_eval::apply_phonrule_with_resolver(&s, rule, resolver)
+                        .map_err(|d| d.render(source_map))?;
+                }
+                let final_text = crate::phonrule_eval::strip_boundaries(&s);
+                out.push(ResolvedPart::Text(final_text));
+            }
+            ResolvedPart::Glue => {
+                // Leading or stranded Glue (no preceding Text) — pass through
+                // so that smart_join's separator suppression still fires.
+                out.push(ResolvedPart::Glue);
+                i += 1;
+            }
+            ResolvedPart::Newline
+            | ResolvedPart::TagOpen(..)
+            | ResolvedPart::TagClose(_)
+            | ResolvedPart::SelfClosingTag(..) => {
+                out.push(parts[i].clone());
+                i += 1;
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Annotated-part variant of [`apply_phonrule_chain`] for the HTML pipeline.
+///
+/// Behaves identically to the plain version: maximal `Lit`/`Entry`/`Glue`
+/// runs form a phonological word and are collapsed into one `Lit` part after
+/// applying the chain. Any `Entry` annotation in the run is discarded — the
+/// post-phonrule string no longer corresponds to a single dictionary entry,
+/// so emitting a glossary tooltip on it would be misleading.
+pub fn apply_phonrule_chain_annotated(
+    parts: Vec<AnnotatedPart>,
+    apply_chain: &[ast::Ident],
+    resolver: &dyn crate::inflection_eval::PhonRuleResolver,
+    source_map: &SourceMap,
+) -> Result<Vec<AnnotatedPart>, String> {
+    if apply_chain.is_empty() {
+        return Ok(parts);
+    }
+
+    let mut rules: Vec<&crate::ast::PhonRule> = Vec::with_capacity(apply_chain.len());
+    for ident in apply_chain {
+        match resolver.resolve(&ident.node) {
+            Some(rule) => rules.push(rule),
+            None => {
+                let at = loc(source_map, &ident.span);
+                return Err(format!(
+                    "{}: @apply refers to undefined phonrule '{}'",
+                    at, ident.node
+                ));
+            }
+        }
+    }
+
+    fn part_text(part: &AnnotatedPart) -> Option<&str> {
+        match part {
+            AnnotatedPart::Lit(t) | AnnotatedPart::Entry { text: t, .. } => Some(t.as_str()),
+            _ => None,
+        }
+    }
+
+    let mut out: Vec<AnnotatedPart> = Vec::with_capacity(parts.len());
+    let mut i = 0;
+    while i < parts.len() {
+        if part_text(&parts[i]).is_some() {
+            let mut buf = String::new();
+            let mut have_first = false;
+            while i < parts.len() {
+                if let Some(t) = part_text(&parts[i]) {
+                    if have_first {
+                        break;
+                    }
+                    buf.push_str(t);
+                    have_first = true;
+                    i += 1;
+                } else if matches!(parts[i], AnnotatedPart::Glue) {
+                    let mut j = i;
+                    while j < parts.len() && matches!(parts[j], AnnotatedPart::Glue) {
+                        j += 1;
+                    }
+                    if j < parts.len() {
+                        if let Some(t) = part_text(&parts[j]) {
+                            buf.push(crate::phonrule_eval::BOUNDARY);
+                            buf.push_str(t);
+                            i = j + 1;
+                            continue;
+                        }
+                    }
+                    break;
+                } else {
+                    break;
+                }
+            }
+            let mut s = buf;
+            for rule in &rules {
+                s = crate::phonrule_eval::apply_phonrule_with_resolver(&s, rule, resolver)
+                    .map_err(|d| d.render(source_map))?;
+            }
+            let final_text = crate::phonrule_eval::strip_boundaries(&s);
+            out.push(AnnotatedPart::Lit(final_text));
+        } else if matches!(parts[i], AnnotatedPart::Glue) {
+            out.push(AnnotatedPart::Glue);
+            i += 1;
+        } else {
+            out.push(parts[i].clone());
+            i += 1;
+        }
+    }
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
 // Smart join
 // ---------------------------------------------------------------------------
 

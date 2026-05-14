@@ -1616,12 +1616,15 @@ impl Parser {
         Ok(tokens)
     }
 
-    /// Parse a `.hut` file until EOF: leading `@reference` / `@use` directives
-    /// (in any order), then a token list.
+    /// Parse a `.hut` file until EOF: leading `@reference` / `@use` / `@apply`
+    /// directives (in any order), then a token list.
     pub fn parse_token_list_to_eof(mut self) -> (crate::ast::HutFile, Vec<Diagnostic>) {
-        // Parse leading @reference / @use directives (free order, F1a).
+        // Parse leading @reference / @use / @apply directives (free order,
+        // F1a + F1b). `@apply IDENT` records a phonrule name to be applied to
+        // every phonological word in declaration order.
         let mut references = Vec::new();
         let mut uses = Vec::new();
+        let mut apply_chain = Vec::new();
         loop {
             match self.peek() {
                 TokenKind::AtReference => {
@@ -1638,12 +1641,22 @@ impl Parser {
                         Err(diag) => self.errors.push(diag),
                     }
                 }
+                TokenKind::AtApply => {
+                    self.advance();
+                    match self.expect_ident() {
+                        Ok(ident) => apply_chain.push(ident),
+                        Err(diag) => self.errors.push(diag),
+                    }
+                }
                 _ => break,
             }
         }
 
         let tokens = self.parse_hut_tokens(None);
-        (crate::ast::HutFile { references, uses, tokens }, self.errors)
+        (
+            crate::ast::HutFile { references, uses, apply_chain, tokens },
+            self.errors,
+        )
     }
 
     /// Parse hut tokens. If `inside_tag` is Some, stop at the matching `</name>`;

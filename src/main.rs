@@ -242,6 +242,31 @@ fn main() {
                     }
                 };
 
+                // F1b: apply file-level `@apply` phonrule chain, if any.
+                let parts = if hut_file.apply_chain.is_empty() {
+                    parts
+                } else {
+                    let phon_ctx = match hubullu::render::HutPhonContext::build(&hut_file, &hut_dir) {
+                        Ok(c) => c,
+                        Err(msg) => {
+                            eprintln!("{}", msg);
+                            process::exit(1);
+                        }
+                    };
+                    match hubullu::render::apply_phonrule_chain(
+                        parts,
+                        &hut_file.apply_chain,
+                        &phon_ctx.resolver(),
+                        &hut_source_map,
+                    ) {
+                        Ok(p) => p,
+                        Err(msg) => {
+                            eprintln!("{}", msg);
+                            process::exit(1);
+                        }
+                    }
+                };
+
                 let (separator, no_sep_before) = hubullu::render::read_render_config(&ctx);
                 let output = hubullu::render::smart_join(&parts, &separator, &no_sep_before);
                 println!("{}", output);

@@ -674,13 +674,20 @@ pub enum Token {
 // Entry reference (shared)
 // ---------------------------------------------------------------------------
 
-/// Parsed `.hut` file: leading `@reference` / `@use` directives (in any order)
-/// followed by a token list.
+/// Parsed `.hut` file: leading `@reference` / `@use` / `@apply` directives
+/// (in any order) followed by a token list.
+///
+/// `apply_chain` records the file-level `@apply IDENT` directives in
+/// declaration order (F1b). At render time each phonological word (a maximal
+/// run of `~`-connected tokens) is passed through the chain via
+/// [`apply_phonrule_with_resolver`]. Empty `apply_chain` preserves legacy
+/// `.hut` semantics exactly.
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct HutFile {
     pub references: Vec<Import>,
     pub uses: Vec<Import>,
+    pub apply_chain: Vec<Ident>,
     pub tokens: Vec<Token>,
 }
 

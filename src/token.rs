@@ -46,6 +46,7 @@ pub enum TokenKind {
     AtExtend,    // @extend
     AtExport,    // @export
     AtRender,    // @render
+    AtApply,     // @apply
 
     // End of file
     Eof,

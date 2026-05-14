@@ -560,6 +560,7 @@ impl<'a> Lexer<'a> {
             "extend" => TokenKind::AtExtend,
             "export" => TokenKind::AtExport,
             "render" => TokenKind::AtRender,
+            "apply" => TokenKind::AtApply,
             _ => {
                 self.errors.push(
                     Diagnostic::error(format!("unknown directive '@{}'", directive))
