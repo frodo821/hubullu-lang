@@ -17,6 +17,18 @@ pub struct Parser {
     errors: Vec<Diagnostic>,
 }
 
+/// Sentinel for `parse_hut_tokens_inner`: where to stop when recursing into
+/// `@apply` blocks (`}`) or inline phon_calls (`)`).
+#[derive(Debug, Clone, Copy)]
+enum HutStop {
+    /// Run to end of file (top-level token list).
+    Eof,
+    /// Stop at the closing `}` (without consuming it).
+    RBrace,
+    /// Stop at the closing `)` (without consuming it).
+    RParen,
+}
+
 impl Parser {
     /// Create a new parser from a token stream.
     pub fn new(tokens: Vec<Token>, file_id: FileId) -> Self {
@@ -1832,6 +1844,20 @@ impl Parser {
                     }
                 }
                 TokenKind::AtApply => {
+                    // Distinguish file-level `@apply IDENT` (F1b) from a
+                    // block-scoped `@apply IDENT { ... }` (F1c). Look one
+                    // ident ahead and peek for `{`; if present, leave the
+                    // `@apply` for the token-stream parser to handle.
+                    let next_is_block = matches!(
+                        self.tokens.get(self.pos + 1).map(|t| &t.node),
+                        Some(TokenKind::Ident(_))
+                    ) && matches!(
+                        self.tokens.get(self.pos + 2).map(|t| &t.node),
+                        Some(TokenKind::LBrace)
+                    );
+                    if next_is_block {
+                        break;
+                    }
                     self.advance();
                     match self.expect_ident() {
                         Ok(ident) => apply_chain.push(ident),
@@ -1849,9 +1875,31 @@ impl Parser {
         )
     }
 
+    /// Parse hut tokens until `}` (without consuming it). Used for `@apply` blocks (F1c).
+    fn parse_hut_tokens_until_brace(&mut self) -> Vec<crate::ast::Token> {
+        self.parse_hut_tokens_with_stop(HutStop::RBrace)
+    }
+
+    /// Parse hut tokens until `)` (without consuming it). Used for inline phon_call (F1c).
+    fn parse_hut_tokens_until_rparen(&mut self) -> Vec<crate::ast::Token> {
+        self.parse_hut_tokens_with_stop(HutStop::RParen)
+    }
+
+    fn parse_hut_tokens_with_stop(&mut self, stop: HutStop) -> Vec<crate::ast::Token> {
+        self.parse_hut_tokens_inner(None, stop)
+    }
+
     /// Parse hut tokens. If `inside_tag` is Some, stop at the matching `</name>`;
-    /// otherwise parse until EOF.
+    /// otherwise parse until EOF (or the stop sentinel).
     fn parse_hut_tokens(&mut self, inside_tag: Option<&str>) -> Vec<crate::ast::Token> {
+        self.parse_hut_tokens_inner(inside_tag, HutStop::Eof)
+    }
+
+    fn parse_hut_tokens_inner(
+        &mut self,
+        inside_tag: Option<&str>,
+        stop: HutStop,
+    ) -> Vec<crate::ast::Token> {
         let mut tokens = Vec::new();
         loop {
             if self.at_eof() {
@@ -1862,6 +1910,19 @@ impl Parser {
                     )));
                 }
                 break;
+            }
+            match stop {
+                HutStop::Eof => {}
+                HutStop::RBrace => {
+                    if matches!(self.peek(), TokenKind::RBrace) {
+                        break;
+                    }
+                }
+                HutStop::RParen => {
+                    if matches!(self.peek(), TokenKind::RParen) {
+                        break;
+                    }
+                }
             }
 
             // Check for closing tag </name>
@@ -1909,12 +1970,71 @@ impl Parser {
                 }
             }
 
+            // F1c: an `@apply IDENT { ... }` block introduces a scoped
+            // phonrule on top of the active apply stack.
+            if matches!(self.peek(), TokenKind::AtApply) {
+                let start = self.current_span().start;
+                self.advance(); // @apply
+                let rule = match self.expect_ident() {
+                    Ok(id) => id,
+                    Err(diag) => {
+                        self.errors.push(diag);
+                        continue;
+                    }
+                };
+                if !matches!(self.peek(), TokenKind::LBrace) {
+                    self.errors.push(self.error(format!(
+                        "expected '{{' after '@apply {}' inside .hut token stream",
+                        rule.node
+                    )));
+                    continue;
+                }
+                self.advance(); // {
+                let inner = self.parse_hut_tokens_until_brace();
+                if matches!(self.peek(), TokenKind::RBrace) {
+                    self.advance(); // }
+                } else {
+                    self.errors.push(self.error(format!(
+                        "unclosed '@apply {} {{': expected '}}'", rule.node
+                    )));
+                }
+                let span = self.span_from(start);
+                tokens.push(crate::ast::Token::ApplyBlock { rule, inner, span });
+                continue;
+            }
+
             match self.peek() {
                 TokenKind::StringLit(_) => {
                     let s = self.expect_string().unwrap();
                     tokens.push(crate::ast::Token::Lit(s));
                 }
                 TokenKind::Ident(_) => {
+                    // F1c: inline phon_call `f(token_seq)` — a bare identifier
+                    // immediately followed by `(` is parsed as a phonrule
+                    // application rather than an entry reference. Any other
+                    // form (Ident[...], Ident#meaning, etc.) falls through to
+                    // entry_ref parsing.
+                    let next_is_lparen = self
+                        .tokens
+                        .get(self.pos + 1)
+                        .map(|t| matches!(t.node, TokenKind::LParen))
+                        .unwrap_or(false);
+                    if next_is_lparen {
+                        let start = self.current_span().start;
+                        let rule = self.expect_ident().unwrap();
+                        self.advance(); // (
+                        let inner = self.parse_hut_tokens_until_rparen();
+                        if matches!(self.peek(), TokenKind::RParen) {
+                            self.advance(); // )
+                        } else {
+                            self.errors.push(self.error(format!(
+                                "unclosed phon_call '{}( ': expected ')'", rule.node
+                            )));
+                        }
+                        let span = self.span_from(start);
+                        tokens.push(crate::ast::Token::PhonCall { rule, inner, span });
+                        continue;
+                    }
                     match self.parse_entry_ref() {
                         Ok(entry_ref) => tokens.push(crate::ast::Token::Ref(entry_ref)),
                         Err(diag) => {

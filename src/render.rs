@@ -715,6 +715,15 @@ pub enum ResolvedPart {
     TagOpen(String, Vec<(String, String)>),
     TagClose(String),
     SelfClosingTag(String, Vec<(String, String)>),
+    /// F1c marker: `f(` — opens an inline phon_call scope. The outer apply
+    /// stack is ignored inside; only `rule` is applied to the inner phon-word(s).
+    PhonCallStart(ast::Ident),
+    /// F1c marker: `)` — closes the matching [`PhonCallStart`].
+    PhonCallEnd,
+    /// F1c marker: `@apply IDENT {` — pushes `rule` onto the active apply stack.
+    ApplyBlockStart(ast::Ident),
+    /// F1c marker: `}` — pops the matching [`ApplyBlockStart`].
+    ApplyBlockEnd,
 }
 
 /// Metadata about a resolved entry reference (for annotated rendering).
@@ -745,6 +754,14 @@ pub enum AnnotatedPart {
     TagClose(String),
     /// Self-closing XML-like tag: `<br/>` → `SelfClosingTag("br", [])`
     SelfClosingTag(String, Vec<(String, String)>),
+    /// F1c marker: see [`ResolvedPart::PhonCallStart`].
+    PhonCallStart(ast::Ident),
+    /// F1c marker: see [`ResolvedPart::PhonCallEnd`].
+    PhonCallEnd,
+    /// F1c marker: see [`ResolvedPart::ApplyBlockStart`].
+    ApplyBlockStart(ast::Ident),
+    /// F1c marker: see [`ResolvedPart::ApplyBlockEnd`].
+    ApplyBlockEnd,
 }
 
 /// Format an error message with source location (line:col) from a span.
@@ -830,6 +847,16 @@ pub fn resolve(
             }
             ast::Token::SelfClosingTag { name, attrs, .. } => {
                 parts.push(ResolvedPart::SelfClosingTag(name.clone(), attrs.clone()));
+            }
+            ast::Token::PhonCall { rule, inner, .. } => {
+                parts.push(ResolvedPart::PhonCallStart(rule.clone()));
+                parts.extend(resolve(inner, ctx, source_map)?);
+                parts.push(ResolvedPart::PhonCallEnd);
+            }
+            ast::Token::ApplyBlock { rule, inner, .. } => {
+                parts.push(ResolvedPart::ApplyBlockStart(rule.clone()));
+                parts.extend(resolve(inner, ctx, source_map)?);
+                parts.push(ResolvedPart::ApplyBlockEnd);
             }
         }
     }
@@ -938,6 +965,16 @@ pub fn resolve_annotated(
             }
             ast::Token::SelfClosingTag { name, attrs, .. } => {
                 parts.push(AnnotatedPart::SelfClosingTag(name.clone(), attrs.clone()));
+            }
+            ast::Token::PhonCall { rule, inner, .. } => {
+                parts.push(AnnotatedPart::PhonCallStart(rule.clone()));
+                parts.extend(resolve_annotated(inner, ctx, source_map)?);
+                parts.push(AnnotatedPart::PhonCallEnd);
+            }
+            ast::Token::ApplyBlock { rule, inner, .. } => {
+                parts.push(AnnotatedPart::ApplyBlockStart(rule.clone()));
+                parts.extend(resolve_annotated(inner, ctx, source_map)?);
+                parts.push(AnnotatedPart::ApplyBlockEnd);
             }
         }
     }
@@ -1086,6 +1123,16 @@ impl<'a> crate::inflection_eval::PhonRuleResolver for HutPhonResolver<'a> {
 /// passed through unchanged. If `apply_chain` is empty the input is returned
 /// untouched — this preserves legacy `.hut` behaviour exactly.
 ///
+/// F1c semantics:
+///   * `PhonCallStart(rule)..PhonCallEnd` — the inner part list is collapsed
+///     into a *single* phonological word; only `rule` (not the outer chain
+///     or active `@apply` stack) is applied. Nested phon_calls are evaluated
+///     innermost-first.
+///   * `ApplyBlockStart(rule)..ApplyBlockEnd` — `rule` is pushed onto the
+///     active apply stack while evaluating the inner parts. Phonological
+///     words inside the block see the file-level chain followed by every
+///     active block rule in nesting order.
+///
 /// `phonrules` are looked up in `apply_chain` order. Unknown names return an
 /// error string with source location of the `@apply` directive.
 pub fn apply_phonrule_chain(
@@ -1094,29 +1141,26 @@ pub fn apply_phonrule_chain(
     resolver: &dyn crate::inflection_eval::PhonRuleResolver,
     source_map: &SourceMap,
 ) -> Result<Vec<ResolvedPart>, String> {
-    if apply_chain.is_empty() {
+    // Empty file-level chain *and* no F1c markers => legacy fast path
+    // (preserves byte-for-byte behaviour for pre-F1c `.hut` files).
+    let has_f1c = parts.iter().any(|p| {
+        matches!(
+            p,
+            ResolvedPart::PhonCallStart(_)
+                | ResolvedPart::PhonCallEnd
+                | ResolvedPart::ApplyBlockStart(_)
+                | ResolvedPart::ApplyBlockEnd
+        )
+    });
+    if apply_chain.is_empty() && !has_f1c {
         return Ok(parts);
     }
 
-    // Resolve every `@apply IDENT` to its PhonRule up front so we report
-    // missing names with their source location and avoid repeat lookups per
-    // phonological word.
-    let mut rules: Vec<&crate::ast::PhonRule> = Vec::with_capacity(apply_chain.len());
-    for ident in apply_chain {
-        match resolver.resolve(&ident.node) {
-            Some(rule) => rules.push(rule),
-            None => {
-                let at = loc(source_map, &ident.span);
-                return Err(format!(
-                    "{}: @apply refers to undefined phonrule '{}'",
-                    at, ident.node
-                ));
-            }
-        }
-    }
-
-    // Walk parts, grouping maximal Text/Glue runs into phonological words.
     let mut out: Vec<ResolvedPart> = Vec::with_capacity(parts.len());
+    // Active `@apply` block stack. File-level chain is the prefix; block
+    // rules are pushed on top per nesting level.
+    let mut stack: Vec<ast::Ident> = apply_chain.to_vec();
+    let file_level_depth = stack.len();
     let mut i = 0;
     while i < parts.len() {
         match &parts[i] {
@@ -1161,19 +1205,41 @@ pub fn apply_phonrule_chain(
                         _ => break,
                     }
                 }
-                // Apply each phonrule in chain order, then strip boundaries.
-                let mut s = buf;
-                for rule in &rules {
-                    s = crate::phonrule_eval::apply_phonrule_with_resolver(&s, rule, resolver)
-                        .map_err(|d| d.render(source_map))?;
-                }
-                let final_text = crate::phonrule_eval::strip_boundaries(&s);
+                // Apply file-level + active block rules in stack order.
+                let final_text = apply_rules_resolved(&buf, &stack, resolver, source_map)?;
                 out.push(ResolvedPart::Text(final_text));
             }
             ResolvedPart::Glue => {
                 // Leading or stranded Glue (no preceding Text) — pass through
                 // so that smart_join's separator suppression still fires.
                 out.push(ResolvedPart::Glue);
+                i += 1;
+            }
+            ResolvedPart::PhonCallStart(rule) => {
+                // Find matching PhonCallEnd (respecting nested PhonCall and
+                // ApplyBlock pairs). Inner sub-list is evaluated as one
+                // phonological word, with *only* `rule` applied (outer stack
+                // is ignored: explicit phon_call overrides ambient apply).
+                let (end, sub) = take_balanced(&parts, i, true);
+                let single = resolved_to_single_word(&sub, resolver, source_map)?;
+                let just_this = vec![rule.clone()];
+                let final_text = apply_rules_resolved(&single, &just_this, resolver, source_map)?;
+                out.push(ResolvedPart::Text(final_text));
+                i = end + 1; // skip past the matching PhonCallEnd
+            }
+            ResolvedPart::PhonCallEnd => {
+                // Top-level dangling End — should not happen because parser
+                // pairs them. Defensively drop.
+                i += 1;
+            }
+            ResolvedPart::ApplyBlockStart(rule) => {
+                stack.push(rule.clone());
+                i += 1;
+            }
+            ResolvedPart::ApplyBlockEnd => {
+                if stack.len() > file_level_depth {
+                    stack.pop();
+                }
                 i += 1;
             }
             ResolvedPart::Newline
@@ -1186,6 +1252,162 @@ pub fn apply_phonrule_chain(
         }
     }
     Ok(out)
+}
+
+/// Resolve a list of `chain` idents against `resolver`, returning an error
+/// (with source location) on the first unknown name.
+fn resolve_rules<'a>(
+    chain: &[ast::Ident],
+    resolver: &'a dyn crate::inflection_eval::PhonRuleResolver,
+    source_map: &SourceMap,
+) -> Result<Vec<&'a crate::ast::PhonRule>, String> {
+    let mut rules: Vec<&crate::ast::PhonRule> = Vec::with_capacity(chain.len());
+    for ident in chain {
+        match resolver.resolve(&ident.node) {
+            Some(rule) => rules.push(rule),
+            None => {
+                let at = loc(source_map, &ident.span);
+                return Err(format!(
+                    "{}: @apply refers to undefined phonrule '{}'",
+                    at, ident.node
+                ));
+            }
+        }
+    }
+    Ok(rules)
+}
+
+/// Apply each phonrule in `chain` order to a buffer that already contains
+/// the phonological word (with `BOUNDARY` markers between agglutinated
+/// segments), then strip the boundaries.
+fn apply_rules_resolved(
+    buf: &str,
+    chain: &[ast::Ident],
+    resolver: &dyn crate::inflection_eval::PhonRuleResolver,
+    source_map: &SourceMap,
+) -> Result<String, String> {
+    let rules = resolve_rules(chain, resolver, source_map)?;
+    let mut s = buf.to_string();
+    for rule in &rules {
+        s = crate::phonrule_eval::apply_phonrule_with_resolver(&s, rule, resolver)
+            .map_err(|d| d.render(source_map))?;
+    }
+    Ok(crate::phonrule_eval::strip_boundaries(&s))
+}
+
+/// Locate the matching `*End` marker for the `Start` at `start_idx`.
+///
+/// Returns `(end_idx, inner_parts)` where `inner_parts` is a fresh `Vec` of
+/// the parts strictly between the open and close (exclusive). Nested phon_call
+/// and apply_block pairs are balanced. `phon_call` selects which Start/End
+/// kind to balance: `true` for [`ResolvedPart::PhonCallStart`], `false` for
+/// [`ResolvedPart::ApplyBlockStart`].
+fn take_balanced(
+    parts: &[ResolvedPart],
+    start_idx: usize,
+    phon_call: bool,
+) -> (usize, Vec<ResolvedPart>) {
+    let mut depth = 1usize;
+    let mut j = start_idx + 1;
+    while j < parts.len() {
+        match (&parts[j], phon_call) {
+            (ResolvedPart::PhonCallStart(_), true) => depth += 1,
+            (ResolvedPart::PhonCallEnd, true) => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            (ResolvedPart::ApplyBlockStart(_), false) => depth += 1,
+            (ResolvedPart::ApplyBlockEnd, false) => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            _ => {}
+        }
+        j += 1;
+    }
+    let inner = parts[start_idx + 1..j.min(parts.len())].to_vec();
+    (j.min(parts.len()), inner)
+}
+
+/// Collapse a sub-sequence of `ResolvedPart` into a single phonological-word
+/// buffer (with `BOUNDARY` markers between concatenated segments).
+///
+/// Used to evaluate the `inner` of a `PhonCall`: the inner sequence is
+/// forced to *one* phon-word. Inner `PhonCall`s are evaluated recursively
+/// (innermost first) and contribute their finished text; inner `ApplyBlock`s
+/// contribute their inner text under the ambient block rules. Inner `Newline`
+/// and tag parts are skipped (they have no phonological meaning inside a
+/// `phon_call`).
+fn resolved_to_single_word(
+    parts: &[ResolvedPart],
+    resolver: &dyn crate::inflection_eval::PhonRuleResolver,
+    source_map: &SourceMap,
+) -> Result<String, String> {
+    let mut buf = String::new();
+    let mut first = true;
+    let mut i = 0;
+    while i < parts.len() {
+        match &parts[i] {
+            ResolvedPart::Text(s) => {
+                if !first {
+                    buf.push(crate::phonrule_eval::BOUNDARY);
+                }
+                buf.push_str(s);
+                first = false;
+                i += 1;
+            }
+            ResolvedPart::Glue => {
+                // Inside a phon_call, `~` is a boundary marker between
+                // segments — same role as the implicit boundary above. We
+                // just skip it; the next Text segment will emit a boundary.
+                i += 1;
+            }
+            ResolvedPart::PhonCallStart(rule) => {
+                let (end, sub) = take_balanced(parts, i, true);
+                let inner_buf = resolved_to_single_word(&sub, resolver, source_map)?;
+                let just_this = vec![rule.clone()];
+                let inner_text = apply_rules_resolved(&inner_buf, &just_this, resolver, source_map)?;
+                if !first {
+                    buf.push(crate::phonrule_eval::BOUNDARY);
+                }
+                buf.push_str(&inner_text);
+                first = false;
+                i = end + 1;
+            }
+            ResolvedPart::PhonCallEnd => {
+                i += 1;
+            }
+            ResolvedPart::ApplyBlockStart(rule) => {
+                // Inside a phon_call, an inner `@apply` block applies its
+                // rule to its inner segment before that segment is folded
+                // into the surrounding phon-word.
+                let (end, sub) = take_balanced(parts, i, false);
+                let inner_buf = resolved_to_single_word(&sub, resolver, source_map)?;
+                let just_this = vec![rule.clone()];
+                let inner_text = apply_rules_resolved(&inner_buf, &just_this, resolver, source_map)?;
+                if !first {
+                    buf.push(crate::phonrule_eval::BOUNDARY);
+                }
+                buf.push_str(&inner_text);
+                first = false;
+                i = end + 1;
+            }
+            ResolvedPart::ApplyBlockEnd
+            | ResolvedPart::Newline
+            | ResolvedPart::TagOpen(..)
+            | ResolvedPart::TagClose(_)
+            | ResolvedPart::SelfClosingTag(..) => {
+                // Structural / non-phonological parts have no role inside a
+                // phon_call — drop them.
+                i += 1;
+            }
+        }
+    }
+    Ok(buf)
 }
 
 /// Annotated-part variant of [`apply_phonrule_chain`] for the HTML pipeline.
@@ -1201,22 +1423,17 @@ pub fn apply_phonrule_chain_annotated(
     resolver: &dyn crate::inflection_eval::PhonRuleResolver,
     source_map: &SourceMap,
 ) -> Result<Vec<AnnotatedPart>, String> {
-    if apply_chain.is_empty() {
+    let has_f1c = parts.iter().any(|p| {
+        matches!(
+            p,
+            AnnotatedPart::PhonCallStart(_)
+                | AnnotatedPart::PhonCallEnd
+                | AnnotatedPart::ApplyBlockStart(_)
+                | AnnotatedPart::ApplyBlockEnd
+        )
+    });
+    if apply_chain.is_empty() && !has_f1c {
         return Ok(parts);
-    }
-
-    let mut rules: Vec<&crate::ast::PhonRule> = Vec::with_capacity(apply_chain.len());
-    for ident in apply_chain {
-        match resolver.resolve(&ident.node) {
-            Some(rule) => rules.push(rule),
-            None => {
-                let at = loc(source_map, &ident.span);
-                return Err(format!(
-                    "{}: @apply refers to undefined phonrule '{}'",
-                    at, ident.node
-                ));
-            }
-        }
     }
 
     fn part_text(part: &AnnotatedPart) -> Option<&str> {
@@ -1227,6 +1444,8 @@ pub fn apply_phonrule_chain_annotated(
     }
 
     let mut out: Vec<AnnotatedPart> = Vec::with_capacity(parts.len());
+    let mut stack: Vec<ast::Ident> = apply_chain.to_vec();
+    let file_level_depth = stack.len();
     let mut i = 0;
     while i < parts.len() {
         if part_text(&parts[i]).is_some() {
@@ -1258,15 +1477,27 @@ pub fn apply_phonrule_chain_annotated(
                     break;
                 }
             }
-            let mut s = buf;
-            for rule in &rules {
-                s = crate::phonrule_eval::apply_phonrule_with_resolver(&s, rule, resolver)
-                    .map_err(|d| d.render(source_map))?;
-            }
-            let final_text = crate::phonrule_eval::strip_boundaries(&s);
+            let final_text = apply_rules_resolved(&buf, &stack, resolver, source_map)?;
             out.push(AnnotatedPart::Lit(final_text));
         } else if matches!(parts[i], AnnotatedPart::Glue) {
             out.push(AnnotatedPart::Glue);
+            i += 1;
+        } else if let AnnotatedPart::PhonCallStart(rule) = &parts[i] {
+            let (end, sub) = take_balanced_annotated(&parts, i, true);
+            let single = annotated_to_single_word(&sub, resolver, source_map)?;
+            let just_this = vec![rule.clone()];
+            let final_text = apply_rules_resolved(&single, &just_this, resolver, source_map)?;
+            out.push(AnnotatedPart::Lit(final_text));
+            i = end + 1;
+        } else if matches!(&parts[i], AnnotatedPart::PhonCallEnd) {
+            i += 1;
+        } else if let AnnotatedPart::ApplyBlockStart(rule) = &parts[i] {
+            stack.push(rule.clone());
+            i += 1;
+        } else if matches!(&parts[i], AnnotatedPart::ApplyBlockEnd) {
+            if stack.len() > file_level_depth {
+                stack.pop();
+            }
             i += 1;
         } else {
             out.push(parts[i].clone());
@@ -1274,6 +1505,99 @@ pub fn apply_phonrule_chain_annotated(
         }
     }
     Ok(out)
+}
+
+/// Annotated-part counterpart to [`take_balanced`].
+fn take_balanced_annotated(
+    parts: &[AnnotatedPart],
+    start_idx: usize,
+    phon_call: bool,
+) -> (usize, Vec<AnnotatedPart>) {
+    let mut depth = 1usize;
+    let mut j = start_idx + 1;
+    while j < parts.len() {
+        match (&parts[j], phon_call) {
+            (AnnotatedPart::PhonCallStart(_), true) => depth += 1,
+            (AnnotatedPart::PhonCallEnd, true) => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            (AnnotatedPart::ApplyBlockStart(_), false) => depth += 1,
+            (AnnotatedPart::ApplyBlockEnd, false) => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            _ => {}
+        }
+        j += 1;
+    }
+    let inner = parts[start_idx + 1..j.min(parts.len())].to_vec();
+    (j.min(parts.len()), inner)
+}
+
+/// Annotated-part counterpart to [`resolved_to_single_word`].
+fn annotated_to_single_word(
+    parts: &[AnnotatedPart],
+    resolver: &dyn crate::inflection_eval::PhonRuleResolver,
+    source_map: &SourceMap,
+) -> Result<String, String> {
+    let mut buf = String::new();
+    let mut first = true;
+    let mut i = 0;
+    while i < parts.len() {
+        match &parts[i] {
+            AnnotatedPart::Lit(s) | AnnotatedPart::Entry { text: s, .. } => {
+                if !first {
+                    buf.push(crate::phonrule_eval::BOUNDARY);
+                }
+                buf.push_str(s);
+                first = false;
+                i += 1;
+            }
+            AnnotatedPart::Glue => {
+                i += 1;
+            }
+            AnnotatedPart::PhonCallStart(rule) => {
+                let (end, sub) = take_balanced_annotated(parts, i, true);
+                let inner_buf = annotated_to_single_word(&sub, resolver, source_map)?;
+                let just_this = vec![rule.clone()];
+                let inner_text = apply_rules_resolved(&inner_buf, &just_this, resolver, source_map)?;
+                if !first {
+                    buf.push(crate::phonrule_eval::BOUNDARY);
+                }
+                buf.push_str(&inner_text);
+                first = false;
+                i = end + 1;
+            }
+            AnnotatedPart::PhonCallEnd => {
+                i += 1;
+            }
+            AnnotatedPart::ApplyBlockStart(rule) => {
+                let (end, sub) = take_balanced_annotated(parts, i, false);
+                let inner_buf = annotated_to_single_word(&sub, resolver, source_map)?;
+                let just_this = vec![rule.clone()];
+                let inner_text = apply_rules_resolved(&inner_buf, &just_this, resolver, source_map)?;
+                if !first {
+                    buf.push(crate::phonrule_eval::BOUNDARY);
+                }
+                buf.push_str(&inner_text);
+                first = false;
+                i = end + 1;
+            }
+            AnnotatedPart::ApplyBlockEnd
+            | AnnotatedPart::Newline
+            | AnnotatedPart::TagOpen(..)
+            | AnnotatedPart::TagClose(_)
+            | AnnotatedPart::SelfClosingTag(..) => {
+                i += 1;
+            }
+        }
+    }
+    Ok(buf)
 }
 
 // ---------------------------------------------------------------------------
@@ -1339,6 +1663,12 @@ impl PartRenderer for PlainTextRenderer {
                 AnnotatedPart::TagOpen(..)
                 | AnnotatedPart::TagClose(_)
                 | AnnotatedPart::SelfClosingTag(..) => {}
+                // F1c markers — consumed by `apply_phonrule_chain_annotated`;
+                // any residual markers are dropped silently.
+                AnnotatedPart::PhonCallStart(_)
+                | AnnotatedPart::PhonCallEnd
+                | AnnotatedPart::ApplyBlockStart(_)
+                | AnnotatedPart::ApplyBlockEnd => {}
             }
         }
         result
@@ -1380,6 +1710,13 @@ pub fn smart_join(parts: &[ResolvedPart], separator: &str, no_sep_before: &str) 
             ResolvedPart::TagOpen(..)
             | ResolvedPart::TagClose(_)
             | ResolvedPart::SelfClosingTag(..) => {}
+            // F1c markers should already be consumed by `apply_phonrule_chain`.
+            // If they reach this point (e.g. when the chain is empty), drop
+            // them silently — they have no plain-text representation.
+            ResolvedPart::PhonCallStart(_)
+            | ResolvedPart::PhonCallEnd
+            | ResolvedPart::ApplyBlockStart(_)
+            | ResolvedPart::ApplyBlockEnd => {}
         }
     }
     result
