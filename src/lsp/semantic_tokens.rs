@@ -635,8 +635,13 @@ fn classify_phonrule(pr: &ast::PhonRule, fid: FileId, map: &mut HashMap<(usize, 
     for item in &pr.body {
         match item {
             ast::PhonBodyItem::Rewrite(rule) => {
-                if let ast::PhonPattern::Class(c) = &rule.from {
-                    put(map, &c.span, fid, TYPE);
+                match &rule.from {
+                    ast::PhonPattern::Class(c) => put(map, &c.span, fid, TYPE),
+                    ast::PhonPattern::Literal(_) => {}
+                    // F8: an LHS range — paint each element like a context elem.
+                    ast::PhonPattern::Range(elems) => {
+                        classify_phon_context_elems(elems, fid, map);
+                    }
                 }
                 if let ast::PhonReplacement::Map(m) = &rule.to {
                     put(map, &m.span, fid, TYPE);
@@ -693,6 +698,12 @@ fn classify_phon_atom(atom: &ast::PhonAtom, fid: FileId, map: &mut HashMap<(usiz
         ast::PhonAtom::Alt(alts) => {
             for alt in alts {
                 classify_phon_context_elem(alt, fid, map);
+            }
+        }
+        // F8: a `%syl[...]%` block atom — recurse into its inner sequence.
+        ast::PhonAtom::SylBlock(inner) => {
+            for elem in inner {
+                classify_phon_context_elem(elem, fid, map);
             }
         }
         ast::PhonAtom::Literal(_) | ast::PhonAtom::Wildcard => {}

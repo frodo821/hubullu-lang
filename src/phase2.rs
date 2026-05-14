@@ -654,15 +654,29 @@ impl<'a> Phase2Ctx<'a> {
             match item {
                 PhonBodyItem::Rewrite(rule) => {
                     // FROM references
-                    if let PhonPattern::Class(name) = &rule.from {
-                        if !is_class_like(&name.node) {
-                            self.diagnostics.add(
-                                Diagnostic::error(format!(
-                                    "phonrule '{}': rewrite rule references undefined class '{}'",
-                                    pr.name.node, name.node
-                                ))
-                                .with_label(name.span, "undefined class"),
-                            );
+                    match &rule.from {
+                        PhonPattern::Class(name) => {
+                            if !is_class_like(&name.node) {
+                                self.diagnostics.add(
+                                    Diagnostic::error(format!(
+                                        "phonrule '{}': rewrite rule references undefined class '{}'",
+                                        pr.name.node, name.node
+                                    ))
+                                    .with_label(name.span, "undefined class"),
+                                );
+                            }
+                        }
+                        PhonPattern::Literal(_) => {}
+                        // F8: an LHS range — validate each element's class
+                        // references and `%syl[...]%` block usage just like a
+                        // context element. Quantifier bounds (`{n,m}` n>m) are
+                        // already rejected by the parser.
+                        PhonPattern::Range(elems) => {
+                            for elem in elems {
+                                self.validate_context_elem(
+                                    pr, elem, &class_names, &phoneme_names,
+                                );
+                            }
                         }
                     }
 
@@ -919,6 +933,24 @@ impl<'a> Phase2Ctx<'a> {
             PhonAtom::Alt(alts) => {
                 for alt in alts {
                     self.validate_context_elem(pr, alt, class_names, phoneme_names);
+                }
+            }
+            // F8: a `%syl[ ... ]%` block atom. Like the head/tail anchors it
+            // needs an enclosing `syllable: NAME` field, and its inner element
+            // sequence is validated recursively.
+            PhonAtom::SylBlock(inner) => {
+                if pr.syllable.is_none() {
+                    self.diagnostics.add(
+                        Diagnostic::error(format!(
+                            "phonrule '{}': uses a '%syl[...]%' block but no \
+                             'syllable:' field is set",
+                            pr.name.node
+                        ))
+                        .with_label(pr.name.span, "add 'syllable: NAME' to this phonrule"),
+                    );
+                }
+                for elem in inner {
+                    self.validate_context_elem(pr, elem, class_names, phoneme_names);
                 }
             }
             // Literals and the wildcard `.` need no name resolution.

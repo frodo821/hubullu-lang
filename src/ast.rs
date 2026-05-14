@@ -449,8 +449,19 @@ pub struct PhonRewriteRule {
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PhonPattern {
+    /// v1 single-segment LHS: a phoneme class. One segment wide.
     Class(Ident),
+    /// v1 single-segment LHS: a literal. One match wide; the empty literal is
+    /// an *insertion* rule (`"" -> X`).
     Literal(StringLit),
+    /// F8 LHS range rewrite: a sequence of quantified atoms / `%syl[...]%`
+    /// blocks. The whole matched span is replaced as one unit. Reuses the F6
+    /// [`PhonContextElem`] representation so the F6 match engine
+    /// (`match_seq` / `consume_atom` / `match_atom_quant`) can be applied to
+    /// the LHS directly. A `Range` always contains at least one element with
+    /// either a quantifier other than `Exact(1)` or a [`PhonAtom::SylBlock`]
+    /// (otherwise the parser emits the v1 `Class`/`Literal` form instead).
+    Range(Vec<PhonContextElem>),
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
@@ -483,6 +494,14 @@ pub enum PhonAtom {
     /// `( a | b | ... )` alternation. Each alternative is a full context
     /// element so anchors may still appear inside an alternation.
     Alt(Vec<PhonContextElem>),
+    /// `%syl[ ... ]%` block as a single quantifiable atom (F8). Unlike the M
+    /// desugaring used in *context* position (where `%syl[...]%` flattens to
+    /// `SylHead` + inner + `SylTail`), F8 keeps the block folded so it can be
+    /// quantified (`(%syl[...]%)+`) and matched as one syllable-wide unit on
+    /// the LHS. The inner `Vec` is the block's content sequence; matching it
+    /// requires the cursor to begin at a syllable head, consume the inner
+    /// sequence, and land exactly on a syllable tail.
+    SylBlock(Vec<PhonContextElem>),
 }
 
 /// F6 quantifier applied to a [`PhonAtom`]. An un-quantified atom is

@@ -1357,21 +1357,14 @@ impl Parser {
     fn parse_phon_rewrite_rule(&mut self) -> Result<PhonRewriteRule, Diagnostic> {
         let start = self.current_span().start;
 
-        // FROM: class name or string literal
-        let from = match self.peek() {
-            TokenKind::StringLit(_) => {
-                let s = self.expect_string()?;
-                PhonPattern::Literal(s)
-            }
-            TokenKind::Ident(_) => {
-                let id = self.expect_ident()?;
-                PhonPattern::Class(id)
-            }
-            _ => return Err(self.error(format!(
-                "expected class name or string literal in rewrite rule, found {:?}",
-                self.peek()
-            ))),
-        };
+        // FROM: v1 single-segment (class name / string literal) or F8 LHS
+        // range (quantified atoms / `%syl[...]%` blocks). We parse one or more
+        // LHS elements up to the `->`; if the result is exactly one
+        // un-quantified plain class / literal we downgrade to the v1
+        // `PhonPattern::Class` / `PhonPattern::Literal` form so existing rules
+        // (and the insertion-rule detection on the empty literal) stay
+        // byte-for-byte identical.
+        let from = self.parse_phon_lhs()?;
 
         self.expect(&TokenKind::Arrow)?;
 
@@ -1409,6 +1402,167 @@ impl Parser {
             context,
             span: self.span_from(start),
         })
+    }
+
+    /// Parse the LHS (`from`) of a rewrite rule (F8 LHS range rewrite).
+    ///
+    /// Grammar:
+    /// ```text
+    /// lhs       = lhs_elem+
+    /// lhs_elem  = ( class | neg_class | literal | "." | alt | syl_block ) quantifier?
+    /// syl_block = "%syl[" lhs_elem* "]%"
+    /// ```
+    ///
+    /// One or more LHS elements are read up to the `->`. When the result is a
+    /// single un-quantified plain class or literal it is downgraded to the v1
+    /// [`PhonPattern::Class`] / [`PhonPattern::Literal`] forms, keeping all v1
+    /// / F6 / F7 rules and the empty-literal insertion-rule detection
+    /// byte-for-byte identical. Anything richer becomes [`PhonPattern::Range`].
+    fn parse_phon_lhs(&mut self) -> Result<PhonPattern, Diagnostic> {
+        let mut elems: Vec<PhonContextElem> = Vec::new();
+        loop {
+            match self.peek() {
+                TokenKind::Arrow => break,
+                TokenKind::Eof | TokenKind::RBrace => {
+                    return Err(self.error(format!(
+                        "expected '->' in rewrite rule, found {:?}",
+                        self.peek()
+                    )));
+                }
+                _ => {}
+            }
+            elems.push(self.parse_phon_lhs_elem()?);
+        }
+
+        if elems.is_empty() {
+            return Err(self.error(format!(
+                "expected class name, string literal, or LHS pattern in rewrite \
+                 rule, found {:?}",
+                self.peek()
+            )));
+        }
+
+        // Downgrade the v1 single-segment forms so legacy rules are unchanged.
+        if elems.len() == 1 {
+            if let PhonContextElem::Atom(atom, Quantifier::Exact(1)) = &elems[0] {
+                match atom {
+                    PhonAtom::Class(id) => return Ok(PhonPattern::Class(id.clone())),
+                    PhonAtom::Literal(s) => return Ok(PhonPattern::Literal(s.clone())),
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(PhonPattern::Range(elems))
+    }
+
+    /// Parse a single LHS element of an F8 range rewrite: a quantifiable atom
+    /// (class / negated class / literal / wildcard / alternation / `%syl[...]%`
+    /// block) followed by an optional quantifier suffix.
+    ///
+    /// A `%syl[ ... ]%` block may be quantified either directly
+    /// (`%syl[...]%+`) or wrapped in parentheses (`(%syl[...]%)+`, the form
+    /// used in proposal §4 F8). The parenthesised form is recognised by a
+    /// `( %` lookahead; a `(` not followed by `%` is an ordinary alternation.
+    fn parse_phon_lhs_elem(&mut self) -> Result<PhonContextElem, Diagnostic> {
+        let atom = match self.peek() {
+            // `%syl[ ... ]%` block — folded into a single quantifiable atom
+            // (F8), unlike the flat `SylHead`/`SylTail` desugaring used in
+            // context position.
+            TokenKind::Percent => self.parse_phon_lhs_syl_block()?,
+            // `( %syl[ ... ]% )` — parenthesised syl block, so a quantifier
+            // can bind it (`(%syl[...]%)+`). The grouping parens carry no
+            // other meaning here; they wrap exactly one syl block.
+            TokenKind::LParen
+                if matches!(
+                    self.tokens.get(self.pos + 1).map(|t| &t.node),
+                    Some(TokenKind::Percent)
+                ) =>
+            {
+                self.advance(); // (
+                let block = self.parse_phon_lhs_syl_block()?;
+                self.expect(&TokenKind::RParen)?;
+                block
+            }
+            TokenKind::LParen => {
+                self.advance();
+                let mut alts = vec![self.parse_phon_context_elem()?];
+                while matches!(self.peek(), TokenKind::Pipe) {
+                    self.advance();
+                    alts.push(self.parse_phon_context_elem()?);
+                }
+                self.expect(&TokenKind::RParen)?;
+                PhonAtom::Alt(alts)
+            }
+            TokenKind::Bang => {
+                self.advance();
+                let id = self.expect_ident()?;
+                PhonAtom::NegClass(id)
+            }
+            TokenKind::Dot => {
+                self.advance();
+                PhonAtom::Wildcard
+            }
+            TokenKind::StringLit(_) => {
+                let s = self.expect_string()?;
+                PhonAtom::Literal(s)
+            }
+            TokenKind::Ident(_) => {
+                let id = self.expect_ident()?;
+                PhonAtom::Class(id)
+            }
+            _ => {
+                return Err(self.error(format!(
+                    "expected an LHS pattern element, found {:?}",
+                    self.peek()
+                )));
+            }
+        };
+        let quant = self.parse_quantifier_suffix()?;
+        Ok(PhonContextElem::Atom(atom, quant))
+    }
+
+    /// Parse a `%syl[ ... ]%` block in LHS position, returning it folded as a
+    /// [`PhonAtom::SylBlock`]. The inner sequence is a list of LHS elements.
+    fn parse_phon_lhs_syl_block(&mut self) -> Result<PhonAtom, Diagnostic> {
+        self.expect(&TokenKind::Percent)?; // %
+        let name = self.expect_ident()?;
+        if name.node != "syl" {
+            return Err(self.error(format!(
+                "unknown macro '%{}%'; only '%syl[...]%' is supported on the \
+                 left-hand side of a rewrite rule",
+                name.node
+            )));
+        }
+        if !matches!(self.peek(), TokenKind::LBracket) {
+            return Err(self.error(
+                "expected a '%syl[ ... ]%' content block on the left-hand side \
+                 of a rewrite rule",
+            ));
+        }
+        self.advance(); // [
+        let mut inner: Vec<PhonContextElem> = Vec::new();
+        loop {
+            // Closing `] %` digraph terminates the block.
+            if matches!(self.peek(), TokenKind::RBracket)
+                && matches!(
+                    self.tokens.get(self.pos + 1).map(|t| &t.node),
+                    Some(TokenKind::Percent)
+                )
+            {
+                self.advance(); // ]
+                self.advance(); // %
+                break;
+            }
+            if matches!(self.peek(), TokenKind::Eof | TokenKind::RBrace) {
+                return Err(self.error(
+                    "unterminated '%syl[ ... ]%' block on the left-hand side of \
+                     a rewrite rule (expected ']%')",
+                ));
+            }
+            inner.push(self.parse_phon_lhs_elem()?);
+        }
+        Ok(PhonAtom::SylBlock(inner))
     }
 
     /// Parse phonological context: elements before `_` and elements after `_`.

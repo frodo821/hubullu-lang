@@ -312,6 +312,10 @@ fn apply_insertion_rule(input: &str, rule: &PhonRewriteRule, ctx: EvalCtx<'_>) -
 /// Apply a non-insertion rewrite rule (non-empty FROM pattern).
 /// All matches are found first, then applied simultaneously.
 fn apply_replacement_rule(input: &str, rule: &PhonRewriteRule, ctx: EvalCtx<'_>) -> String {
+    // F8: an LHS range (`PhonPattern::Range`) needs the range match engine.
+    if matches!(&rule.from, PhonPattern::Range(_)) {
+        return apply_range_rewrite_rule(input, rule, ctx);
+    }
     let chars: Vec<char> = input.chars().collect();
     let mut replacements: Vec<(usize, usize, String)> = Vec::new();
 
@@ -343,6 +347,8 @@ fn apply_replacement_rule(input: &str, rule: &PhonRewriteRule, ctx: EvalCtx<'_>)
                     false
                 }
             }
+            // F8 ranges are dispatched to `apply_range_rewrite_rule` above.
+            PhonPattern::Range(_) => unreachable!("Range LHS handled separately"),
         };
 
         if !matched {
@@ -353,6 +359,7 @@ fn apply_replacement_rule(input: &str, rule: &PhonRewriteRule, ctx: EvalCtx<'_>)
         let match_len = match &rule.from {
             PhonPattern::Literal(lit) => lit.node.chars().count(),
             PhonPattern::Class(_) => 1,
+            PhonPattern::Range(_) => unreachable!("Range LHS handled separately"),
         };
 
         // Check context
@@ -388,6 +395,91 @@ fn apply_replacement_rule(input: &str, rule: &PhonRewriteRule, ctx: EvalCtx<'_>)
             continue;
         }
         if let Some((_, match_len, replacement)) = replacements.iter().find(|(pos, _, _)| *pos == ci) {
+            result.push_str(replacement);
+            skip_until = ci + match_len;
+        } else {
+            result.push(*ch);
+        }
+    }
+
+    result
+}
+
+/// Apply an F8 LHS range rewrite rule (`PhonPattern::Range`).
+///
+/// At every non-boundary start position the LHS element sequence is matched
+/// via [`match_lhs_range_ends`], which yields every reachable end cursor in
+/// greedy-first order. The longest match whose surrounding context holds
+/// (left context anchored at the match start, right context just past the
+/// match end) is accepted, and the *whole matched span* is replaced by the
+/// rhs as a single unit. Matches are non-overlapping (scanning resumes past
+/// each accepted match) and applied simultaneously.
+///
+/// Convergence: each accepted match rewrites a span of ≥ 1 character
+/// (zero-width matches are rejected — see below), and the outer loop in
+/// [`apply_phonrule_inner`] only re-runs while the string keeps changing. A
+/// rule whose rhs reproduces its own LHS (e.g. `C+ -> C` on a lone `C`)
+/// leaves the string unchanged and the loop stops.
+fn apply_range_rewrite_rule(input: &str, rule: &PhonRewriteRule, ctx: EvalCtx<'_>) -> String {
+    let PhonPattern::Range(lhs_elems) = &rule.from else {
+        return input.to_string();
+    };
+    let chars: Vec<char> = input.chars().collect();
+    let lhs_refs: Vec<&PhonContextElem> = lhs_elems.iter().collect();
+    let mut replacements: Vec<(usize, usize, String)> = Vec::new();
+
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == BOUNDARY {
+            i += 1;
+            continue;
+        }
+        // Every reachable match end, longest (greedy) first.
+        let mut ends = Vec::new();
+        match_lhs_range_ends(&chars, i, &lhs_refs, ctx, &mut ends);
+        // Pick the longest match whose context holds. Zero-width matches
+        // (`end <= i`) are rejected: they would neither make progress nor
+        // terminate the convergence loop — a range rewrite must consume at
+        // least one character.
+        let accepted = ends.into_iter().find(|&end| {
+            if end <= i {
+                return false;
+            }
+            match &rule.context {
+                Some(rctx) => check_context(&chars, i, end - i, rctx, ctx),
+                None => true,
+            }
+        });
+        let Some(end) = accepted else {
+            i += 1;
+            continue;
+        };
+        let match_len = end - i;
+        let replacement = match &rule.to {
+            PhonReplacement::Literal(lit) => lit.node.clone(),
+            PhonReplacement::Null => String::new(),
+            // A per-character `map` over a multi-segment range is not
+            // meaningful; leave the matched span untouched (no-op).
+            PhonReplacement::Map(_) => chars[i..end].iter().collect(),
+        };
+        replacements.push((i, match_len, replacement));
+        // Non-overlapping: resume scanning past this match.
+        i = end;
+    }
+
+    if replacements.is_empty() {
+        return input.to_string();
+    }
+
+    let mut result = String::new();
+    let mut skip_until = 0;
+    for (ci, ch) in chars.iter().enumerate() {
+        if ci < skip_until {
+            continue;
+        }
+        if let Some((_, match_len, replacement)) =
+            replacements.iter().find(|(pos, _, _)| *pos == ci)
+        {
             result.push_str(replacement);
             skip_until = ci + match_len;
         } else {
@@ -701,6 +793,115 @@ fn consume_atom(
             }
             None
         }
+        // `%syl[ ... ]%` block (F8): consume one whole syllable whose content
+        // matches the inner element sequence. The cursor must start at a
+        // syllable head, the inner sequence is matched greedily, and the
+        // cursor must land exactly on a syllable tail. Only the forward
+        // direction is meaningful (syl blocks appear on the LHS / right
+        // context, both walked forward); a backward attempt fails closed.
+        PhonAtom::SylBlock(inner) => {
+            if dir != Direction::Forward {
+                return None;
+            }
+            let b = ctx.syllable_boundaries?;
+            // Skip transparent boundary markers to reach the syllable head.
+            let mut start = cursor;
+            while start < chars.len() && chars[start] == BOUNDARY {
+                start += 1;
+            }
+            if !b.is_start(start) {
+                return None;
+            }
+            let inner_refs: Vec<&PhonContextElem> = inner.iter().collect();
+            // The block content must consume exactly up to a syllable tail.
+            consume_seq_to_syl_tail(chars, start, &inner_refs, ctx, b)
+        }
+    }
+}
+
+/// Greedily match `elems` from `cursor` (forward) and return the end cursor
+/// only if it lands exactly on a syllable tail — the success condition for a
+/// `%syl[ ... ]%` block atom (F8). Backtracks across the element list so that
+/// e.g. `C* V C*` lands the trailing `C*` on the coda/tail rather than
+/// over-running.
+fn consume_seq_to_syl_tail(
+    chars: &[char],
+    cursor: usize,
+    elems: &[&PhonContextElem],
+    ctx: EvalCtx<'_>,
+    b: &SyllableBoundaries,
+) -> Option<usize> {
+    let (first, rest) = match elems.split_first() {
+        None => {
+            // All inner elements consumed: must be exactly at a syllable tail.
+            return b.is_end(cursor).then_some(cursor);
+        }
+        Some(split) => split,
+    };
+    match first {
+        PhonContextElem::Atom(atom, quant) => {
+            // Enumerate the cursors reachable by consuming 0..=max copies of
+            // `atom`, greedily, then try the rest from the largest first.
+            let min = quant.min() as usize;
+            let max = quant.max().map(|m| m as usize);
+            let mut stops = vec![cursor];
+            let mut cur = cursor;
+            loop {
+                if let Some(m) = max {
+                    if stops.len() > m {
+                        break;
+                    }
+                }
+                if stops.len() > CONTEXT_SCAN_LIMIT + 1 {
+                    break;
+                }
+                match consume_atom(chars, cur, atom, ctx, Direction::Forward) {
+                    Some(next) if next > cur => {
+                        cur = next;
+                        stops.push(cur);
+                    }
+                    // A zero-width or non-advancing match would loop forever;
+                    // stop enumerating (the count so far is enough).
+                    _ => break,
+                }
+            }
+            if stops.len() - 1 < min {
+                return None;
+            }
+            let mut k = stops.len() - 1;
+            loop {
+                if let Some(end) = consume_seq_to_syl_tail(chars, stops[k], rest, ctx, b) {
+                    return Some(end);
+                }
+                if k == min {
+                    return None;
+                }
+                k -= 1;
+            }
+        }
+        // Anchors inside a syl block are zero-width; honour them in place.
+        PhonContextElem::Boundary => {
+            if cursor < chars.len() && chars[cursor] == BOUNDARY {
+                consume_seq_to_syl_tail(chars, cursor + 1, rest, ctx, b)
+            } else {
+                None
+            }
+        }
+        PhonContextElem::WordStart => {
+            (cursor == 0).then(|| consume_seq_to_syl_tail(chars, cursor, rest, ctx, b))?
+        }
+        PhonContextElem::WordEnd => {
+            (cursor >= chars.len()).then(|| consume_seq_to_syl_tail(chars, cursor, rest, ctx, b))?
+        }
+        PhonContextElem::SylHead => {
+            b.is_start(cursor).then(|| consume_seq_to_syl_tail(chars, cursor, rest, ctx, b))?
+        }
+        PhonContextElem::SylTail => {
+            b.is_end(cursor).then(|| consume_seq_to_syl_tail(chars, cursor, rest, ctx, b))?
+        }
+        PhonContextElem::SylIndex(spec) => b
+            .matches_syl_index(cursor, spec)
+            .then(|| consume_seq_to_syl_tail(chars, cursor, rest, ctx, b))?,
     }
 }
 
@@ -749,6 +950,106 @@ fn consume_one_elem(
         // (the common case is an un-quantified atom). For `?`/`*` the
         // zero-count branch is left to other alternatives / the empty match.
         PhonContextElem::Atom(atom, _quant) => consume_atom(chars, cursor, atom, ctx, dir),
+    }
+}
+
+/// Match the LHS element sequence `elems` starting at `start` (forward) and
+/// collect *every* end cursor reachable by a full match of the sequence, in
+/// **greedy-first order** (largest span first). Used by F8 LHS range rewrite:
+/// unlike [`match_seq`] (yes/no for context), the rewrite engine needs the
+/// match span, and — because a rule's right context is anchored just past the
+/// match end — it must be able to try shorter matches when the greedy one
+/// fails the context check. The caller walks the returned list longest-first,
+/// keeping greedy semantics while still honouring context.
+///
+/// The matcher is the same greedy backtracker as [`match_atom_quant`]: each
+/// element greedily consumes the largest repetition count first.
+fn match_lhs_range_ends(
+    chars: &[char],
+    start: usize,
+    elems: &[&PhonContextElem],
+    ctx: EvalCtx<'_>,
+    out: &mut Vec<usize>,
+) {
+    let (first, rest) = match elems.split_first() {
+        None => {
+            // Whole LHS consumed — `start` is a valid end. Greedy-first order
+            // is preserved because callers descend repetition counts.
+            out.push(start);
+            return;
+        }
+        Some(split) => split,
+    };
+    match first {
+        PhonContextElem::Atom(atom, quant) => {
+            let min = quant.min() as usize;
+            let max = quant.max().map(|m| m as usize);
+            let mut stops = vec![start];
+            let mut cur = start;
+            loop {
+                if let Some(m) = max {
+                    if stops.len() > m {
+                        break;
+                    }
+                }
+                if stops.len() > CONTEXT_SCAN_LIMIT + 1 {
+                    break;
+                }
+                match consume_atom(chars, cur, atom, ctx, Direction::Forward) {
+                    Some(next) if next > cur => {
+                        cur = next;
+                        stops.push(cur);
+                    }
+                    // Non-advancing match (e.g. a zero-width or already-consumed
+                    // position): stop enumerating to keep the loop finite.
+                    _ => break,
+                }
+            }
+            if stops.len() - 1 < min {
+                return;
+            }
+            // Greedy: descend from the largest repetition count down to `min`.
+            let mut k = stops.len() - 1;
+            loop {
+                match_lhs_range_ends(chars, stops[k], rest, ctx, out);
+                if k == min {
+                    break;
+                }
+                k -= 1;
+            }
+        }
+        // Zero-width anchors on the LHS: honoured in place (rare, but the
+        // grammar admits them inside `%syl[...]%` blocks / alternations).
+        PhonContextElem::Boundary => {
+            if start < chars.len() && chars[start] == BOUNDARY {
+                match_lhs_range_ends(chars, start + 1, rest, ctx, out);
+            }
+        }
+        PhonContextElem::WordStart => {
+            if start == 0 {
+                match_lhs_range_ends(chars, start, rest, ctx, out);
+            }
+        }
+        PhonContextElem::WordEnd => {
+            if start >= chars.len() {
+                match_lhs_range_ends(chars, start, rest, ctx, out);
+            }
+        }
+        PhonContextElem::SylHead => {
+            if matches!(ctx.syllable_boundaries, Some(b) if b.is_start(start)) {
+                match_lhs_range_ends(chars, start, rest, ctx, out);
+            }
+        }
+        PhonContextElem::SylTail => {
+            if matches!(ctx.syllable_boundaries, Some(b) if b.is_end(start)) {
+                match_lhs_range_ends(chars, start, rest, ctx, out);
+            }
+        }
+        PhonContextElem::SylIndex(spec) => {
+            if matches!(ctx.syllable_boundaries, Some(b) if b.matches_syl_index(start, spec)) {
+                match_lhs_range_ends(chars, start, rest, ctx, out);
+            }
+        }
     }
 }
 
