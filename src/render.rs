@@ -107,6 +107,45 @@ fn format_tags_display(form_spec: &ast::TagConditionList) -> String {
 
 /// Parse a `.hut` source string into a [`HutFile`] and its [`SourceMap`].
 pub fn parse_hut(source: &str, filename: &str) -> Result<(HutFile, SourceMap), String> {
+    parse_hut_with_eval(source, filename, &[])
+}
+
+/// F4: Expand a single `-e <code>` value. If the value begins with `@file:`
+/// the remainder is treated as a filesystem path whose contents are returned;
+/// otherwise the value is returned verbatim.
+///
+/// Errors propagate up as `Err(String)` with a human-readable message.
+pub fn expand_eval_source(value: &str) -> Result<String, String> {
+    if let Some(path) = value.strip_prefix("@file:") {
+        std::fs::read_to_string(path).map_err(|e| {
+            format!("cannot read '{}' (referenced by `-e @file:`): {}", path, e)
+        })
+    } else {
+        Ok(value.to_string())
+    }
+}
+
+/// Parse a `.hut` source string plus zero or more F4 `-e <code>` eval strings.
+///
+/// Semantics:
+/// - Each entry in `eval_sources` is first run through [`expand_eval_source`]
+///   so `@file:<path>` sugar transparently loads file contents.
+/// - All expanded eval strings are concatenated with `;` as a statement
+///   separator (F5) and parsed as a single virtual `.hut` file with filename
+///   `<eval>` (a distinct [`FileId`] from the primary source).
+/// - The two `HutFile`s are then merged:
+///   * `references`, `uses`, `tokens` are concatenated (primary then eval).
+///   * `apply_chain` from the eval source is appended to the primary's chain
+///     (F4: "重ねがけ", file-level `@apply` from `-e` extends the existing
+///     chain rather than replacing it).
+///   * `inline_items` are concatenated.
+/// - When `eval_sources` is empty this is exactly equivalent to the legacy
+///   [`parse_hut`] code path (no extra `FileId` is allocated).
+pub fn parse_hut_with_eval(
+    source: &str,
+    filename: &str,
+    eval_sources: &[String],
+) -> Result<(HutFile, SourceMap), String> {
     let mut source_map = SourceMap::new();
     let file_id = source_map.add_file(filename.into(), source.to_string());
 
@@ -118,11 +157,53 @@ pub fn parse_hut(source: &str, filename: &str) -> Result<(HutFile, SourceMap), S
     }
 
     let parser = Parser::new(tokens, file_id);
-    let (hut_file, parse_errors) = parser.parse_token_list_to_eof();
+    let (mut hut_file, parse_errors) = parser.parse_token_list_to_eof();
     if !parse_errors.is_empty() {
         let msgs: Vec<String> = parse_errors.iter().map(|e| e.render(&source_map)).collect();
         return Err(msgs.join("\n"));
     }
+
+    if eval_sources.is_empty() {
+        return Ok((hut_file, source_map));
+    }
+
+    // F4: expand each `-e` value (handling `@file:` sugar) and join with `;`
+    // so the resulting virtual file parses each as a statement-bordered chunk.
+    let mut expanded: Vec<String> = Vec::with_capacity(eval_sources.len());
+    for raw in eval_sources {
+        expanded.push(expand_eval_source(raw)?);
+    }
+    let eval_source = expanded.join("\n;\n");
+    let eval_file_id = source_map.add_file("<eval>".into(), eval_source.clone());
+
+    let eval_lexer = Lexer::new(source_map.source(eval_file_id), eval_file_id);
+    let (eval_tokens, eval_lex_errors) = eval_lexer.tokenize();
+    if !eval_lex_errors.is_empty() {
+        let msgs: Vec<String> = eval_lex_errors
+            .iter()
+            .map(|e| e.render(&source_map))
+            .collect();
+        return Err(msgs.join("\n"));
+    }
+
+    let eval_parser = Parser::new(eval_tokens, eval_file_id);
+    let (eval_hut, eval_parse_errors) = eval_parser.parse_token_list_to_eof();
+    if !eval_parse_errors.is_empty() {
+        let msgs: Vec<String> = eval_parse_errors
+            .iter()
+            .map(|e| e.render(&source_map))
+            .collect();
+        return Err(msgs.join("\n"));
+    }
+
+    // Merge the eval HutFile into the primary one. Order matters: eval content
+    // appends to the end of every list so it behaves "as if appended to the
+    // .hut file's tail" (proposal F4).
+    hut_file.references.extend(eval_hut.references);
+    hut_file.uses.extend(eval_hut.uses);
+    hut_file.apply_chain.extend(eval_hut.apply_chain);
+    hut_file.inline_items.extend(eval_hut.inline_items);
+    hut_file.tokens.extend(eval_hut.tokens);
 
     Ok((hut_file, source_map))
 }
@@ -1048,9 +1129,10 @@ impl HutPhonContext {
     /// `@reference` + `@use` directives. Returns `Err` if phase1 emits any
     /// diagnostic (e.g. missing `@use` target).
     pub fn build(hut_file: &HutFile, hut_dir: &Path) -> Result<Self, String> {
-        let p1 = crate::phase1::run_phase1_virtual_with_uses(
+        let p1 = crate::phase1::run_phase1_virtual_with_uses_and_items(
             &hut_file.references,
             &hut_file.uses,
+            &hut_file.inline_items,
             hut_dir,
         );
         if p1.diagnostics.has_errors() {

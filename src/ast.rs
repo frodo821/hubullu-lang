@@ -790,6 +790,12 @@ pub struct HutFile {
     pub uses: Vec<Import>,
     pub apply_chain: Vec<Ident>,
     pub tokens: Vec<Token>,
+    /// F4: Top-level item declarations (phonrule / phoneme / syllable) parsed
+    /// inline from the `.hut` file or from `-e` eval sources. These are
+    /// injected into the virtual file's symbol scope by [`HutPhonContext::build`].
+    /// Empty for legacy `.hut` files.
+    #[cfg_attr(feature = "serialization", serde(default))]
+    pub inline_items: Vec<Spanned<Item>>,
 }
 
 /// Fully qualified entry reference:

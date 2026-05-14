@@ -81,6 +81,20 @@ pub fn run_phase1_virtual_with_uses(
     uses: &[crate::ast::Import],
     base_dir: &Path,
 ) -> Phase1Result {
+    run_phase1_virtual_with_uses_and_items(references, uses, &[], base_dir)
+}
+
+/// F4-aware variant of [`run_phase1_virtual_with_uses`] that also injects
+/// inline top-level items (phonrule / phoneme / syllable parsed from the
+/// `.hut` file or from `-e` eval sources) into the virtual file's symbol
+/// scope. Other than the extra symbol registration, behaviour is identical
+/// to [`run_phase1_virtual_with_uses`].
+pub fn run_phase1_virtual_with_uses_and_items(
+    references: &[crate::ast::Import],
+    uses: &[crate::ast::Import],
+    inline_items: &[crate::ast::Spanned<crate::ast::Item>],
+    base_dir: &Path,
+) -> Phase1Result {
     let mut ctx = Phase1Ctx {
         files: HashMap::new(),
         source_map: SourceMap::new(),
@@ -93,11 +107,31 @@ pub fn run_phase1_virtual_with_uses(
         content_hashes: HashMap::new(),
     };
 
-    // Create a virtual entry file with an empty source.
+    // Create a virtual entry file with an empty source. Inline items (if any)
+    // are stored in the file's `items` list so symbol lookups via
+    // `Phase1Result.files[file_id].items[item_index]` resolve correctly.
     let virtual_path = base_dir.join("<hut-virtual>");
     let file_id = ctx.source_map.add_file(virtual_path.clone(), String::new());
     ctx.path_to_id.insert(virtual_path, file_id);
-    ctx.files.insert(file_id, File { items: Vec::new() });
+    ctx.files.insert(file_id, File { items: inline_items.to_vec() });
+
+    // F4: register inline phonrule / phoneme / syllable as local symbols on
+    // the virtual file scope. Duplicates produce normal diagnostics.
+    for (idx, item) in inline_items.iter().enumerate() {
+        let (name, kind) = match &item.node {
+            Item::PhonRule(pr) => (pr.name.node.clone(), SymbolKind::PhonRule),
+            Item::Phoneme(ph) => (ph.name.node.clone(), SymbolKind::Phoneme),
+            Item::Syllable(syl) => (syl.name.node.clone(), SymbolKind::Syllable),
+            // Other Item variants are not legal inline items but we skip
+            // silently rather than panic (parser already rejected them).
+            _ => continue,
+        };
+        if let Err(diag) = ctx.symbol_table.register_local(
+            file_id, name, kind, item.span, idx,
+        ) {
+            ctx.diagnostics.add(diag);
+        }
+    }
 
     // Process each @reference from the virtual file.
     for import in references {
