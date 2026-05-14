@@ -328,8 +328,9 @@ pub struct PhonRule {
     /// `derived_from: proto` — informational only, not used by the compiler.
     pub derived_from: Option<Ident>,
     /// `syllable: NAME` — references a top-level `syllable` declaration (F2c).
-    /// Required whenever the body uses a σ context element (`σ[` / `]σ`).
-    /// Omitted phonrules cannot use σ-aware context.
+    /// Required whenever the body uses a syllable-aware macro context element
+    /// (`%syl<head>%` / `%syl<tail>%` / `%syl[...]%` / `%syl<#N>%`).
+    /// Omitted phonrules cannot use syllable-aware context.
     pub syllable: Option<Ident>,
     pub classes: Vec<CharClassDef>,
     pub maps: Vec<PhonMapDef>,
@@ -478,12 +479,34 @@ pub enum PhonContextElem {
     Literal(StringLit),
     Repeat(Box<PhonContextElem>),
     Alt(Vec<PhonContextElem>),
-    /// `σ[` — current position is at the start of a syllable (F2c).
+    /// `%syl<head>%` — current position is at the start of a syllable (M, was F2c `σ[`).
     /// Requires the enclosing phonrule to have a `syllable: NAME` field.
-    SylStart,
-    /// `]σ` — current position is at the end of a syllable (F2c).
+    SylHead,
+    /// `%syl<tail>%` — current position is at the end of a syllable (M, was F2c `]σ`).
     /// Requires the enclosing phonrule to have a `syllable: NAME` field.
-    SylEnd,
+    SylTail,
+    /// `%syl<#N>%` / `%syl<#{a..b}>%` — syllable index anchor (M parses, F7 evaluates).
+    /// Requires the enclosing phonrule to have a `syllable: NAME` field.
+    /// The numeric spec is parsed and stored here, but evaluation is deferred
+    /// to F7; phase2 currently rejects its use with a "not yet implemented" error.
+    SylIndex(SylSpec),
+}
+
+/// Numeric/range spec inside a `%syl<#...>%` macro (M parses, F7 evaluates).
+///
+/// Bounds are 1-indexed; positive values count from the word start and negative
+/// values count from the word end (`-1` = last syllable). Ranges are inclusive
+/// on both ends.
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SylSpec {
+    /// `%syl<#N>%` — a single syllable index.
+    Index(i64),
+    /// `%syl<#{a..b}>%` — an inclusive range; either bound may be omitted.
+    Range {
+        lo: Option<i64>,
+        hi: Option<i64>,
+    },
 }
 
 // ---------------------------------------------------------------------------

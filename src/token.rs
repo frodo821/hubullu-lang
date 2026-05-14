@@ -23,6 +23,8 @@ pub enum TokenKind {
     Semicolon, // ;
     Comma,     // ,
     Dot,       // .
+    DotDot,    // .. (macro range separator, M)
+    Percent,   // % (macro delimiter, M)
     Hash,      // #
     Eq,        // =
     Arrow,     // ->

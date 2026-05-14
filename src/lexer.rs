@@ -192,7 +192,16 @@ impl<'a> Lexer<'a> {
             }
             '.' => {
                 self.advance();
-                Some(self.make_token(TokenKind::Dot, start, self.pos))
+                if self.peek() == Some('.') {
+                    self.advance();
+                    Some(self.make_token(TokenKind::DotDot, start, self.pos))
+                } else {
+                    Some(self.make_token(TokenKind::Dot, start, self.pos))
+                }
+            }
+            '%' => {
+                self.advance();
+                Some(self.make_token(TokenKind::Percent, start, self.pos))
             }
             '=' => {
                 self.advance();
@@ -602,6 +611,53 @@ mod tests {
                 TokenKind::Eq,
                 TokenKind::Plus,
                 TokenKind::Arrow,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_macro_punctuation() {
+        // M: `%` is the macro delimiter, `..` is the range separator.
+        // `#` is only a `Hash` token after a non-whitespace char (otherwise a
+        // comment), so it is lexed glued to the preceding `<`.
+        let tokens = lex("% <# .. . > {3..}");
+        assert_eq!(
+            tokens,
+            vec![
+                TokenKind::Percent,
+                TokenKind::Lt,
+                TokenKind::Hash,
+                TokenKind::DotDot,
+                TokenKind::Dot,
+                TokenKind::Gt,
+                TokenKind::LBrace,
+                TokenKind::Ident("3".into()),
+                TokenKind::DotDot,
+                TokenKind::RBrace,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_macro_syl_tokens() {
+        // `%syl<head>%` and `%syl[ ]%` lex into their component tokens.
+        let tokens = lex("%syl<head>% %syl[ ]%");
+        assert_eq!(
+            tokens,
+            vec![
+                TokenKind::Percent,
+                TokenKind::Ident("syl".into()),
+                TokenKind::Lt,
+                TokenKind::Ident("head".into()),
+                TokenKind::Gt,
+                TokenKind::Percent,
+                TokenKind::Percent,
+                TokenKind::Ident("syl".into()),
+                TokenKind::LBracket,
+                TokenKind::RBracket,
+                TokenKind::Percent,
                 TokenKind::Eof,
             ]
         );
