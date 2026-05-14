@@ -327,6 +327,7 @@ impl Phase1Ctx {
                 Item::Entry(entry) => (entry.name.node.clone(), SymbolKind::Entry),
                 Item::PhonRule(pr) => (pr.name.node.clone(), SymbolKind::PhonRule),
                 Item::Phoneme(ph) => (ph.name.node.clone(), SymbolKind::Phoneme),
+                Item::Syllable(syl) => (syl.name.node.clone(), SymbolKind::Syllable),
                 Item::Use(_) | Item::Reference(_) | Item::Export(_) | Item::Render(_) => continue,
             };
             if let Err(diag) = self.symbol_table.register_local(
@@ -438,6 +439,7 @@ impl Phase1Ctx {
                 Item::Entry(entry) => (entry.name.node.clone(), SymbolKind::Entry),
                 Item::PhonRule(pr) => (pr.name.node.clone(), SymbolKind::PhonRule),
                 Item::Phoneme(ph) => (ph.name.node.clone(), SymbolKind::Phoneme),
+                Item::Syllable(syl) => (syl.name.node.clone(), SymbolKind::Syllable),
                 Item::Use(_) | Item::Reference(_) | Item::Export(_) | Item::Render(_) => continue,
             };
             if let Err(diag) = self.symbol_table.register_local(

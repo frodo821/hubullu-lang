@@ -85,6 +85,20 @@ pub fn document_symbols(parse_result: &ParseResult) -> Vec<DocumentSymbol> {
                     tags: None,
                     deprecated: None,
                 },
+                Item::Syllable(syl) => DocumentSymbol {
+                    name: syl.name.node.clone(),
+                    detail: Some(format!(
+                        "{} slot(s), nucleus={}",
+                        syl.template.slots.len(),
+                        syl.nucleus.node
+                    )),
+                    kind: SymbolKind::STRUCT,
+                    range,
+                    selection_range: convert::span_to_range(&syl.name.span, source_map),
+                    children: None,
+                    tags: None,
+                    deprecated: None,
+                },
                 Item::Use(imp) | Item::Reference(imp) => {
                     let kind_str = if matches!(&item_spanned.node, Item::Use(_)) {
                         "@use"
@@ -174,6 +188,7 @@ fn symbol_kind_to_lsp(kind: crate::symbol_table::SymbolKind) -> SymbolKind {
         crate::symbol_table::SymbolKind::Extend => SymbolKind::MODULE,
         crate::symbol_table::SymbolKind::PhonRule => SymbolKind::OPERATOR,
         crate::symbol_table::SymbolKind::Phoneme => SymbolKind::CONSTANT,
+        crate::symbol_table::SymbolKind::Syllable => SymbolKind::STRUCT,
     }
 }
 

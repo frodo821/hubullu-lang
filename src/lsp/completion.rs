@@ -1153,5 +1153,6 @@ fn symbol_kind_to_completion(kind: SymbolKind) -> CompletionItemKind {
         SymbolKind::Extend => CompletionItemKind::MODULE,
         SymbolKind::PhonRule => CompletionItemKind::FUNCTION,
         SymbolKind::Phoneme => CompletionItemKind::CONSTANT,
+        SymbolKind::Syllable => CompletionItemKind::STRUCT,
     }
 }

@@ -86,6 +86,7 @@ pub enum Item {
     Entry(Box<Entry>),
     PhonRule(PhonRule),
     Phoneme(Phoneme),
+    Syllable(Syllable),
     Render(RenderConfig),
 }
 
@@ -122,6 +123,87 @@ pub struct Phoneme {
 pub enum PhonemeMember {
     Lit(StringLit),
     Ref(Ident),
+}
+
+// ---------------------------------------------------------------------------
+// syllable
+// ---------------------------------------------------------------------------
+
+/// A top-level `syllable NAME { ... }` declaration describing how surface
+/// strings are decomposed into syllables.
+///
+/// See proposal F2b: the template (e.g. `(C) V (C) (C)`) plus a nucleus
+/// phoneme drive a greedy left-to-right syllabifier built on top of F2a's
+/// `PhonemeInventory` longest-match tokenizer. `onset_priority` chooses
+/// between maximal- and minimal-onset interpretations at ambiguous joints,
+/// while `unknown` (with optional per-grapheme `unknown_overrides`) governs
+/// what happens when the input contains characters outside the inventory.
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Syllable {
+    pub name: Ident,
+    pub template: SyllableTemplate,
+    /// Phoneme whose terminals act as syllable nuclei.
+    pub nucleus: Ident,
+    pub onset_max: Option<u32>,
+    pub coda_max: Option<u32>,
+    pub onset_priority: OnsetPriority,
+    pub unknown: UnknownMode,
+    /// Per-grapheme overrides for the default `unknown` mode. Stored as a
+    /// sorted `Vec` (not `HashMap`) so that AST hashing is deterministic.
+    pub unknown_overrides: Vec<(String, UnknownMode)>,
+    pub span: Span,
+}
+
+/// A parsed syllable template — a sequence of phoneme-class slots.
+///
+/// Each slot is a phoneme class identifier plus an `optional` flag for
+/// whether it appeared in parentheses (`(C)` vs `C`). Slots have no
+/// `+`/`*`-style quantification beyond optionality.
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SyllableTemplate {
+    pub slots: Vec<SyllableTemplateSlot>,
+    pub span: Span,
+}
+
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SyllableTemplateSlot {
+    /// Phoneme class referenced by this slot (e.g. `C` or `V`).
+    pub class: Ident,
+    /// `true` when wrapped in parentheses in the source.
+    pub optional: bool,
+}
+
+/// Whether the syllabifier prefers a maximal or minimal onset at ambiguous
+/// `... V C V ...` joints.
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum OnsetPriority {
+    /// Maximal-onset principle: push intervocalic consonants to the next
+    /// syllable's onset (subject to `onset_max`).
+    Max,
+    /// Minimal onset: keep intervocalic consonants in the prior syllable's
+    /// coda (subject to `coda_max`).
+    Min,
+}
+
+/// How the syllabifier handles input characters that do not belong to any
+/// phoneme in the inventory.
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum UnknownMode {
+    /// Silently pass through; the unknown chunk stays inside the current syllable.
+    Ignore,
+    /// Treat the unknown chunk as a syllable boundary.
+    Skip,
+    /// Like `Skip`, but emit a warning diagnostic.
+    #[default]
+    Warn,
+    /// Emit an error diagnostic; syllabification still completes (treating the
+    /// unknown chunk like `Skip`).
+    Error,
 }
 
 // ---------------------------------------------------------------------------

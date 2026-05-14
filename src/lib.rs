@@ -54,6 +54,8 @@ pub mod lexer;
 pub mod parser;
 /// Phoneme inventory resolution and longest-match tokenization.
 pub mod phoneme;
+/// Syllable inventory resolution and greedy syllabification.
+pub mod syllable;
 /// Phonological rule evaluation engine.
 pub mod phonrule_eval;
 /// Phase 1: file loading, `@use`/`@reference` resolution, symbol registration.

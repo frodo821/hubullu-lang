@@ -139,6 +139,8 @@ pub fn run_phase2(p1: &Phase1Result) -> Phase2Result {
     ctx.resolve_extends();
     log::debug!("phase2: validating phonrules");
     ctx.validate_phonrules();
+    log::debug!("phase2: validating syllables");
+    ctx.validate_syllables();
     log::debug!("phase2: validating inflections");
     ctx.validate_inflections();
     ctx.collect_inflections();
@@ -185,6 +187,7 @@ pub fn run_phase2_incremental(
     ctx.resolve_phonemes();
     ctx.resolve_extends();
     ctx.validate_phonrules();
+    ctx.validate_syllables();
     ctx.validate_inflections();
     ctx.collect_inflections();
     ctx.resolve_entries_by_merkle(entries_to_resolve, cached_entries);
@@ -288,6 +291,102 @@ impl<'a> Phase2Ctx<'a> {
                 for d in diags {
                     self.diagnostics.add(d);
                 }
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // syllable validation
+    // -----------------------------------------------------------------------
+
+    /// Validate every `syllable` declaration: `nucleus` and every template
+    /// slot's class must resolve to a declared phoneme, and `onset_max` /
+    /// `coda_max` must not exceed the number of optional pre-/post-nucleus
+    /// slots in the template.
+    fn validate_syllables(&mut self) {
+        // The full @use-scoped phoneme name set per file is overkill for this
+        // pass; the inventory already aggregates every declared phoneme by
+        // name (we resolved it before this fn runs), so we can ask it
+        // directly via `has_phoneme`.
+        for file in self.p1.files.values() {
+            for item in &file.items {
+                if let Item::Syllable(syl) = &item.node {
+                    self.validate_syllable(syl);
+                }
+            }
+        }
+    }
+
+    fn validate_syllable(&mut self, syl: &Syllable) {
+        // 1. nucleus must resolve to a declared phoneme.
+        if !self.phonemes.has_phoneme(&syl.nucleus.node) {
+            self.diagnostics.add(
+                Diagnostic::error(format!(
+                    "syllable '{}' references unknown phoneme '{}' as nucleus",
+                    syl.name.node, syl.nucleus.node
+                ))
+                .with_label(syl.nucleus.span, "unknown phoneme"),
+            );
+        }
+
+        // 2. each template slot's class must resolve.
+        for slot in &syl.template.slots {
+            if !self.phonemes.has_phoneme(&slot.class.node) {
+                self.diagnostics.add(
+                    Diagnostic::error(format!(
+                        "syllable '{}' template references unknown phoneme '{}'",
+                        syl.name.node, slot.class.node
+                    ))
+                    .with_label(slot.class.span, "unknown phoneme"),
+                );
+            }
+        }
+
+        // 3. template / onset_max / coda_max consistency. Count optional
+        //    non-nucleus slots before vs after the first nucleus slot.
+        let mut pre = 0u32;
+        let mut post = 0u32;
+        let mut seen_nucleus = false;
+        for slot in &syl.template.slots {
+            if slot.class.node == syl.nucleus.node {
+                seen_nucleus = true;
+                continue;
+            }
+            if seen_nucleus {
+                post += 1;
+            } else {
+                pre += 1;
+            }
+        }
+        if !seen_nucleus {
+            self.diagnostics.add(
+                Diagnostic::error(format!(
+                    "syllable '{}' template does not contain the nucleus phoneme '{}'",
+                    syl.name.node, syl.nucleus.node
+                ))
+                .with_label(syl.template.span, "template missing nucleus"),
+            );
+        }
+        if let Some(om) = syl.onset_max {
+            if om > pre {
+                self.diagnostics.add(
+                    Diagnostic::error(format!(
+                        "syllable '{}': onset_max={} exceeds template's {} pre-nucleus slot(s)",
+                        syl.name.node, om, pre
+                    ))
+                    .with_label(syl.template.span, "template too small"),
+                );
+            }
+        }
+        if let Some(cm) = syl.coda_max {
+            if cm > post {
+                self.diagnostics.add(
+                    Diagnostic::error(format!(
+                        "syllable '{}': coda_max={} exceeds template's {} post-nucleus slot(s)",
+                        syl.name.node, cm, post
+                    ))
+                    .with_label(syl.template.span, "template too small"),
+                );
             }
         }
     }

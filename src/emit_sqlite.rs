@@ -30,6 +30,7 @@ pub fn emit(output_path: &Path, p1: &Phase1Result, p2: &Phase2Result) -> Result<
     insert_data(&conn, p2)?;
     insert_render_config(&conn, p2)?;
     insert_name_resolution(&conn, p1, p2)?;
+    insert_syllables(&conn, p1)?;
     log::debug!("emit: creating indexes and FTS");
     create_indexes(&conn, p2)?;
     create_fts(&conn)?;
@@ -138,6 +139,31 @@ fn create_schema(conn: &Connection) -> Result<(), Diagnostic> {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             surface TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS syllables (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            nucleus TEXT NOT NULL,
+            onset_max INTEGER,
+            coda_max INTEGER,
+            onset_priority TEXT NOT NULL,
+            unknown_mode TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS syllable_templates (
+            syllable_id INTEGER NOT NULL,
+            ord INTEGER NOT NULL,
+            class_name TEXT NOT NULL,
+            optional INTEGER NOT NULL,
+            FOREIGN KEY (syllable_id) REFERENCES syllables(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS syllable_unknown_overrides (
+            syllable_id INTEGER NOT NULL,
+            grapheme TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            FOREIGN KEY (syllable_id) REFERENCES syllables(id)
         );
 
         CREATE TABLE IF NOT EXISTS render_config (
@@ -477,6 +503,89 @@ fn create_fts(conn: &Connection) -> Result<(), Diagnostic> {
         ",
     )
     .map_err(|e| Diagnostic::error(format!("FTS creation failed: {}", e)))?;
+
+    Ok(())
+}
+
+/// Insert every `syllable NAME { ... }` top-level declaration into the
+/// dictionary tables `syllables`, `syllable_templates`, and
+/// `syllable_unknown_overrides`. Files are walked deterministically in
+/// FileId order so multiple compile runs produce the same row ordering.
+fn insert_syllables(conn: &Connection, p1: &Phase1Result) -> Result<(), Diagnostic> {
+    use crate::ast::{Item, OnsetPriority, UnknownMode};
+
+    fn mode_str(m: UnknownMode) -> &'static str {
+        match m {
+            UnknownMode::Ignore => "ignore",
+            UnknownMode::Skip => "skip",
+            UnknownMode::Warn => "warn",
+            UnknownMode::Error => "error",
+        }
+    }
+
+    // Iterate in FileId order for deterministic row ids.
+    let mut file_ids: Vec<_> = p1.files.keys().copied().collect();
+    file_ids.sort_by_key(|fid| fid.0);
+
+    let mut seen: HashMap<String, ()> = HashMap::new();
+    for fid in file_ids {
+        let file = match p1.files.get(&fid) {
+            Some(f) => f,
+            None => continue,
+        };
+        for item in &file.items {
+            let syl = match &item.node {
+                Item::Syllable(s) => s,
+                _ => continue,
+            };
+            // Same-name duplicates across files are already diagnosed by
+            // phase1's symbol table. Skip them here to avoid UNIQUE conflicts.
+            if seen.contains_key(&syl.name.node) {
+                continue;
+            }
+            seen.insert(syl.name.node.clone(), ());
+
+            let prio = match syl.onset_priority {
+                OnsetPriority::Max => "max",
+                OnsetPriority::Min => "min",
+            };
+            conn.execute(
+                "INSERT INTO syllables (name, nucleus, onset_max, coda_max, onset_priority, unknown_mode)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    syl.name.node,
+                    syl.nucleus.node,
+                    syl.onset_max.map(|n| n as i64),
+                    syl.coda_max.map(|n| n as i64),
+                    prio,
+                    mode_str(syl.unknown),
+                ],
+            )
+            .map_err(|e| Diagnostic::error(format!("insert syllables failed: {}", e)))?;
+            let sid = conn.last_insert_rowid();
+
+            for (ord, slot) in syl.template.slots.iter().enumerate() {
+                conn.execute(
+                    "INSERT INTO syllable_templates (syllable_id, ord, class_name, optional)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![sid, ord as i64, slot.class.node, slot.optional as i64],
+                )
+                .map_err(|e| {
+                    Diagnostic::error(format!("insert syllable_templates failed: {}", e))
+                })?;
+            }
+            for (g, mode) in &syl.unknown_overrides {
+                conn.execute(
+                    "INSERT INTO syllable_unknown_overrides (syllable_id, grapheme, mode)
+                     VALUES (?1, ?2, ?3)",
+                    params![sid, g, mode_str(*mode)],
+                )
+                .map_err(|e| {
+                    Diagnostic::error(format!("insert syllable_unknown_overrides failed: {}", e))
+                })?;
+            }
+        }
+    }
 
     Ok(())
 }

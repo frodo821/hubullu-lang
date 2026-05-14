@@ -159,7 +159,7 @@ impl Parser {
                 TokenKind::Eof => break,
                 TokenKind::Semicolon => break,
                 TokenKind::AtUse | TokenKind::AtReference | TokenKind::AtExport | TokenKind::AtExtend | TokenKind::AtRender => break,
-                TokenKind::Ident(s) if matches!(s.as_str(), "tagaxis" | "inflection" | "entry" | "phonrule" | "phoneme") => {
+                TokenKind::Ident(s) if matches!(s.as_str(), "tagaxis" | "inflection" | "entry" | "phonrule" | "phoneme" | "syllable") => {
                     break
                 }
                 _ => {
@@ -215,6 +215,10 @@ impl Parser {
             TokenKind::Ident(s) if s == "phoneme" => {
                 self.advance();
                 Item::Phoneme(self.parse_phoneme()?)
+            }
+            TokenKind::Ident(s) if s == "syllable" => {
+                self.advance();
+                Item::Syllable(self.parse_syllable()?)
             }
             _ => {
                 return Err(self.error(format!(
@@ -937,6 +941,192 @@ impl Parser {
             members,
             span: self.span_from(start),
         })
+    }
+
+    // -----------------------------------------------------------------------
+    // syllable
+    // -----------------------------------------------------------------------
+
+    /// Parse a top-level `syllable NAME { ... }` declaration.
+    ///
+    /// Fields (each `name: value`):
+    ///   * `template:` — sequence of phoneme-class slots, e.g. `(C) V (C) (C)`
+    ///   * `nucleus:`  — phoneme name (required)
+    ///   * `onset_max:` / `coda_max:` — optional non-negative integers
+    ///   * `onset_priority:` — `max` or `min` (default `max`)
+    ///   * `unknown:` — `ignore` | `skip` | `warn` | `error` (default `warn`)
+    ///   * `unknown_overrides:` — block of `"grapheme": mode` entries
+    ///
+    /// Fields may appear in any order. Commas between fields are tolerated.
+    fn parse_syllable(&mut self) -> Result<Syllable, Diagnostic> {
+        let start = self.current_span().start;
+        let name = self.expect_ident()?;
+        self.expect(&TokenKind::LBrace)?;
+
+        let mut template: Option<SyllableTemplate> = None;
+        let mut nucleus: Option<Ident> = None;
+        let mut onset_max: Option<u32> = None;
+        let mut coda_max: Option<u32> = None;
+        let mut onset_priority: Option<OnsetPriority> = None;
+        let mut unknown: Option<UnknownMode> = None;
+        let mut unknown_overrides: Vec<(String, UnknownMode)> = Vec::new();
+
+        while !matches!(self.peek(), TokenKind::RBrace | TokenKind::Eof) {
+            let field = self.expect_ident()?;
+            self.expect(&TokenKind::Colon)?;
+            match field.node.as_str() {
+                "template" => {
+                    template = Some(self.parse_syllable_template()?);
+                }
+                "nucleus" => {
+                    nucleus = Some(self.expect_ident()?);
+                }
+                "onset_max" => {
+                    onset_max = Some(self.parse_u32_field()?);
+                }
+                "coda_max" => {
+                    coda_max = Some(self.parse_u32_field()?);
+                }
+                "onset_priority" => {
+                    let tok = self.expect_ident()?;
+                    let p = match tok.node.as_str() {
+                        "max" => OnsetPriority::Max,
+                        "min" => OnsetPriority::Min,
+                        other => {
+                            return Err(Diagnostic::error(format!(
+                                "unknown onset_priority '{}', expected 'max' or 'min'",
+                                other
+                            ))
+                            .with_label(tok.span, "expected max or min"));
+                        }
+                    };
+                    onset_priority = Some(p);
+                }
+                "unknown" => {
+                    let tok = self.expect_ident()?;
+                    unknown = Some(self.unknown_mode_from_ident(&tok)?);
+                }
+                "unknown_overrides" => {
+                    self.expect(&TokenKind::LBrace)?;
+                    while !matches!(self.peek(), TokenKind::RBrace | TokenKind::Eof) {
+                        let key_lit = self.expect_string()?;
+                        self.expect(&TokenKind::Colon)?;
+                        let mode_tok = self.expect_ident()?;
+                        let mode = self.unknown_mode_from_ident(&mode_tok)?;
+                        unknown_overrides.push((key_lit.node, mode));
+                        if matches!(self.peek(), TokenKind::Comma | TokenKind::Semicolon) {
+                            self.advance();
+                        }
+                    }
+                    self.expect(&TokenKind::RBrace)?;
+                    // Deterministic ordering for AST hashing.
+                    unknown_overrides.sort_by(|a, b| a.0.cmp(&b.0));
+                }
+                other => {
+                    return Err(Diagnostic::error(format!(
+                        "unknown syllable field '{}'",
+                        other
+                    ))
+                    .with_label(field.span, "unknown field"));
+                }
+            }
+            // Tolerate optional comma/semicolon between fields.
+            if matches!(self.peek(), TokenKind::Comma | TokenKind::Semicolon) {
+                self.advance();
+            }
+        }
+
+        self.expect(&TokenKind::RBrace)?;
+
+        let template = template.ok_or_else(|| self.error("syllable missing 'template' field"))?;
+        let nucleus = nucleus.ok_or_else(|| self.error("syllable missing 'nucleus' field"))?;
+        let onset_priority = onset_priority.unwrap_or(OnsetPriority::Max);
+        let unknown = unknown.unwrap_or_default();
+
+        Ok(Syllable {
+            name,
+            template,
+            nucleus,
+            onset_max,
+            coda_max,
+            onset_priority,
+            unknown,
+            unknown_overrides,
+            span: self.span_from(start),
+        })
+    }
+
+    /// Parse a syllable template like `(C) V (C) (C)`. The template ends
+    /// when we encounter something that does not look like a slot — either an
+    /// identifier followed by `:` (next field) or a closing brace.
+    fn parse_syllable_template(&mut self) -> Result<SyllableTemplate, Diagnostic> {
+        let start = self.current_span().start;
+        let mut slots = Vec::new();
+        loop {
+            match self.peek() {
+                TokenKind::LParen => {
+                    self.advance();
+                    let class = self.expect_ident()?;
+                    self.expect(&TokenKind::RParen)?;
+                    slots.push(SyllableTemplateSlot { class, optional: true });
+                }
+                TokenKind::Ident(_) => {
+                    // Lookahead: an ident followed by `:` is the next field's
+                    // label, not a slot.
+                    let next = self.tokens.get(self.pos + 1).map(|t| &t.node);
+                    if matches!(next, Some(TokenKind::Colon)) {
+                        break;
+                    }
+                    let class = self.expect_ident()?;
+                    slots.push(SyllableTemplateSlot { class, optional: false });
+                }
+                _ => break,
+            }
+        }
+        if slots.is_empty() {
+            return Err(self.error("syllable template must contain at least one slot"));
+        }
+        Ok(SyllableTemplate {
+            slots,
+            span: self.span_from(start),
+        })
+    }
+
+    /// Parse a non-negative integer field (used for `onset_max` / `coda_max`).
+    /// The lexer produces digit-started idents, so we read an ident and parse
+    /// it as `u32`.
+    fn parse_u32_field(&mut self) -> Result<u32, Diagnostic> {
+        let tok = self.advance();
+        let text = match &tok.node {
+            TokenKind::Ident(s) => s.clone(),
+            other => {
+                return Err(Diagnostic::error(format!(
+                    "expected non-negative integer, found {:?}",
+                    other
+                ))
+                .with_label(tok.span, "expected integer"));
+            }
+        };
+        text.parse::<u32>().map_err(|_| {
+            Diagnostic::error(format!("invalid non-negative integer '{}'", text))
+                .with_label(tok.span, "not a u32")
+        })
+    }
+
+    /// Convert an identifier into an [`UnknownMode`], or error with a clear
+    /// message listing the accepted variants.
+    fn unknown_mode_from_ident(&self, tok: &Ident) -> Result<UnknownMode, Diagnostic> {
+        match tok.node.as_str() {
+            "ignore" => Ok(UnknownMode::Ignore),
+            "skip" => Ok(UnknownMode::Skip),
+            "warn" => Ok(UnknownMode::Warn),
+            "error" => Ok(UnknownMode::Error),
+            other => Err(Diagnostic::error(format!(
+                "unknown unknown-mode '{}', expected ignore | skip | warn | error",
+                other
+            ))
+            .with_label(tok.span, "expected ignore | skip | warn | error")),
+        }
     }
 
     // -----------------------------------------------------------------------

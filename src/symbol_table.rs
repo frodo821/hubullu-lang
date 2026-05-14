@@ -20,6 +20,7 @@ pub enum SymbolKind {
     Entry,
     PhonRule,
     Phoneme,
+    Syllable,
 }
 
 /// A registered symbol.
