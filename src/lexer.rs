@@ -215,6 +215,10 @@ impl<'a> Lexer<'a> {
                 self.advance();
                 Some(self.make_token(TokenKind::Star, start, self.pos))
             }
+            '?' => {
+                self.advance();
+                Some(self.make_token(TokenKind::Question, start, self.pos))
+            }
             '/' => {
                 self.advance();
                 if self.peek() == Some('/') {

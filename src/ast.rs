@@ -468,17 +468,71 @@ pub struct PhonContext {
     pub right: Vec<PhonContextElem>,
 }
 
+/// A *quantifiable* context atom: phoneme class, negated class, literal,
+/// wildcard `.`, or an alternation. F6 lets any of these carry a quantifier
+/// (`*` `+` `?` `{n}` `{n,m}` `{n,}`). Anchors (`^` `$` `%syl<head>%` …) are
+/// *not* quantifiable and live directly on [`PhonContextElem`].
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum PhonAtom {
+    Class(Ident),
+    NegClass(Ident),
+    Literal(StringLit),
+    /// Wildcard `.` — matches any single phoneme (F6).
+    Wildcard,
+    /// `( a | b | ... )` alternation. Each alternative is a full context
+    /// element so anchors may still appear inside an alternation.
+    Alt(Vec<PhonContextElem>),
+}
+
+/// F6 quantifier applied to a [`PhonAtom`]. An un-quantified atom is
+/// equivalent to [`Quantifier::Exact(1)`].
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Quantifier {
+    /// `*` — zero or more.
+    Star,
+    /// `+` — one or more.
+    Plus,
+    /// `?` — zero or one.
+    Question,
+    /// `{n}` — exactly `n`.
+    Exact(u32),
+    /// `{n,}` — `n` or more.
+    AtLeast(u32),
+    /// `{n,m}` — between `n` and `m` inclusive.
+    Range(u32, u32),
+}
+
+impl Quantifier {
+    /// Lower bound on the number of repetitions.
+    pub fn min(self) -> u32 {
+        match self {
+            Quantifier::Star | Quantifier::Question => 0,
+            Quantifier::Plus => 1,
+            Quantifier::Exact(n) | Quantifier::AtLeast(n) | Quantifier::Range(n, _) => n,
+        }
+    }
+
+    /// Upper bound on the number of repetitions (`None` = unbounded).
+    pub fn max(self) -> Option<u32> {
+        match self {
+            Quantifier::Star | Quantifier::Plus | Quantifier::AtLeast(_) => None,
+            Quantifier::Question => Some(1),
+            Quantifier::Exact(n) | Quantifier::Range(_, n) => Some(n),
+        }
+    }
+}
+
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PhonContextElem {
-    Class(Ident),
-    NegClass(Ident),
+    /// A quantifiable atom with its quantifier. An un-quantified atom uses
+    /// [`Quantifier::Exact(1)`], keeping v1 rules byte-for-byte compatible.
+    Atom(PhonAtom, Quantifier),
     Boundary,
     WordStart,
     WordEnd,
-    Literal(StringLit),
-    Repeat(Box<PhonContextElem>),
-    Alt(Vec<PhonContextElem>),
     /// `%syl<head>%` — current position is at the start of a syllable (M, was F2c `σ[`).
     /// Requires the enclosing phonrule to have a `syllable: NAME` field.
     SylHead,
@@ -490,6 +544,28 @@ pub enum PhonContextElem {
     /// The numeric spec is parsed and stored here, but evaluation is deferred
     /// to F7; phase2 currently rejects its use with a "not yet implemented" error.
     SylIndex(SylSpec),
+}
+
+impl PhonContextElem {
+    /// Construct an un-quantified atom (`{1}`), the v1-compatible form.
+    pub fn atom(a: PhonAtom) -> Self {
+        PhonContextElem::Atom(a, Quantifier::Exact(1))
+    }
+
+    /// Convenience: un-quantified phoneme class.
+    pub fn class(id: Ident) -> Self {
+        PhonContextElem::atom(PhonAtom::Class(id))
+    }
+
+    /// Convenience: un-quantified negated class.
+    pub fn neg_class(id: Ident) -> Self {
+        PhonContextElem::atom(PhonAtom::NegClass(id))
+    }
+
+    /// Convenience: un-quantified literal.
+    pub fn literal(s: StringLit) -> Self {
+        PhonContextElem::atom(PhonAtom::Literal(s))
+    }
 }
 
 /// Numeric/range spec inside a `%syl<#...>%` macro (M parses, F7 evaluates).

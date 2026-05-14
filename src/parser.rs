@@ -1474,23 +1474,34 @@ impl Parser {
     }
 
     fn parse_phon_context_elem(&mut self) -> Result<PhonContextElem, Diagnostic> {
-        let elem = match self.peek() {
+        // Anchors first: these are *not* quantifiable (F6 §7.1). If a
+        // quantifier token follows an anchor, reject it with a clear error
+        // rather than silently dropping it.
+        match self.peek() {
             TokenKind::Plus => {
                 self.advance();
+                self.reject_quantifier_on_anchor("'+' (word boundary)")?;
                 return Ok(PhonContextElem::Boundary);
             }
             TokenKind::Caret => {
                 self.advance();
+                self.reject_quantifier_on_anchor("'^' (word start)")?;
                 return Ok(PhonContextElem::WordStart);
             }
             TokenKind::Dollar => {
                 self.advance();
+                self.reject_quantifier_on_anchor("'$' (word end)")?;
                 return Ok(PhonContextElem::WordEnd);
             }
             // `%name<spec>%` / `%name[seq]%` — macro context element (M).
             // Replaces the F2c `σ[` / `]σ` digraphs with an ASCII syntax.
+            // Macro anchors (`%syl<head>%`, `%syl<tail>%`, `%syl<#...>%`) and
+            // the `%syl[` content-block opener are all anchors — not
+            // quantifiable in F6 (syl-block quantification is F8 / §7.1).
             TokenKind::Percent => {
-                return self.parse_macro_context_elem();
+                let elem = self.parse_macro_context_elem()?;
+                self.reject_quantifier_on_anchor("a '%syl...%' macro anchor")?;
+                return Ok(elem);
             }
             // `] %` — closing digraph of a `%syl[ ... ]%` content block (M).
             // Emits the syllable-tail anchor, mirroring the old `]σ`. A bare
@@ -1503,8 +1514,14 @@ impl Parser {
             {
                 self.advance(); // ]
                 self.advance(); // %
+                self.reject_quantifier_on_anchor("the '%syl[...]%' block end")?;
                 return Ok(PhonContextElem::SylTail);
             }
+            _ => {}
+        }
+
+        // Quantifiable atoms.
+        let atom = match self.peek() {
             TokenKind::LParen => {
                 self.advance();
                 let mut alts = vec![self.parse_phon_context_elem()?];
@@ -1513,20 +1530,26 @@ impl Parser {
                     alts.push(self.parse_phon_context_elem()?);
                 }
                 self.expect(&TokenKind::RParen)?;
-                PhonContextElem::Alt(alts)
+                PhonAtom::Alt(alts)
             }
             TokenKind::Bang => {
                 self.advance();
                 let id = self.expect_ident()?;
-                PhonContextElem::NegClass(id)
+                PhonAtom::NegClass(id)
+            }
+            // Wildcard `.` — any single phoneme (F6). `.` is a reserved
+            // token, so it cannot also be an identifier.
+            TokenKind::Dot => {
+                self.advance();
+                PhonAtom::Wildcard
             }
             TokenKind::StringLit(_) => {
                 let s = self.expect_string()?;
-                PhonContextElem::Literal(s)
+                PhonAtom::Literal(s)
             }
             TokenKind::Ident(_) => {
                 let id = self.expect_ident()?;
-                PhonContextElem::Class(id)
+                PhonAtom::Class(id)
             }
             _ => {
                 return Err(self.error(format!(
@@ -1536,13 +1559,96 @@ impl Parser {
             }
         };
 
-        // Check for * (repeat)
-        if matches!(self.peek(), TokenKind::Star) {
-            self.advance();
-            Ok(PhonContextElem::Repeat(Box::new(elem)))
-        } else {
-            Ok(elem)
+        let quant = self.parse_quantifier_suffix()?;
+        Ok(PhonContextElem::Atom(atom, quant))
+    }
+
+    /// Error out if a quantifier token immediately follows an anchor. Anchors
+    /// (`^` `$` `+` and `%syl...%` macros) are zero-width and cannot be
+    /// quantified in F6 (proposal §7.1; syl-block quantification is F8).
+    fn reject_quantifier_on_anchor(&mut self, what: &str) -> Result<(), Diagnostic> {
+        if matches!(
+            self.peek(),
+            TokenKind::Star | TokenKind::Plus | TokenKind::Question | TokenKind::LBrace
+        ) {
+            return Err(self.error(format!(
+                "quantifier cannot be applied to {} — only phoneme classes, \
+                 literals and the wildcard '.' are quantifiable",
+                what
+            )));
         }
+        Ok(())
+    }
+
+    /// Parse an optional F6 quantifier suffix. Absence yields `Exact(1)`,
+    /// keeping un-quantified (v1) elements byte-for-byte compatible.
+    ///
+    /// ```text
+    /// quantifier = "*" | "+" | "?" | "{" N "}" | "{" N "," N? "}"
+    /// ```
+    fn parse_quantifier_suffix(&mut self) -> Result<Quantifier, Diagnostic> {
+        match self.peek() {
+            TokenKind::Star => {
+                self.advance();
+                Ok(Quantifier::Star)
+            }
+            TokenKind::Plus => {
+                self.advance();
+                Ok(Quantifier::Plus)
+            }
+            TokenKind::Question => {
+                self.advance();
+                Ok(Quantifier::Question)
+            }
+            TokenKind::LBrace => {
+                self.advance(); // {
+                let n = self.parse_quant_number()?;
+                if matches!(self.peek(), TokenKind::Comma) {
+                    self.advance(); // ,
+                    if matches!(self.peek(), TokenKind::RBrace) {
+                        self.advance(); // }
+                        Ok(Quantifier::AtLeast(n))
+                    } else {
+                        let m = self.parse_quant_number()?;
+                        self.expect(&TokenKind::RBrace)?; // }
+                        if n > m {
+                            return Err(self.error(format!(
+                                "invalid quantifier '{{{},{}}}': lower bound {} \
+                                 exceeds upper bound {}",
+                                n, m, n, m
+                            )));
+                        }
+                        Ok(Quantifier::Range(n, m))
+                    }
+                } else {
+                    self.expect(&TokenKind::RBrace)?; // }
+                    Ok(Quantifier::Exact(n))
+                }
+            }
+            _ => Ok(Quantifier::Exact(1)),
+        }
+    }
+
+    /// Parse a non-negative integer inside a `{...}` quantifier. Integers are
+    /// lexed as digit-started identifiers.
+    fn parse_quant_number(&mut self) -> Result<u32, Diagnostic> {
+        let tok = self.peek_token().clone();
+        let digits = match &tok.node {
+            TokenKind::Ident(s) if !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()) => {
+                s.clone()
+            }
+            _ => {
+                return Err(self.error(format!(
+                    "expected a non-negative integer in quantifier, found {:?}",
+                    self.peek()
+                )));
+            }
+        };
+        self.advance();
+        digits.parse().map_err(|_| {
+            Diagnostic::error(format!("quantifier count '{}' is out of range", digits))
+                .with_label(tok.span, "here")
+        })
     }
 
     /// Parse a macro context element (M): `%name<spec>%` or `%name[seq]%`.

@@ -680,18 +680,21 @@ fn classify_phon_context_elems(elems: &[ast::PhonContextElem], fid: FileId, map:
 }
 
 fn classify_phon_context_elem(elem: &ast::PhonContextElem, fid: FileId, map: &mut HashMap<(usize, usize), u32>) {
-    match elem {
-        ast::PhonContextElem::Class(c) | ast::PhonContextElem::NegClass(c) => {
+    if let ast::PhonContextElem::Atom(atom, _quant) = elem {
+        classify_phon_atom(atom, fid, map);
+    }
+}
+
+fn classify_phon_atom(atom: &ast::PhonAtom, fid: FileId, map: &mut HashMap<(usize, usize), u32>) {
+    match atom {
+        ast::PhonAtom::Class(c) | ast::PhonAtom::NegClass(c) => {
             put(map, &c.span, fid, TYPE);
         }
-        ast::PhonContextElem::Repeat(inner) => {
-            classify_phon_context_elem(inner, fid, map);
-        }
-        ast::PhonContextElem::Alt(alts) => {
+        ast::PhonAtom::Alt(alts) => {
             for alt in alts {
                 classify_phon_context_elem(alt, fid, map);
             }
         }
-        _ => {}
+        ast::PhonAtom::Literal(_) | ast::PhonAtom::Wildcard => {}
     }
 }

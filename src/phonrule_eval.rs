@@ -401,7 +401,44 @@ fn apply_map(ch: &str, map_name: &str, phonrule: &PhonRule) -> String {
     ch.to_string()
 }
 
-/// Check if the context condition matches at position `pos` in the character array.
+// ===========================================================================
+// F6: context match engine — greedy backtracking
+// ===========================================================================
+//
+// `check_context` walks the left and right context element lists against the
+// `\0`-boundary-marked input. v1 only had fixed-width / un-backtracking
+// elements; F6 introduces quantifiers (`* + ? {n} {n,m} {n,}`) and the
+// wildcard `.`, which require a proper greedy backtracking matcher.
+//
+// The matcher is a straightforward recursive backtracker over the element
+// list. For each [`PhonContextElem::Atom(atom, quant)`] it greedily consumes
+// as many occurrences of `atom` as possible (up to `quant.max()`), then
+// retreats one occurrence at a time on failure of the rest of the list.
+// Anchors (`^ $ %syl...%` and word boundaries) are zero-width and match in
+// place. Boundary markers (`\0`) are transparent and skipped over when
+// consuming an atom — the same rule v1 used.
+//
+// The left context is matched right-to-left (the element closest to the
+// rewrite position is the rightmost one); the right context left-to-right.
+// `Direction` abstracts over the two so the backtracker is shared.
+
+/// Implementation-level cap on how far a context match may scan from the
+/// rewrite position, in segments. Guards against pathological backtracking
+/// and runaway `*` / `{n,}` quantifiers (proposal §4 F6: "context 長は実装上
+/// 50 segment 上限など").
+const CONTEXT_SCAN_LIMIT: usize = 50;
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum Direction {
+    /// Right context: cursor advances forwards through `chars`.
+    Forward,
+    /// Left context: cursor moves backwards through `chars`.
+    Backward,
+}
+
+/// Check if the context condition matches at position `pos` in the character
+/// array. `match_len` is the width of the LHS match (always 1 in F6 — LHS
+/// ranges are F8).
 fn check_context(
     chars: &[char],
     pos: usize,
@@ -409,266 +446,320 @@ fn check_context(
     rctx: &PhonContext,
     ctx: EvalCtx<'_>,
 ) -> bool {
-    // Check left context (reading backwards from pos)
-    if !match_left_context(chars, pos, &rctx.left, ctx) {
+    // Left context: match right-to-left starting just left of `pos`. The
+    // element list is reversed so the element closest to the rewrite site is
+    // consumed first.
+    let left: Vec<&PhonContextElem> = rctx.left.iter().rev().collect();
+    if !match_seq(chars, pos, &left, ctx, Direction::Backward, pos) {
         return false;
     }
-    // Check right context (reading forwards from pos + match_len)
-    if !match_right_context(chars, pos + match_len, &rctx.right, ctx) {
+    // Right context: match left-to-right starting just past the LHS match.
+    let right: Vec<&PhonContextElem> = rctx.right.iter().collect();
+    let rstart = pos + match_len;
+    if !match_seq(chars, rstart, &right, ctx, Direction::Forward, rstart) {
         return false;
     }
     true
 }
 
-/// Match left context elements going backwards from `pos`.
-fn match_left_context(
+/// Try to match `elems[0..]` starting at `cursor`, going in `dir`. `origin`
+/// is the cursor position where this context side started (used to enforce
+/// [`CONTEXT_SCAN_LIMIT`]). Returns whether a full match of the remaining
+/// elements is possible (the matcher only needs a yes/no answer — context
+/// matching never consumes input outside itself).
+fn match_seq(
     chars: &[char],
-    pos: usize,
-    elements: &[PhonContextElem],
+    cursor: usize,
+    elems: &[&PhonContextElem],
     ctx: EvalCtx<'_>,
+    dir: Direction,
+    origin: usize,
 ) -> bool {
-    // We need to match the elements right-to-left against chars left of pos
-    let mut cursor = pos;
-    // Process elements in reverse (rightmost element is closest to match position)
-    for elem in elements.iter().rev() {
-        if !match_left_elem(chars, &mut cursor, elem, ctx) {
-            return false;
-        }
+    // Bail out if we have scanned too far from the rewrite site.
+    let scanned = cursor.abs_diff(origin);
+    if scanned > CONTEXT_SCAN_LIMIT {
+        return false;
     }
-    true
-}
 
-fn match_left_elem(
-    chars: &[char],
-    cursor: &mut usize,
-    elem: &PhonContextElem,
-    ctx: EvalCtx<'_>,
-) -> bool {
-    match elem {
+    let (first, rest) = match elems.split_first() {
+        Some(split) => split,
+        None => return true, // all elements consumed → success
+    };
+
+    match first {
+        // ---- zero-width anchors ------------------------------------------
         PhonContextElem::Boundary => {
-            if *cursor > 0 && chars[*cursor - 1] == BOUNDARY {
-                *cursor -= 1;
-                true
-            } else {
-                *cursor == 0
+            // `+` matches a literal boundary marker, OR the word edge.
+            match dir {
+                Direction::Backward => {
+                    if cursor > 0 && chars[cursor - 1] == BOUNDARY {
+                        match_seq(chars, cursor - 1, rest, ctx, dir, origin)
+                    } else {
+                        cursor == 0 && match_seq(chars, cursor, rest, ctx, dir, origin)
+                    }
+                }
+                Direction::Forward => {
+                    if cursor < chars.len() && chars[cursor] == BOUNDARY {
+                        match_seq(chars, cursor + 1, rest, ctx, dir, origin)
+                    } else {
+                        cursor >= chars.len()
+                            && match_seq(chars, cursor, rest, ctx, dir, origin)
+                    }
+                }
             }
         }
         PhonContextElem::WordStart => {
-            *cursor == 0
+            cursor == 0 && match_seq(chars, cursor, rest, ctx, dir, origin)
         }
         PhonContextElem::WordEnd => {
-            // WordEnd in left context: not meaningful (word end is to the right)
-            false
+            cursor >= chars.len() && match_seq(chars, cursor, rest, ctx, dir, origin)
         }
-        PhonContextElem::Class(name) => {
-            if *cursor == 0 {
-                return false;
-            }
-            if chars[*cursor - 1] == BOUNDARY {
-                return false;
-            }
-            let ch_str = chars[*cursor - 1].to_string();
-            if char_in_class(&ch_str, &name.node, ctx) {
-                *cursor -= 1;
-                true
-            } else {
-                false
-            }
-        }
-        PhonContextElem::NegClass(name) => {
-            if *cursor == 0 {
-                return false;
-            }
-            if chars[*cursor - 1] == BOUNDARY {
-                return false;
-            }
-            let ch_str = chars[*cursor - 1].to_string();
-            if !char_in_class(&ch_str, &name.node, ctx) {
-                *cursor -= 1;
-                true
-            } else {
-                false
-            }
-        }
-        PhonContextElem::Repeat(inner) => {
-            loop {
-                let saved = *cursor;
-                if !match_left_elem(chars, cursor, inner, ctx) {
-                    *cursor = saved;
-                    break;
-                }
-            }
-            true
-        }
-        PhonContextElem::Literal(lit) => {
-            let lit_chars: Vec<char> = lit.node.chars().collect();
-            let mut c = *cursor;
-            for lch in lit_chars.iter().rev() {
-                if c == 0 || chars[c - 1] == BOUNDARY || chars[c - 1] != *lch {
-                    return false;
-                }
-                c -= 1;
-            }
-            *cursor = c;
-            true
-        }
-        PhonContextElem::Alt(alts) => {
-            for alt in alts {
-                let mut trial = *cursor;
-                if match_left_elem(chars, &mut trial, alt, ctx) {
-                    *cursor = trial;
-                    return true;
-                }
-            }
-            false
-        }
-        // M (was F2c): syllable-aware macro context elements. `%syl<head>%`
-        // in the *left* context means "the current cursor sits at a syllable
-        // start" — like `^`, it is a zero-width anchor and consumes nothing.
         PhonContextElem::SylHead => {
-            match ctx.syllable_boundaries {
-                Some(b) => b.is_start(*cursor),
-                None => false,
-            }
+            let ok = matches!(ctx.syllable_boundaries, Some(b) if b.is_start(cursor));
+            ok && match_seq(chars, cursor, rest, ctx, dir, origin)
         }
-        // `%syl<tail>%` in the *left* context means "the current cursor sits
-        // at a syllable end" (the syllable just finished to our left).
         PhonContextElem::SylTail => {
-            match ctx.syllable_boundaries {
-                Some(b) => b.is_end(*cursor),
-                None => false,
-            }
+            let ok = matches!(ctx.syllable_boundaries, Some(b) if b.is_end(cursor));
+            ok && match_seq(chars, cursor, rest, ctx, dir, origin)
         }
-        // `%syl<#N>%` is parsed (M) but not yet evaluated (F7). Phase2 rejects
+        // `%syl<#N>%` is parsed (M) but only evaluated by F7. Phase2 rejects
         // its use, so this is unreachable for well-formed programs; treat it
         // as a non-match defensively.
         PhonContextElem::SylIndex(_) => false,
+
+        // ---- quantifiable atom -------------------------------------------
+        PhonContextElem::Atom(atom, quant) => {
+            match_atom_quant(chars, cursor, atom, *quant, rest, ctx, dir, origin)
+        }
     }
 }
 
-/// Match right context elements going forwards from `pos`.
-fn match_right_context(
+/// Greedily match `atom` repeated within the bounds of `quant`, then the rest
+/// of the element list. Tries the largest repetition count first and
+/// backtracks down to `quant.min()`.
+#[allow(clippy::too_many_arguments)]
+fn match_atom_quant(
     chars: &[char],
-    pos: usize,
-    elements: &[PhonContextElem],
+    cursor: usize,
+    atom: &PhonAtom,
+    quant: Quantifier,
+    rest: &[&PhonContextElem],
     ctx: EvalCtx<'_>,
+    dir: Direction,
+    origin: usize,
 ) -> bool {
-    let mut cursor = pos;
-    for elem in elements {
-        if !match_right_elem(chars, &mut cursor, elem, ctx) {
+    let min = quant.min() as usize;
+    let max = quant.max().map(|m| m as usize);
+
+    // Collect the cursor positions reachable by consuming 0, 1, 2, … copies
+    // of `atom`, greedily, until either `max` is reached or `atom` no longer
+    // matches. `stops[k]` is the cursor after consuming `k` copies.
+    let mut stops = vec![cursor];
+    let mut cur = cursor;
+    loop {
+        if let Some(m) = max {
+            if stops.len() > m {
+                break;
+            }
+        }
+        // Hard guard against runaway `*` / `{n,}` on a zero-consuming atom or
+        // a very long input.
+        if stops.len() > CONTEXT_SCAN_LIMIT + 1 {
+            break;
+        }
+        match consume_atom(chars, cur, atom, ctx, dir) {
+            Some(next) => {
+                cur = next;
+                stops.push(cur);
+            }
+            None => break,
+        }
+    }
+
+    // Not even the minimum count is reachable → fail.
+    if stops.len() - 1 < min {
+        return false;
+    }
+
+    // Greedy: try the largest count first, backtrack down to `min`.
+    let mut k = stops.len() - 1;
+    loop {
+        if match_seq(chars, stops[k], rest, ctx, dir, origin) {
+            return true;
+        }
+        if k == min {
             return false;
         }
+        k -= 1;
     }
-    true
 }
 
-fn match_right_elem(
+/// Try to consume exactly one occurrence of `atom` at `cursor` going `dir`.
+/// Returns the new cursor position, or `None` if `atom` does not match.
+/// Boundary markers (`\0`) are transparent and skipped over before/at the
+/// segment being matched, mirroring v1 behaviour.
+fn consume_atom(
     chars: &[char],
-    cursor: &mut usize,
-    elem: &PhonContextElem,
+    cursor: usize,
+    atom: &PhonAtom,
     ctx: EvalCtx<'_>,
-) -> bool {
-    match elem {
-        PhonContextElem::Boundary => {
-            if *cursor < chars.len() && chars[*cursor] == BOUNDARY {
-                *cursor += 1;
-                true
-            } else {
-                *cursor >= chars.len()
-            }
-        }
-        PhonContextElem::WordStart => {
-            // WordStart in right context: not meaningful (word start is to the left)
-            false
-        }
-        PhonContextElem::WordEnd => {
-            *cursor >= chars.len()
-        }
-        PhonContextElem::Class(name) => {
-            // Skip over boundary markers — boundaries are transparent in context matching
-            while *cursor < chars.len() && chars[*cursor] == BOUNDARY {
-                *cursor += 1;
-            }
-            if *cursor >= chars.len() {
-                return false;
-            }
-            let ch_str = chars[*cursor].to_string();
+    dir: Direction,
+) -> Option<usize> {
+    match atom {
+        PhonAtom::Class(name) => {
+            let (idx, next) = segment_at(chars, cursor, dir)?;
+            let ch_str = chars[idx].to_string();
             if char_in_class(&ch_str, &name.node, ctx) {
-                *cursor += 1;
-                true
+                Some(next)
             } else {
-                false
+                None
             }
         }
-        PhonContextElem::NegClass(name) => {
-            while *cursor < chars.len() && chars[*cursor] == BOUNDARY {
-                *cursor += 1;
-            }
-            if *cursor >= chars.len() {
-                return false;
-            }
-            let ch_str = chars[*cursor].to_string();
+        PhonAtom::NegClass(name) => {
+            let (idx, next) = segment_at(chars, cursor, dir)?;
+            let ch_str = chars[idx].to_string();
             if !char_in_class(&ch_str, &name.node, ctx) {
-                *cursor += 1;
-                true
+                Some(next)
             } else {
-                false
+                None
             }
         }
-        PhonContextElem::Repeat(inner) => {
-            loop {
-                let saved = *cursor;
-                if !match_right_elem(chars, cursor, inner, ctx) {
-                    *cursor = saved;
-                    break;
+        // Wildcard `.` — any single (non-boundary) phoneme.
+        PhonAtom::Wildcard => {
+            let (_idx, next) = segment_at(chars, cursor, dir)?;
+            Some(next)
+        }
+        PhonAtom::Literal(lit) => consume_literal(chars, cursor, &lit.node, dir),
+        // Alternation: first alternative that matches wins. Each alternative
+        // is a full element; we run the single-element matcher and report the
+        // cursor it would leave. To keep the cursor well-defined we only
+        // accept alternatives that are themselves a single consuming step;
+        // this matches v1 semantics where `Alt` held simple elements.
+        PhonAtom::Alt(alts) => {
+            for alt in alts {
+                if let Some(next) = consume_one_elem(chars, cursor, alt, ctx, dir) {
+                    return Some(next);
                 }
             }
-            true
+            None
         }
-        PhonContextElem::Literal(lit) => {
-            let lit_chars: Vec<char> = lit.node.chars().collect();
-            let mut c = *cursor;
+    }
+}
+
+/// Consume one [`PhonContextElem`] (used inside an alternation). Zero-width
+/// anchors leave the cursor unchanged when they hold; quantified atoms are
+/// consumed at their minimum count greedily for one step. Returns the new
+/// cursor or `None`.
+fn consume_one_elem(
+    chars: &[char],
+    cursor: usize,
+    elem: &PhonContextElem,
+    ctx: EvalCtx<'_>,
+    dir: Direction,
+) -> Option<usize> {
+    match elem {
+        PhonContextElem::Boundary => match dir {
+            Direction::Backward => {
+                if cursor > 0 && chars[cursor - 1] == BOUNDARY {
+                    Some(cursor - 1)
+                } else if cursor == 0 {
+                    Some(cursor)
+                } else {
+                    None
+                }
+            }
+            Direction::Forward => {
+                if cursor < chars.len() && chars[cursor] == BOUNDARY {
+                    Some(cursor + 1)
+                } else if cursor >= chars.len() {
+                    Some(cursor)
+                } else {
+                    None
+                }
+            }
+        },
+        PhonContextElem::WordStart => (cursor == 0).then_some(cursor),
+        PhonContextElem::WordEnd => (cursor >= chars.len()).then_some(cursor),
+        PhonContextElem::SylHead => {
+            matches!(ctx.syllable_boundaries, Some(b) if b.is_start(cursor)).then_some(cursor)
+        }
+        PhonContextElem::SylTail => {
+            matches!(ctx.syllable_boundaries, Some(b) if b.is_end(cursor)).then_some(cursor)
+        }
+        PhonContextElem::SylIndex(_) => None,
+        // A quantified atom inside an alternation: consume one occurrence
+        // (the common case is an un-quantified atom). For `?`/`*` the
+        // zero-count branch is left to other alternatives / the empty match.
+        PhonContextElem::Atom(atom, _quant) => consume_atom(chars, cursor, atom, ctx, dir),
+    }
+}
+
+/// Locate the next *segment* (non-boundary char) at or beyond `cursor` going
+/// `dir`, skipping transparent boundary markers. Returns `(index_of_char,
+/// cursor_after_consuming_it)`.
+fn segment_at(chars: &[char], cursor: usize, dir: Direction) -> Option<(usize, usize)> {
+    match dir {
+        Direction::Forward => {
+            let mut c = cursor;
+            while c < chars.len() && chars[c] == BOUNDARY {
+                c += 1;
+            }
+            if c >= chars.len() {
+                None
+            } else {
+                Some((c, c + 1))
+            }
+        }
+        Direction::Backward => {
+            let mut c = cursor;
+            while c > 0 && chars[c - 1] == BOUNDARY {
+                c -= 1;
+            }
+            if c == 0 {
+                None
+            } else {
+                Some((c - 1, c - 1))
+            }
+        }
+    }
+}
+
+/// Consume a multi-char literal at `cursor` going `dir`, skipping transparent
+/// boundary markers between characters (mirrors v1 `Literal` handling).
+fn consume_literal(
+    chars: &[char],
+    cursor: usize,
+    lit: &str,
+    dir: Direction,
+) -> Option<usize> {
+    let lit_chars: Vec<char> = lit.chars().collect();
+    match dir {
+        Direction::Forward => {
+            let mut c = cursor;
             for lch in &lit_chars {
-                // Skip over boundary markers
                 while c < chars.len() && chars[c] == BOUNDARY {
                     c += 1;
                 }
                 if c >= chars.len() || chars[c] != *lch {
-                    return false;
+                    return None;
                 }
                 c += 1;
             }
-            *cursor = c;
-            true
+            Some(c)
         }
-        PhonContextElem::Alt(alts) => {
-            for alt in alts {
-                let mut trial = *cursor;
-                if match_right_elem(chars, &mut trial, alt, ctx) {
-                    *cursor = trial;
-                    return true;
+        Direction::Backward => {
+            let mut c = cursor;
+            for lch in lit_chars.iter().rev() {
+                while c > 0 && chars[c - 1] == BOUNDARY {
+                    c -= 1;
                 }
+                if c == 0 || chars[c - 1] != *lch {
+                    return None;
+                }
+                c -= 1;
             }
-            false
+            Some(c)
         }
-        // M (was F2c): syllable-aware macro context elements on the *right*
-        // side. Both are zero width (just like `^`/`$`) — they check that the
-        // cursor sits on a syllable boundary without consuming any character.
-        PhonContextElem::SylHead => {
-            match ctx.syllable_boundaries {
-                Some(b) => b.is_start(*cursor),
-                None => false,
-            }
-        }
-        PhonContextElem::SylTail => {
-            match ctx.syllable_boundaries {
-                Some(b) => b.is_end(*cursor),
-                None => false,
-            }
-        }
-        // `%syl<#N>%` — parsed (M), evaluated by F7. Phase2 rejects its use,
-        // so this is unreachable for well-formed programs.
-        PhonContextElem::SylIndex(_) => false,
     }
 }
 
@@ -748,10 +839,10 @@ mod tests {
                     to: PhonReplacement::Map(make_ident("to_back")),
                     context: Some(PhonContext {
                         left: vec![
-                            PhonContextElem::Class(make_ident("back")),
-                            PhonContextElem::Repeat(Box::new(PhonContextElem::NegClass(make_ident("back")))),
+                            PhonContextElem::class(make_ident("back")),
+                            PhonContextElem::Atom(PhonAtom::NegClass(make_ident("back")), Quantifier::Star),
                             PhonContextElem::Boundary,
-                            PhonContextElem::Repeat(Box::new(PhonContextElem::NegClass(make_ident("back")))),
+                            PhonContextElem::Atom(PhonAtom::NegClass(make_ident("back")), Quantifier::Star),
                         ],
                         right: vec![],
                     }),
@@ -934,8 +1025,8 @@ mod tests {
         let rule = make_insertion_rule(
             "e",
             PhonContext {
-                left: vec![PhonContextElem::Class(make_ident("C")), PhonContextElem::Boundary],
-                right: vec![PhonContextElem::Class(make_ident("C"))],
+                left: vec![PhonContextElem::class(make_ident("C")), PhonContextElem::Boundary],
+                right: vec![PhonContextElem::class(make_ident("C"))],
             },
             vec![consonant_class()],
         );
@@ -964,7 +1055,7 @@ mod tests {
             "e",
             PhonContext {
                 left: vec![PhonContextElem::WordStart],
-                right: vec![PhonContextElem::Class(make_ident("C")), PhonContextElem::Class(make_ident("C"))],
+                right: vec![PhonContextElem::class(make_ident("C")), PhonContextElem::class(make_ident("C"))],
             },
             vec![consonant_class()],
         );
@@ -980,7 +1071,7 @@ mod tests {
         let rule = make_insertion_rule(
             "e",
             PhonContext {
-                left: vec![PhonContextElem::Class(make_ident("C")), PhonContextElem::Class(make_ident("C"))],
+                left: vec![PhonContextElem::class(make_ident("C")), PhonContextElem::class(make_ident("C"))],
                 right: vec![PhonContextElem::WordEnd],
             },
             vec![consonant_class()],
@@ -997,8 +1088,8 @@ mod tests {
         let rule = make_insertion_rule(
             "x",
             PhonContext {
-                left: vec![PhonContextElem::Class(make_ident("C"))],
-                right: vec![PhonContextElem::Class(make_ident("C"))],
+                left: vec![PhonContextElem::class(make_ident("C"))],
+                right: vec![PhonContextElem::class(make_ident("C"))],
             },
             vec![consonant_class()],
         );
@@ -1036,10 +1127,10 @@ mod tests {
                 to: PhonReplacement::Literal(make_string_lit("p")),
                 context: Some(PhonContext {
                     left: vec![],
-                    right: vec![PhonContextElem::Alt(vec![
-                        PhonContextElem::Class(make_ident("C")),
+                    right: vec![PhonContextElem::atom(PhonAtom::Alt(vec![
+                        PhonContextElem::class(make_ident("C")),
                         PhonContextElem::WordEnd,
-                    ])],
+                    ]))],
                 }),
                 span: make_span(),
             }]),
@@ -1067,10 +1158,10 @@ mod tests {
                 from: PhonPattern::Literal(make_string_lit("k")),
                 to: PhonReplacement::Literal(make_string_lit("g")),
                 context: Some(PhonContext {
-                    left: vec![PhonContextElem::Alt(vec![
+                    left: vec![PhonContextElem::atom(PhonAtom::Alt(vec![
                         PhonContextElem::WordStart,
-                        PhonContextElem::Class(make_ident("V")),
-                    ])],
+                        PhonContextElem::class(make_ident("V")),
+                    ]))],
                     right: vec![],
                 }),
                 span: make_span(),
@@ -1102,10 +1193,13 @@ mod tests {
                 context: Some(PhonContext {
                     left: vec![],
                     right: vec![
-                        PhonContextElem::Repeat(Box::new(PhonContextElem::Alt(vec![
-                            PhonContextElem::Class(make_ident("C")),
-                            PhonContextElem::Class(make_ident("V")),
-                        ]))),
+                        PhonContextElem::Atom(
+                            PhonAtom::Alt(vec![
+                                PhonContextElem::class(make_ident("C")),
+                                PhonContextElem::class(make_ident("V")),
+                            ]),
+                            Quantifier::Star,
+                        ),
                         PhonContextElem::WordEnd,
                     ],
                 }),
@@ -1134,7 +1228,7 @@ mod tests {
                 to: PhonReplacement::Literal(make_string_lit("g")),
                 context: Some(PhonContext {
                     left: vec![],
-                    right: vec![PhonContextElem::Class(make_ident("V"))],
+                    right: vec![PhonContextElem::class(make_ident("V"))],
                 }),
                 span: make_span(),
             }]),
@@ -1166,7 +1260,7 @@ mod tests {
                 to: PhonReplacement::Literal(make_string_lit("p")),
                 context: Some(PhonContext {
                     left: vec![],
-                    right: vec![PhonContextElem::Literal(make_string_lit("an"))],
+                    right: vec![PhonContextElem::literal(make_string_lit("an"))],
                 }),
                 span: make_span(),
             }]),
@@ -1196,7 +1290,7 @@ mod tests {
                 to: PhonReplacement::Literal(make_string_lit("z")),
                 context: Some(PhonContext {
                     left: vec![],
-                    right: vec![PhonContextElem::NegClass(make_ident("V"))],
+                    right: vec![PhonContextElem::neg_class(make_ident("V"))],
                 }),
                 span: make_span(),
             }]),

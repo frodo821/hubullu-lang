@@ -806,26 +806,11 @@ impl<'a> Phase2Ctx<'a> {
         phoneme_names: &HashSet<String>,
     ) {
         match elem {
-            PhonContextElem::Class(name) | PhonContextElem::NegClass(name) => {
-                let known = class_names.contains(&name.node)
-                    || phoneme_names.contains(&name.node);
-                if !known {
-                    self.diagnostics.add(
-                        Diagnostic::error(format!(
-                            "phonrule '{}': context references undefined class '{}'",
-                            pr.name.node, name.node
-                        ))
-                        .with_label(name.span, "undefined class"),
-                    );
-                }
-            }
-            PhonContextElem::Repeat(inner) => {
-                self.validate_context_elem(pr, inner, class_names, phoneme_names);
-            }
-            PhonContextElem::Alt(alts) => {
-                for alt in alts {
-                    self.validate_context_elem(pr, alt, class_names, phoneme_names);
-                }
+            // F6: a quantifiable atom. The quantifier itself is validated by
+            // the parser (`{n,m}` with n>m is a parse error); here we only
+            // recurse into the atom to check class references.
+            PhonContextElem::Atom(atom, _quant) => {
+                self.validate_context_atom(pr, atom, class_names, phoneme_names);
             }
             // M (was F2c): syllable-aware macro context elements require an
             // enclosing `syllable: NAME` field; otherwise we have no
@@ -870,7 +855,40 @@ impl<'a> Phase2Ctx<'a> {
                     .with_label(pr.name.span, "syllable-index macros are not yet supported"),
                 );
             }
-            PhonContextElem::Boundary | PhonContextElem::WordStart | PhonContextElem::WordEnd | PhonContextElem::Literal(_) => {}
+            PhonContextElem::Boundary | PhonContextElem::WordStart | PhonContextElem::WordEnd => {}
+        }
+    }
+
+    /// Validate an F6 quantifiable atom: check class references resolve, and
+    /// recurse into alternations.
+    fn validate_context_atom(
+        &mut self,
+        pr: &PhonRule,
+        atom: &PhonAtom,
+        class_names: &HashSet<&String>,
+        phoneme_names: &HashSet<String>,
+    ) {
+        match atom {
+            PhonAtom::Class(name) | PhonAtom::NegClass(name) => {
+                let known = class_names.contains(&name.node)
+                    || phoneme_names.contains(&name.node);
+                if !known {
+                    self.diagnostics.add(
+                        Diagnostic::error(format!(
+                            "phonrule '{}': context references undefined class '{}'",
+                            pr.name.node, name.node
+                        ))
+                        .with_label(name.span, "undefined class"),
+                    );
+                }
+            }
+            PhonAtom::Alt(alts) => {
+                for alt in alts {
+                    self.validate_context_elem(pr, alt, class_names, phoneme_names);
+                }
+            }
+            // Literals and the wildcard `.` need no name resolution.
+            PhonAtom::Literal(_) | PhonAtom::Wildcard => {}
         }
     }
 
