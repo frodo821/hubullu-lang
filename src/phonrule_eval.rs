@@ -45,6 +45,58 @@ impl SyllableBoundaries {
     fn is_end(&self, pos: usize) -> bool {
         self.ends.binary_search(&pos).is_ok()
     }
+
+    /// Number of syllables in the current syllabification.
+    fn syllable_count(&self) -> usize {
+        self.starts.len()
+    }
+
+    /// Reverse-lookup: which syllable (1-indexed number) does character
+    /// position `pos` fall inside? Returns `None` when `pos` is not inside any
+    /// syllable (e.g. a syllable-less token, or a position between syllables).
+    ///
+    /// `starts`/`ends` are sorted-and-deduped *pairwise* (every `starts[i]`
+    /// pairs with `ends[i]`), so a linear scan is correct and `O(syllables)`.
+    fn syllable_at(&self, pos: usize) -> Option<usize> {
+        for (i, (&start, &end)) in self.starts.iter().zip(self.ends.iter()).enumerate() {
+            if start <= pos && pos < end {
+                return Some(i + 1);
+            }
+        }
+        None
+    }
+
+    /// Evaluate a `%syl<#...>%` index spec as a zero-width anchor at `pos`.
+    ///
+    /// Negative bounds count from the word end (`-1` = last syllable) and are
+    /// normalised to a 1-indexed number via `count + n + 1`. Ranges are
+    /// inclusive on both ends; an omitted bound is open on that side. A range
+    /// whose normalised bounds satisfy `lo > hi` (or any spec that resolves to
+    /// a non-positive / out-of-range number) is simply never matched.
+    fn matches_syl_index(&self, pos: usize, spec: &SylSpec) -> bool {
+        let count = self.syllable_count();
+        let Some(here) = self.syllable_at(pos) else {
+            return false;
+        };
+        // Normalise a bound to a 1-indexed syllable number. Positive values
+        // pass through; negative values count from the end.
+        let normalise = |n: i64| -> i64 {
+            if n < 0 {
+                count as i64 + n + 1
+            } else {
+                n
+            }
+        };
+        match spec {
+            SylSpec::Index(n) => normalise(*n) == here as i64,
+            SylSpec::Range { lo, hi } => {
+                let lo = lo.map(normalise).unwrap_or(1);
+                let hi = hi.map(normalise).unwrap_or(count as i64);
+                let here = here as i64;
+                lo <= here && here <= hi
+            }
+        }
+    }
 }
 
 /// Per-evaluation context: the phonrule being applied plus the optional
@@ -539,10 +591,15 @@ fn match_left_elem(
                 None => false,
             }
         }
-        // `%syl<#N>%` is parsed (M) but not yet evaluated (F7). Phase2 rejects
-        // its use, so this is unreachable for well-formed programs; treat it
-        // as a non-match defensively.
-        PhonContextElem::SylIndex(_) => false,
+        // `%syl<#N>%` / `%syl<#{a..b}>%` (F7): a zero-width anchor that is true
+        // when the cursor sits inside the syllable(s) named by the spec. Like
+        // `^`, it consumes nothing.
+        PhonContextElem::SylIndex(spec) => {
+            match ctx.syllable_boundaries {
+                Some(b) => b.matches_syl_index(*cursor, spec),
+                None => false,
+            }
+        }
     }
 }
 
@@ -666,9 +723,14 @@ fn match_right_elem(
                 None => false,
             }
         }
-        // `%syl<#N>%` — parsed (M), evaluated by F7. Phase2 rejects its use,
-        // so this is unreachable for well-formed programs.
-        PhonContextElem::SylIndex(_) => false,
+        // `%syl<#N>%` / `%syl<#{a..b}>%` (F7) on the *right* side: same
+        // zero-width anchor semantics as in the left context.
+        PhonContextElem::SylIndex(spec) => {
+            match ctx.syllable_boundaries {
+                Some(b) => b.matches_syl_index(*cursor, spec),
+                None => false,
+            }
+        }
     }
 }
 

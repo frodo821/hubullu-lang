@@ -846,11 +846,11 @@ impl<'a> Phase2Ctx<'a> {
                     );
                 }
             }
-            // M parses `%syl<#N>%` / `%syl<#{a..b}>%` into `SylIndex`, but
-            // evaluation is deferred to F7. Reject its use for now so that
-            // rules never silently no-op. The `syllable:` field is still
-            // required (same as the head/tail anchors).
-            PhonContextElem::SylIndex(_) => {
+            // F7: `%syl<#N>%` / `%syl<#{a..b}>%` syllable-index anchors. Like
+            // the head/tail anchors they require an enclosing `syllable: NAME`
+            // field. We additionally reject statically-invalid specs: index 0
+            // (1-indexed origin) and ranges that are provably empty.
+            PhonContextElem::SylIndex(spec) => {
                 if pr.syllable.is_none() {
                     self.diagnostics.add(
                         Diagnostic::error(format!(
@@ -861,14 +861,48 @@ impl<'a> Phase2Ctx<'a> {
                         .with_label(pr.name.span, "add 'syllable: NAME' to this phonrule"),
                     );
                 }
-                self.diagnostics.add(
-                    Diagnostic::error(format!(
-                        "phonrule '{}': the '%syl<#...>%' syllable-index macro is \
-                         parsed but not yet evaluated (planned for F7)",
-                        pr.name.node
-                    ))
-                    .with_label(pr.name.span, "syllable-index macros are not yet supported"),
-                );
+                match spec {
+                    SylSpec::Index(0) => {
+                        self.diagnostics.add(
+                            Diagnostic::error(format!(
+                                "phonrule '{}': '%syl<#0>%' is invalid — syllable \
+                                 indices are 1-indexed (use '#1' for the first \
+                                 syllable, '#-1' for the last)",
+                                pr.name.node
+                            ))
+                            .with_label(pr.name.span, "syllable index 0 is not allowed"),
+                        );
+                    }
+                    SylSpec::Index(_) => {}
+                    SylSpec::Range { lo, hi } => {
+                        if matches!(lo, Some(0)) || matches!(hi, Some(0)) {
+                            self.diagnostics.add(
+                                Diagnostic::error(format!(
+                                    "phonrule '{}': '%syl<#{{...}}>%' range bound 0 is \
+                                     invalid — syllable indices are 1-indexed",
+                                    pr.name.node
+                                ))
+                                .with_label(pr.name.span, "syllable index 0 is not allowed"),
+                            );
+                        }
+                        // A range is provably empty only when both bounds have
+                        // the same sign (so end-relative normalisation can't
+                        // reorder them) and `lo > hi`.
+                        if let (Some(lo), Some(hi)) = (lo, hi) {
+                            let same_sign = (*lo > 0) == (*hi > 0);
+                            if same_sign && lo > hi {
+                                self.diagnostics.add(
+                                    Diagnostic::warning(format!(
+                                        "phonrule '{}': '%syl<#{{{}..{}}}>%' is an empty \
+                                         range (lo > hi) — this context never matches",
+                                        pr.name.node, lo, hi
+                                    ))
+                                    .with_label(pr.name.span, "empty syllable-index range"),
+                                );
+                            }
+                        }
+                    }
+                }
             }
             PhonContextElem::Boundary | PhonContextElem::WordStart | PhonContextElem::WordEnd | PhonContextElem::Literal(_) => {}
         }
