@@ -181,7 +181,7 @@ impl DelegateResolver for NullResolver {
 /// `resolve_syllable()` is the F2c hook: phonrules with `syllable: NAME` look
 /// up their referenced syllable declaration through this method. Resolvers
 /// that don't have a global symbol table return `None` (the default), which
-/// disables σ-aware context evaluation gracefully.
+/// disables syllable-aware context evaluation gracefully.
 pub trait PhonRuleResolver {
     fn resolve(&self, name: &str) -> Option<&PhonRule>;
     /// Resolved global phoneme inventory. `None` (the default) means "no
@@ -190,7 +190,7 @@ pub trait PhonRuleResolver {
     fn inventory(&self) -> Option<&crate::phoneme::PhonemeInventory> { None }
     /// Resolve a `syllable NAME` declaration referenced from a phonrule's
     /// `syllable:` field. Default returns `None`; the legacy `apply_phonrule`
-    /// entry point (without resolver) therefore can't evaluate σ context
+    /// entry point (without resolver) therefore can't evaluate syllable-aware context
     /// elements either, matching the safety net in [`crate::phonrule_eval`].
     fn resolve_syllable(&self, _name: &str) -> Option<&crate::ast::Syllable> { None }
 }

@@ -126,9 +126,9 @@ fn create_schema(conn: &Connection) -> Result<(), Diagnostic> {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             derived_from TEXT,
-            -- F2c: optional reference to a top-level `syllable NAME` declaration
+            -- F2c/M: optional reference to a top-level `syllable NAME` declaration
             -- (the `syllable:` field on a phonrule). Required at compile time
-            -- whenever the rule uses σ-aware context elements.
+            -- whenever the rule uses syllable-aware `%syl...%` macro context elements.
             syllable_ref TEXT
         );
 

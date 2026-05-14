@@ -23,7 +23,7 @@ pub const BOUNDARY: char = '\0';
 /// Cached syllable boundaries for the current input (F2c).
 ///
 /// Built lazily by [`compute_syllable_boundaries`] when a phonrule has a
-/// `syllable: NAME` field and σ context elements need to consult the
+/// `syllable: NAME` field and syllable-aware context elements need to consult the
 /// current syllabification. Positions are character indices into the input
 /// *with* `\0` boundary markers preserved (the same coordinate system used
 /// by [`check_context`]) — we restore positions from the stripped-input
@@ -52,7 +52,7 @@ impl SyllableBoundaries {
 /// local `class` definition.
 ///
 /// `syllable_boundaries` is `None` when the rule has no `syllable:` field or
-/// when no inventory/resolver is available; σ context elements then never
+/// when no inventory/resolver is available; syllable-aware context elements then never
 /// match (phase2 already rejected such combinations at compile time).
 #[derive(Copy, Clone)]
 struct EvalCtx<'a> {
@@ -145,9 +145,9 @@ fn apply_phonrule_inner<R: PhonRuleResolver + ?Sized>(
 }
 
 /// Compute syllable-boundary positions for `input` under `syllable`. Returns
-/// `None` if either ingredient is missing — that signals "σ context elements
-/// cannot match" to the caller. Phase2 prevents σ usage without a `syllable:`
-/// field, so missing-here means a legacy non-resolver call: σ elements then
+/// `None` if either ingredient is missing — that signals "syllable-aware context elements
+/// cannot match" to the caller. Phase2 prevents syllable-aware macro usage without a `syllable:`
+/// field, so missing-here means a legacy non-resolver call: syllable-aware elements then
 /// fail open (never match) instead of erroring at runtime.
 ///
 /// We translate stripped-input character offsets back to *raw* offsets (the
@@ -522,23 +522,27 @@ fn match_left_elem(
             }
             false
         }
-        // F2c: σ-aware context elements. `σ[` in the *left* context means
-        // "the current cursor sits at a syllable start" — like `^`, it is a
-        // zero-width anchor and does not consume a character.
-        PhonContextElem::SylStart => {
+        // M (was F2c): syllable-aware macro context elements. `%syl<head>%`
+        // in the *left* context means "the current cursor sits at a syllable
+        // start" — like `^`, it is a zero-width anchor and consumes nothing.
+        PhonContextElem::SylHead => {
             match ctx.syllable_boundaries {
                 Some(b) => b.is_start(*cursor),
                 None => false,
             }
         }
-        // `]σ` in the *left* context means "the current cursor sits at a
-        // syllable end" (the syllable just finished to our left).
-        PhonContextElem::SylEnd => {
+        // `%syl<tail>%` in the *left* context means "the current cursor sits
+        // at a syllable end" (the syllable just finished to our left).
+        PhonContextElem::SylTail => {
             match ctx.syllable_boundaries {
                 Some(b) => b.is_end(*cursor),
                 None => false,
             }
         }
+        // `%syl<#N>%` is parsed (M) but not yet evaluated (F7). Phase2 rejects
+        // its use, so this is unreachable for well-formed programs; treat it
+        // as a non-match defensively.
+        PhonContextElem::SylIndex(_) => false,
     }
 }
 
@@ -647,21 +651,24 @@ fn match_right_elem(
             }
             false
         }
-        // F2c: σ-aware context elements on the *right* side. Both are zero
-        // width (just like `^`/`$`) — they check that the cursor sits on a
-        // syllable boundary without consuming any character.
-        PhonContextElem::SylStart => {
+        // M (was F2c): syllable-aware macro context elements on the *right*
+        // side. Both are zero width (just like `^`/`$`) — they check that the
+        // cursor sits on a syllable boundary without consuming any character.
+        PhonContextElem::SylHead => {
             match ctx.syllable_boundaries {
                 Some(b) => b.is_start(*cursor),
                 None => false,
             }
         }
-        PhonContextElem::SylEnd => {
+        PhonContextElem::SylTail => {
             match ctx.syllable_boundaries {
                 Some(b) => b.is_end(*cursor),
                 None => false,
             }
         }
+        // `%syl<#N>%` — parsed (M), evaluated by F7. Phase2 rejects its use,
+        // so this is unreachable for well-formed programs.
+        PhonContextElem::SylIndex(_) => false,
     }
 }
 

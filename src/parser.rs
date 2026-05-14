@@ -1183,7 +1183,7 @@ impl Parser {
                 derived_from = Some(self.expect_ident()?);
             } else if self.at_field("syllable") {
                 // `syllable: NAME` — references a top-level syllable
-                // declaration (F2c). Required for σ context elements.
+                // declaration (F2c). Required for syllable-aware context elements.
                 self.advance(); // consume "syllable"
                 self.expect(&TokenKind::Colon)?;
                 syllable = Some(self.expect_ident()?);
@@ -1487,24 +1487,23 @@ impl Parser {
                 self.advance();
                 return Ok(PhonContextElem::WordEnd);
             }
-            // `]σ` — syllable-end boundary (F2c). The RBracket is otherwise
-            // an unexpected token in context position; we use it as the lead
-            // char of the `]σ` digraph and require an immediately-following
-            // `Ident("σ")` token.
-            TokenKind::RBracket => {
-                // Only consume if followed by Ident("σ").
+            // `%name<spec>%` / `%name[seq]%` — macro context element (M).
+            // Replaces the F2c `σ[` / `]σ` digraphs with an ASCII syntax.
+            TokenKind::Percent => {
+                return self.parse_macro_context_elem();
+            }
+            // `] %` — closing digraph of a `%syl[ ... ]%` content block (M).
+            // Emits the syllable-tail anchor, mirroring the old `]σ`. A bare
+            // `]` is otherwise not a valid context element.
+            TokenKind::RBracket
                 if matches!(
                     self.tokens.get(self.pos + 1).map(|t| &t.node),
-                    Some(TokenKind::Ident(s)) if s == "σ"
-                ) {
-                    self.advance(); // ]
-                    self.advance(); // σ
-                    return Ok(PhonContextElem::SylEnd);
-                }
-                return Err(self.error(format!(
-                    "expected context element, found {:?}",
-                    self.peek()
-                )));
+                    Some(TokenKind::Percent)
+                ) =>
+            {
+                self.advance(); // ]
+                self.advance(); // %
+                return Ok(PhonContextElem::SylTail);
             }
             TokenKind::LParen => {
                 self.advance();
@@ -1525,20 +1524,6 @@ impl Parser {
                 let s = self.expect_string()?;
                 PhonContextElem::Literal(s)
             }
-            // `σ[` — syllable-start boundary (F2c). The leading `σ` ident
-            // followed immediately by `[` is the only way to introduce a
-            // syllable-start element. A bare `σ` ident is still a valid
-            // class name and falls through to the generic Ident arm below.
-            TokenKind::Ident(s) if s == "σ"
-                && matches!(
-                    self.tokens.get(self.pos + 1).map(|t| &t.node),
-                    Some(TokenKind::LBracket)
-                ) =>
-            {
-                self.advance(); // σ
-                self.advance(); // [
-                return Ok(PhonContextElem::SylStart);
-            }
             TokenKind::Ident(_) => {
                 let id = self.expect_ident()?;
                 PhonContextElem::Class(id)
@@ -1558,6 +1543,162 @@ impl Parser {
         } else {
             Ok(elem)
         }
+    }
+
+    /// Parse a macro context element (M): `%name<spec>%` or `%name[seq]%`.
+    ///
+    /// Grammar:
+    /// ```text
+    /// macro    = "%" name ( "<" spec ">" )? ( "[" sequence "]" )? "%"
+    /// spec     = num_spec | name_spec
+    /// num_spec = "#" INTEGER | "#" "{" range "}"
+    /// range    = bound? ".." bound?
+    /// ```
+    ///
+    /// For the `%name[ ... ]%` content-block form, this consumes `% name [`
+    /// and returns the opening anchor (`SylHead` for `syl`); the inner
+    /// `sequence` and the closing `] %` are read by [`parse_phon_context`] /
+    /// the `] %` digraph arm below, mirroring the old `σ[ ... ]σ` handling.
+    ///
+    /// Currently only the `syl` macro is recognised. The `head`/`tail` name
+    /// specs and the `[ ... ]` block reuse the existing `SylHead`/`SylTail`
+    /// AST; numeric specs (`#N`, `#{a..b}`) parse into `SylIndex(SylSpec)` but
+    /// are not yet evaluated (deferred to F7 — phase2 rejects their use).
+    fn parse_macro_context_elem(&mut self) -> Result<PhonContextElem, Diagnostic> {
+        self.expect(&TokenKind::Percent)?; // %
+        let name = self.expect_ident()?;
+        if name.node != "syl" {
+            return Err(self.error(format!(
+                "unknown macro '%{}%'; only '%syl%' is supported",
+                name.node
+            )));
+        }
+
+        let mut elem: Option<PhonContextElem> = None;
+
+        // Optional `< spec >`.
+        if matches!(self.peek(), TokenKind::Lt) {
+            self.advance(); // <
+            let spec_elem = self.parse_syl_spec()?;
+            self.expect(&TokenKind::Gt)?; // >
+            elem = Some(spec_elem);
+        }
+
+        // Optional `[ sequence ]` content block. The block's opening `[`
+        // emits the head anchor; the inner sequence and closing `] %` are
+        // handled by the surrounding context parser (see the `] %` arm).
+        if matches!(self.peek(), TokenKind::LBracket) {
+            if elem.is_some() {
+                return Err(self.error(
+                    "macro cannot have both a '<spec>' and a '[...]' content block",
+                ));
+            }
+            self.advance(); // [
+            // The closing `] %` is consumed later; do NOT expect `%` here.
+            return Ok(PhonContextElem::SylHead);
+        }
+
+        // No `<spec>` and no `[...]` → empty macro `%syl%`, which is invalid.
+        let elem = match elem {
+            Some(e) => e,
+            None => {
+                return Err(self.error(
+                    "empty macro '%syl%': expected a '<spec>' or a '[...]' content block",
+                ));
+            }
+        };
+
+        // Self-contained forms (`%syl<...>%`) consume their own closing `%`.
+        self.expect(&TokenKind::Percent)?; // %
+        Ok(elem)
+    }
+
+    /// Parse the `spec` inside `%syl< ... >%`.
+    ///
+    /// `spec = num_spec | name_spec`, where `name_spec` is a reserved keyword
+    /// (`head` / `tail` for the `syl` macro) and `num_spec` is `#`-prefixed.
+    fn parse_syl_spec(&mut self) -> Result<PhonContextElem, Diagnostic> {
+        match self.peek() {
+            // name_spec: `head` / `tail`
+            TokenKind::Ident(_) => {
+                let kw = self.expect_ident()?;
+                match kw.node.as_str() {
+                    "head" => Ok(PhonContextElem::SylHead),
+                    "tail" => Ok(PhonContextElem::SylTail),
+                    other => Err(self.error(format!(
+                        "unknown syl macro keyword '{}'; expected 'head' or 'tail'",
+                        other
+                    ))),
+                }
+            }
+            // num_spec: `#` INTEGER | `#` `{` range `}`
+            TokenKind::Hash => {
+                self.advance(); // #
+                let spec = self.parse_syl_num_spec()?;
+                Ok(PhonContextElem::SylIndex(spec))
+            }
+            _ => Err(self.error(format!(
+                "expected a syl macro keyword ('head'/'tail') or a '#'-prefixed \
+                 numeric spec, found {:?}",
+                self.peek()
+            ))),
+        }
+    }
+
+    /// Parse `num_spec` after the leading `#` has been consumed:
+    /// `INTEGER` or `{ range }` where `range = bound? ".." bound?`.
+    fn parse_syl_num_spec(&mut self) -> Result<SylSpec, Diagnostic> {
+        if matches!(self.peek(), TokenKind::LBrace) {
+            self.advance(); // {
+            // range = bound? ".." bound?
+            let lo = if matches!(self.peek(), TokenKind::DotDot) {
+                None
+            } else {
+                Some(self.parse_syl_bound()?)
+            };
+            self.expect(&TokenKind::DotDot)?; // ..
+            let hi = if matches!(self.peek(), TokenKind::RBrace) {
+                None
+            } else {
+                Some(self.parse_syl_bound()?)
+            };
+            self.expect(&TokenKind::RBrace)?; // }
+            Ok(SylSpec::Range { lo, hi })
+        } else {
+            let n = self.parse_syl_bound()?;
+            Ok(SylSpec::Index(n))
+        }
+    }
+
+    /// Parse a single `bound`: an optionally-negative integer literal.
+    ///
+    /// Integers are lexed as digit-started identifiers, so we read an optional
+    /// `-` followed by an `Ident` whose text is all digits.
+    fn parse_syl_bound(&mut self) -> Result<i64, Diagnostic> {
+        let negative = if matches!(self.peek(), TokenKind::Minus) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+        let tok = self.peek_token().clone();
+        let digits = match &tok.node {
+            TokenKind::Ident(s) if s.chars().all(|c| c.is_ascii_digit()) && !s.is_empty() => {
+                s.clone()
+            }
+            _ => {
+                return Err(self.error(format!(
+                    "expected an integer in macro numeric spec, found {:?}",
+                    self.peek()
+                )));
+            }
+        };
+        self.advance();
+        let mag: i64 = digits.parse().map_err(|_| {
+            Diagnostic::error(format!("integer '{}' is out of range", digits))
+                .with_label(tok.span, "here")
+        })?;
+        Ok(if negative { -mag } else { mag })
     }
 
     // -----------------------------------------------------------------------

@@ -616,7 +616,7 @@ impl<'a> Phase2Ctx<'a> {
         };
 
         // F2c: `syllable: NAME` must resolve to a top-level `syllable`
-        // declaration visible from this file's scope. The actual σ-usage
+        // declaration visible from this file's scope. The actual syllable-macro usage
         // requirement is checked per context-element below.
         if let Some(syl_ref) = &pr.syllable {
             if find_syllable_in(self.p1, &syl_ref.node, file_id).is_none() {
@@ -827,23 +827,48 @@ impl<'a> Phase2Ctx<'a> {
                     self.validate_context_elem(pr, alt, class_names, phoneme_names);
                 }
             }
-            // F2c: σ context elements require an enclosing `syllable: NAME`
-            // field; otherwise we have no syllabification strategy to consult.
-            PhonContextElem::SylStart | PhonContextElem::SylEnd => {
+            // M (was F2c): syllable-aware macro context elements require an
+            // enclosing `syllable: NAME` field; otherwise we have no
+            // syllabification strategy to consult.
+            PhonContextElem::SylHead | PhonContextElem::SylTail => {
                 if pr.syllable.is_none() {
-                    let sigma = if matches!(elem, PhonContextElem::SylStart) {
-                        "σ["
+                    let macro_form = if matches!(elem, PhonContextElem::SylHead) {
+                        "%syl<head>%"
                     } else {
-                        "]σ"
+                        "%syl<tail>%"
                     };
                     self.diagnostics.add(
                         Diagnostic::error(format!(
                             "phonrule '{}': context uses '{}' but no 'syllable:' field is set",
-                            pr.name.node, sigma
+                            pr.name.node, macro_form
                         ))
                         .with_label(pr.name.span, "add 'syllable: NAME' to this phonrule"),
                     );
                 }
+            }
+            // M parses `%syl<#N>%` / `%syl<#{a..b}>%` into `SylIndex`, but
+            // evaluation is deferred to F7. Reject its use for now so that
+            // rules never silently no-op. The `syllable:` field is still
+            // required (same as the head/tail anchors).
+            PhonContextElem::SylIndex(_) => {
+                if pr.syllable.is_none() {
+                    self.diagnostics.add(
+                        Diagnostic::error(format!(
+                            "phonrule '{}': context uses a '%syl<#...>%' index macro \
+                             but no 'syllable:' field is set",
+                            pr.name.node
+                        ))
+                        .with_label(pr.name.span, "add 'syllable: NAME' to this phonrule"),
+                    );
+                }
+                self.diagnostics.add(
+                    Diagnostic::error(format!(
+                        "phonrule '{}': the '%syl<#...>%' syllable-index macro is \
+                         parsed but not yet evaluated (planned for F7)",
+                        pr.name.node
+                    ))
+                    .with_label(pr.name.span, "syllable-index macros are not yet supported"),
+                );
             }
             PhonContextElem::Boundary | PhonContextElem::WordStart | PhonContextElem::WordEnd | PhonContextElem::Literal(_) => {}
         }
