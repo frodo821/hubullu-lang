@@ -505,6 +505,7 @@ mod tests {
             axes: HashMap::new(),
             inflections: vec![],
             phonrules: vec![],
+            phonemes: Default::default(),
             entries: entries.into_iter().map(|(name, hw)| ResolvedEntry {
                 name: name.to_string(),
                 source_file: std::path::PathBuf::new(),

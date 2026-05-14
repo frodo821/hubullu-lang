@@ -134,6 +134,12 @@ fn create_schema(conn: &Connection) -> Result<(), Diagnostic> {
             FOREIGN KEY (phonrule_id) REFERENCES phonrule_meta(id)
         );
 
+        CREATE TABLE IF NOT EXISTS phonemes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            surface TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS render_config (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -200,6 +206,29 @@ fn insert_data(conn: &Connection, p2: &Phase2Result) -> Result<(), Diagnostic> {
                 params![infl_id, axis_name],
             )
             .map_err(|e| Diagnostic::error(format!("insert inflection_axes failed: {}", e)))?;
+        }
+    }
+
+    // Insert phoneme inventory (one row per (phoneme name, terminal surface)
+    // pair). Sorted by name then surface for deterministic ordering.
+    let mut phoneme_entries: Vec<(&String, Vec<&String>)> = p2
+        .phonemes
+        .terminals
+        .iter()
+        .map(|(name, surfaces)| {
+            let mut s: Vec<&String> = surfaces.iter().collect();
+            s.sort();
+            (name, s)
+        })
+        .collect();
+    phoneme_entries.sort_by(|a, b| a.0.cmp(b.0));
+    for (name, surfaces) in &phoneme_entries {
+        for surface in surfaces {
+            conn.execute(
+                "INSERT INTO phonemes (name, surface) VALUES (?1, ?2)",
+                params![name, surface],
+            )
+            .map_err(|e| Diagnostic::error(format!("insert phonemes failed: {}", e)))?;
         }
     }
 

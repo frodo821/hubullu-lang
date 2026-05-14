@@ -15,6 +15,7 @@ use crate::inflection_eval::{
     CellResult, DelegateResolver, PhonRuleResolver,
 };
 use crate::phase1::Phase1Result;
+use crate::phoneme::{resolve_inventory, PhonemeInventory};
 use crate::span::FileId;
 use crate::symbol_table::SymbolKind;
 
@@ -57,6 +58,10 @@ pub struct Phase2Result {
     /// Empty default for backward compat with old caches.
     #[cfg_attr(feature = "serialization", serde(default))]
     pub phonrules: Vec<ResolvedPhonRule>,
+    /// Resolved phoneme inventory (name → terminal set + multigraph alphabet).
+    /// Empty default for backward compat with old caches.
+    #[cfg_attr(feature = "serialization", serde(default, skip))]
+    pub phonemes: PhonemeInventory,
     /// All expanded entry data ready for SQLite emission.
     pub entries: Vec<ResolvedEntry>,
     /// Render configuration from `@render` directive.
@@ -122,11 +127,14 @@ pub fn run_phase2(p1: &Phase1Result) -> Phase2Result {
         p1,
         axes: HashMap::new(),
         inflections: Vec::new(),
+        phonemes: PhonemeInventory::default(),
         entries: Vec::new(),
         diagnostics: Diagnostics::new(),
         deferred_infl_errors: Vec::new(),
     };
 
+    log::debug!("phase2: resolving phonemes");
+    ctx.resolve_phonemes();
     log::debug!("phase2: resolving extends");
     ctx.resolve_extends();
     log::debug!("phase2: validating phonrules");
@@ -146,6 +154,7 @@ pub fn run_phase2(p1: &Phase1Result) -> Phase2Result {
         axes: ctx.axes,
         inflections: ctx.inflections,
         phonrules: collect_phonrules(p1),
+        phonemes: ctx.phonemes,
         entries: ctx.entries,
         render_config,
         diagnostics: ctx.diagnostics,
@@ -167,11 +176,13 @@ pub fn run_phase2_incremental(
         p1,
         axes: HashMap::new(),
         inflections: Vec::new(),
+        phonemes: PhonemeInventory::default(),
         entries: Vec::new(),
         diagnostics: Diagnostics::new(),
         deferred_infl_errors: Vec::new(),
     };
 
+    ctx.resolve_phonemes();
     ctx.resolve_extends();
     ctx.validate_phonrules();
     ctx.validate_inflections();
@@ -186,6 +197,7 @@ pub fn run_phase2_incremental(
         axes: ctx.axes,
         inflections: ctx.inflections,
         phonrules: collect_phonrules(p1),
+        phonemes: ctx.phonemes,
         entries: ctx.entries,
         render_config,
         diagnostics: ctx.diagnostics,
@@ -196,6 +208,7 @@ struct Phase2Ctx<'a> {
     p1: &'a Phase1Result,
     axes: HashMap<String, ResolvedAxis>,
     inflections: Vec<ResolvedInflection>,
+    phonemes: PhonemeInventory,
     entries: Vec<ResolvedEntry>,
     diagnostics: Diagnostics,
     /// Inflection errors deferred for grouping by (message, infl_span).
@@ -251,6 +264,34 @@ fn find_phonrule_in<'a>(
 }
 
 impl<'a> Phase2Ctx<'a> {
+    // -----------------------------------------------------------------------
+    // phoneme resolution
+    // -----------------------------------------------------------------------
+
+    /// Resolve all `phoneme` declarations across all loaded files into a single
+    /// global inventory. Reference cycles and undefined references emit
+    /// diagnostics. Duplicate declarations are caught earlier by the
+    /// symbol table — a later declaration with the same name silently
+    /// overwrites the earlier one in the resolver pool here.
+    fn resolve_phonemes(&mut self) {
+        let mut all: Vec<&'a Phoneme> = Vec::new();
+        for file in self.p1.files.values() {
+            for item in &file.items {
+                if let Item::Phoneme(ph) = &item.node {
+                    all.push(ph);
+                }
+            }
+        }
+        match resolve_inventory(&all) {
+            Ok(inv) => self.phonemes = inv,
+            Err(diags) => {
+                for d in diags {
+                    self.diagnostics.add(d);
+                }
+            }
+        }
+    }
+
     // -----------------------------------------------------------------------
     // @extend resolution
     // -----------------------------------------------------------------------
@@ -440,11 +481,20 @@ impl<'a> Phase2Ctx<'a> {
     fn validate_phonrule(&mut self, pr: &PhonRule, file_id: FileId) {
         let class_names: HashSet<_> = pr.classes.iter().map(|c| &c.name.node).collect();
 
+        // Precompute the set of phoneme names visible from this file's scope
+        // so we can answer "is this name a phoneme?" without re-borrowing self
+        // in the diagnostic-emitting loops below.
+        let phoneme_names: HashSet<String> = self.phoneme_names_in_scope(file_id);
+
+        let is_class_like = |name: &String| -> bool {
+            class_names.contains(name) || phoneme_names.contains(name)
+        };
+
         // Validate union references
         for cls in &pr.classes {
             if let CharClassBody::Union(members) = &cls.body {
                 for member in members {
-                    if !class_names.contains(&member.node) {
+                    if !is_class_like(&member.node) {
                         self.diagnostics.add(
                             Diagnostic::error(format!(
                                 "phonrule '{}': class union references undefined class '{}'",
@@ -465,7 +515,7 @@ impl<'a> Phase2Ctx<'a> {
                 PhonBodyItem::Rewrite(rule) => {
                     // FROM references
                     if let PhonPattern::Class(name) = &rule.from {
-                        if !class_names.contains(&name.node) {
+                        if !is_class_like(&name.node) {
                             self.diagnostics.add(
                                 Diagnostic::error(format!(
                                     "phonrule '{}': rewrite rule references undefined class '{}'",
@@ -492,7 +542,7 @@ impl<'a> Phase2Ctx<'a> {
                     // Context references
                     if let Some(ctx) = &rule.context {
                         for elem in ctx.left.iter().chain(ctx.right.iter()) {
-                            self.validate_context_elem(pr, elem, &class_names);
+                            self.validate_context_elem(pr, elem, &class_names, &phoneme_names);
                         }
                     }
                 }
@@ -613,10 +663,13 @@ impl<'a> Phase2Ctx<'a> {
         pr: &PhonRule,
         elem: &PhonContextElem,
         class_names: &HashSet<&String>,
+        phoneme_names: &HashSet<String>,
     ) {
         match elem {
             PhonContextElem::Class(name) | PhonContextElem::NegClass(name) => {
-                if !class_names.contains(&name.node) {
+                let known = class_names.contains(&name.node)
+                    || phoneme_names.contains(&name.node);
+                if !known {
                     self.diagnostics.add(
                         Diagnostic::error(format!(
                             "phonrule '{}': context references undefined class '{}'",
@@ -627,15 +680,38 @@ impl<'a> Phase2Ctx<'a> {
                 }
             }
             PhonContextElem::Repeat(inner) => {
-                self.validate_context_elem(pr, inner, class_names);
+                self.validate_context_elem(pr, inner, class_names, phoneme_names);
             }
             PhonContextElem::Alt(alts) => {
                 for alt in alts {
-                    self.validate_context_elem(pr, alt, class_names);
+                    self.validate_context_elem(pr, alt, class_names, phoneme_names);
                 }
             }
             PhonContextElem::Boundary | PhonContextElem::WordStart | PhonContextElem::WordEnd | PhonContextElem::Literal(_) => {}
         }
+    }
+
+    /// Collect the names of all phonemes visible from `file_id` (locals plus
+    /// `@use` / `@reference` imports), restricted to those actually present in
+    /// the resolved inventory.
+    fn phoneme_names_in_scope(&self, file_id: FileId) -> HashSet<String> {
+        let mut out = HashSet::new();
+        let Some(scope) = self.p1.symbol_table.scope(file_id) else {
+            return out;
+        };
+        for sym in scope.locals.values() {
+            if sym.kind == SymbolKind::Phoneme && self.phonemes.has_phoneme(&sym.name) {
+                out.insert(sym.name.clone());
+            }
+        }
+        for imp in scope.imports.iter().chain(scope.exports.iter()) {
+            if imp.kind == SymbolKind::Phoneme
+                && self.phonemes.has_phoneme(&imp.original_name)
+            {
+                out.insert(imp.local_name.clone());
+            }
+        }
+        out
     }
 
     fn find_phonrule(&self, name: &str, file_id: FileId) -> Option<&'a PhonRule> {
@@ -1111,5 +1187,9 @@ struct Phase2PhonResolver<'a, 'b> {
 impl<'a, 'b> PhonRuleResolver for Phase2PhonResolver<'a, 'b> {
     fn resolve(&self, name: &str) -> Option<&PhonRule> {
         self.ctx.find_phonrule(name, self.file_id)
+    }
+
+    fn inventory(&self) -> Option<&crate::phoneme::PhonemeInventory> {
+        Some(&self.ctx.phonemes)
     }
 }

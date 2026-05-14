@@ -51,6 +51,7 @@ const KEYWORDS: &[&str] = &[
     "tagaxis",
     "inflection",
     "phonrule",
+    "phoneme",
     "headword",
     "stems",
     "meaning",
@@ -374,6 +375,7 @@ fn classify_item(item: &ast::Item, fid: FileId, map: &mut HashMap<(usize, usize)
         ast::Item::Inflection(infl) => classify_inflection(infl, fid, map),
         ast::Item::Entry(entry) => classify_entry(entry, fid, map),
         ast::Item::PhonRule(pr) => classify_phonrule(pr, fid, map),
+        ast::Item::Phoneme(ph) => classify_phoneme(ph, fid, map),
         ast::Item::Use(imp) | ast::Item::Reference(imp) => classify_import(imp, fid, map),
         ast::Item::Export(exp) => {
             // Classify the import target names/aliases within the @export
@@ -635,6 +637,15 @@ fn classify_phonrule(pr: &ast::PhonRule, fid: FileId, map: &mut HashMap<(usize, 
             ast::PhonBodyItem::Apply(apply) => {
                 put(map, &apply.rule.span, fid, TYPE);
             }
+        }
+    }
+}
+
+fn classify_phoneme(ph: &ast::Phoneme, fid: FileId, map: &mut HashMap<(usize, usize), u32>) {
+    put(map, &ph.name.span, fid, TYPE);
+    for member in &ph.members {
+        if let ast::PhonemeMember::Ref(r) = member {
+            put(map, &r.span, fid, TYPE);
         }
     }
 }

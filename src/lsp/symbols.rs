@@ -75,6 +75,16 @@ pub fn document_symbols(parse_result: &ParseResult) -> Vec<DocumentSymbol> {
                     tags: None,
                     deprecated: None,
                 },
+                Item::Phoneme(ph) => DocumentSymbol {
+                    name: ph.name.node.clone(),
+                    detail: Some(format!("{} members", ph.members.len())),
+                    kind: SymbolKind::CONSTANT,
+                    range,
+                    selection_range: convert::span_to_range(&ph.name.span, source_map),
+                    children: None,
+                    tags: None,
+                    deprecated: None,
+                },
                 Item::Use(imp) | Item::Reference(imp) => {
                     let kind_str = if matches!(&item_spanned.node, Item::Use(_)) {
                         "@use"
@@ -163,6 +173,7 @@ fn symbol_kind_to_lsp(kind: crate::symbol_table::SymbolKind) -> SymbolKind {
         crate::symbol_table::SymbolKind::TagAxis => SymbolKind::ENUM,
         crate::symbol_table::SymbolKind::Extend => SymbolKind::MODULE,
         crate::symbol_table::SymbolKind::PhonRule => SymbolKind::OPERATOR,
+        crate::symbol_table::SymbolKind::Phoneme => SymbolKind::CONSTANT,
     }
 }
 

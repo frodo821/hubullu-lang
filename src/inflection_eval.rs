@@ -172,9 +172,17 @@ impl DelegateResolver for NullResolver {
     fn axis_values(&self, _axis: &str) -> Vec<String> { Vec::new() }
 }
 
-/// Callback for resolving phonological rules.
+/// Callback for resolving phonological rules and the global phoneme inventory.
+///
+/// The optional `inventory()` method exposes the project-wide phoneme
+/// resolution so that rewrite rules can reference phoneme names directly in
+/// place of (or alongside) local `class` definitions.
 pub trait PhonRuleResolver {
     fn resolve(&self, name: &str) -> Option<&PhonRule>;
+    /// Resolved global phoneme inventory. `None` (the default) means "no
+    /// phoneme references available" — callers must fall back to local
+    /// classes only.
+    fn inventory(&self) -> Option<&crate::phoneme::PhonemeInventory> { None }
 }
 
 /// No-op phonrule resolver.
