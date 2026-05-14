@@ -159,7 +159,7 @@ impl Parser {
                 TokenKind::Eof => break,
                 TokenKind::Semicolon => break,
                 TokenKind::AtUse | TokenKind::AtReference | TokenKind::AtExport | TokenKind::AtExtend | TokenKind::AtRender => break,
-                TokenKind::Ident(s) if matches!(s.as_str(), "tagaxis" | "inflection" | "entry" | "phonrule") => {
+                TokenKind::Ident(s) if matches!(s.as_str(), "tagaxis" | "inflection" | "entry" | "phonrule" | "phoneme") => {
                     break
                 }
                 _ => {
@@ -211,6 +211,10 @@ impl Parser {
             TokenKind::Ident(s) if s == "phonrule" => {
                 self.advance();
                 Item::PhonRule(self.parse_phonrule()?)
+            }
+            TokenKind::Ident(s) if s == "phoneme" => {
+                self.advance();
+                Item::Phoneme(self.parse_phoneme()?)
             }
             _ => {
                 return Err(self.error(format!(
@@ -882,6 +886,57 @@ impl Parser {
         } else {
             Ok(ComposeExpr::Slot(ident))
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // phoneme
+    // -----------------------------------------------------------------------
+
+    /// Parse `phoneme NAME { "lit" | other_phoneme | ... }`.
+    ///
+    /// Block items may be string literals or identifier references to other
+    /// phonemes. Items may be separated by commas, semicolons, or simple
+    /// whitespace (the lexer already eats whitespace, so neighbouring items
+    /// are syntactically adjacent in the token stream).
+    fn parse_phoneme(&mut self) -> Result<Phoneme, Diagnostic> {
+        let start = self.current_span().start;
+        let name = self.expect_ident()?;
+        self.expect(&TokenKind::LBrace)?;
+
+        let mut members = Vec::new();
+        while !matches!(self.peek(), TokenKind::RBrace | TokenKind::Eof) {
+            match self.peek() {
+                TokenKind::StringLit(_) => {
+                    let s = self.expect_string()?;
+                    members.push(PhonemeMember::Lit(s));
+                }
+                TokenKind::Ident(_) => {
+                    let id = self.expect_ident()?;
+                    members.push(PhonemeMember::Ref(id));
+                }
+                _ => {
+                    return Err(self.error(format!(
+                        "expected string literal or phoneme reference, found {:?}",
+                        self.peek()
+                    )));
+                }
+            }
+            // Optional separators between members: `,` or `;`. Both are
+            // strictly optional since whitespace alone separates tokens.
+            match self.peek() {
+                TokenKind::Comma | TokenKind::Semicolon => {
+                    self.advance();
+                }
+                _ => {}
+            }
+        }
+
+        self.expect(&TokenKind::RBrace)?;
+        Ok(Phoneme {
+            name,
+            members,
+            span: self.span_from(start),
+        })
     }
 
     // -----------------------------------------------------------------------

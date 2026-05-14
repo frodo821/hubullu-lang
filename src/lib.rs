@@ -52,6 +52,8 @@ pub mod lint;
 pub mod lexer;
 /// Recursive descent parser — tokens to [`ast::File`].
 pub mod parser;
+/// Phoneme inventory resolution and longest-match tokenization.
+pub mod phoneme;
 /// Phonological rule evaluation engine.
 pub mod phonrule_eval;
 /// Phase 1: file loading, `@use`/`@reference` resolution, symbol registration.

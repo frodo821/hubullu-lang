@@ -1152,5 +1152,6 @@ fn symbol_kind_to_completion(kind: SymbolKind) -> CompletionItemKind {
         SymbolKind::TagAxis => CompletionItemKind::ENUM,
         SymbolKind::Extend => CompletionItemKind::MODULE,
         SymbolKind::PhonRule => CompletionItemKind::FUNCTION,
+        SymbolKind::Phoneme => CompletionItemKind::CONSTANT,
     }
 }

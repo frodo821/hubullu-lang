@@ -14,9 +14,19 @@
 use crate::ast::*;
 use crate::error::Diagnostic;
 use crate::inflection_eval::PhonRuleResolver;
+use crate::phoneme::PhonemeInventory;
 
 /// Boundary marker character used internally between morphemes.
 pub const BOUNDARY: char = '\0';
+
+/// Per-evaluation context: the phonrule being applied plus the optional
+/// global phoneme inventory used to resolve class names that don't match a
+/// local `class` definition.
+#[derive(Copy, Clone)]
+struct EvalCtx<'a> {
+    phonrule: &'a PhonRule,
+    inventory: Option<&'a PhonemeInventory>,
+}
 
 /// Apply a phonrule to an input string containing `\0` boundary markers.
 ///
@@ -50,13 +60,15 @@ fn apply_phonrule_inner<R: PhonRuleResolver + ?Sized>(
     phonrule: &PhonRule,
     resolver: Option<&R>,
 ) -> Result<String, Diagnostic> {
+    let inventory = resolver.and_then(|r| r.inventory());
+    let ctx = EvalCtx { phonrule, inventory };
     let mut result = input.to_string();
     for item in &phonrule.body {
         match item {
             PhonBodyItem::Rewrite(rule) => {
                 // Apply iteratively until convergence (for cascading harmony)
                 loop {
-                    let next = apply_rewrite_rule(&result, rule, phonrule);
+                    let next = apply_rewrite_rule(&result, rule, ctx);
                     if next == result {
                         break;
                     }
@@ -89,17 +101,17 @@ fn is_insertion_rule(rule: &PhonRewriteRule) -> bool {
 
 /// Apply a single rewrite rule to the input.
 /// All matches are found first, then applied simultaneously.
-fn apply_rewrite_rule(input: &str, rule: &PhonRewriteRule, phonrule: &PhonRule) -> String {
+fn apply_rewrite_rule(input: &str, rule: &PhonRewriteRule, ctx: EvalCtx<'_>) -> String {
     if is_insertion_rule(rule) {
-        apply_insertion_rule(input, rule, phonrule)
+        apply_insertion_rule(input, rule, ctx)
     } else {
-        apply_replacement_rule(input, rule, phonrule)
+        apply_replacement_rule(input, rule, ctx)
     }
 }
 
 /// Apply an insertion rule (empty FROM pattern) to the input.
 /// Scans all inter-character positions (0..=len) and checks context.
-fn apply_insertion_rule(input: &str, rule: &PhonRewriteRule, phonrule: &PhonRule) -> String {
+fn apply_insertion_rule(input: &str, rule: &PhonRewriteRule, ctx: EvalCtx<'_>) -> String {
     let chars: Vec<char> = input.chars().collect();
     let mut insertions: Vec<(usize, String)> = Vec::new();
 
@@ -111,8 +123,8 @@ fn apply_insertion_rule(input: &str, rule: &PhonRewriteRule, phonrule: &PhonRule
 
     // Try every inter-character position, including before first and after last
     for i in 0..=chars.len() {
-        if let Some(ctx) = &rule.context {
-            if !check_context(&chars, i, 0, ctx, phonrule) {
+        if let Some(rctx) = &rule.context {
+            if !check_context(&chars, i, 0, rctx, ctx) {
                 continue;
             }
         }
@@ -142,7 +154,7 @@ fn apply_insertion_rule(input: &str, rule: &PhonRewriteRule, phonrule: &PhonRule
 
 /// Apply a non-insertion rewrite rule (non-empty FROM pattern).
 /// All matches are found first, then applied simultaneously.
-fn apply_replacement_rule(input: &str, rule: &PhonRewriteRule, phonrule: &PhonRule) -> String {
+fn apply_replacement_rule(input: &str, rule: &PhonRewriteRule, ctx: EvalCtx<'_>) -> String {
     let chars: Vec<char> = input.chars().collect();
     let mut replacements: Vec<(usize, usize, String)> = Vec::new();
 
@@ -156,7 +168,7 @@ fn apply_replacement_rule(input: &str, rule: &PhonRewriteRule, phonrule: &PhonRu
         let ch_str = chars[i].to_string();
         let matched = match &rule.from {
             PhonPattern::Class(class_name) => {
-                char_in_class(&ch_str, &class_name.node, phonrule)
+                char_in_class(&ch_str, &class_name.node, ctx)
             }
             PhonPattern::Literal(lit) => {
                 // Multi-char literal match
@@ -187,8 +199,8 @@ fn apply_replacement_rule(input: &str, rule: &PhonRewriteRule, phonrule: &PhonRu
         };
 
         // Check context
-        if let Some(ctx) = &rule.context {
-            if !check_context(&chars, i, match_len, ctx, phonrule) {
+        if let Some(rctx) = &rule.context {
+            if !check_context(&chars, i, match_len, rctx, ctx) {
                 continue;
             }
         }
@@ -196,7 +208,7 @@ fn apply_replacement_rule(input: &str, rule: &PhonRewriteRule, phonrule: &PhonRu
         // Compute replacement
         let replacement = match &rule.to {
             PhonReplacement::Map(map_name) => {
-                apply_map(&ch_str, &map_name.node, phonrule)
+                apply_map(&ch_str, &map_name.node, ctx.phonrule)
             }
             PhonReplacement::Literal(lit) => lit.node.clone(),
             PhonReplacement::Null => String::new(),
@@ -229,18 +241,30 @@ fn apply_replacement_rule(input: &str, rule: &PhonRewriteRule, phonrule: &PhonRu
     result
 }
 
-/// Check if a character (as string) belongs to a named character class.
-fn char_in_class(ch: &str, class_name: &str, phonrule: &PhonRule) -> bool {
-    for cls in &phonrule.classes {
+/// Check if a surface form (as string) belongs to a named character class.
+///
+/// Resolution order:
+///   1. Local `class` definitions on the phonrule.
+///   2. Global phoneme inventory (if a resolver provided one).
+///
+/// This mirrors the F2a proposal: phoneme names are usable directly in place
+/// of (or alongside) phonrule-local `class` definitions.
+fn char_in_class(ch: &str, class_name: &str, ctx: EvalCtx<'_>) -> bool {
+    for cls in &ctx.phonrule.classes {
         if cls.name.node == class_name {
             return match &cls.body {
                 CharClassBody::List(members) => {
                     members.iter().any(|m| m.node == ch)
                 }
                 CharClassBody::Union(refs) => {
-                    refs.iter().any(|r| char_in_class(ch, &r.node, phonrule))
+                    refs.iter().any(|r| char_in_class(ch, &r.node, ctx))
                 }
             };
+        }
+    }
+    if let Some(inv) = ctx.inventory {
+        if inv.contains(class_name, ch) {
+            return true;
         }
     }
     false
@@ -277,15 +301,15 @@ fn check_context(
     chars: &[char],
     pos: usize,
     match_len: usize,
-    ctx: &PhonContext,
-    phonrule: &PhonRule,
+    rctx: &PhonContext,
+    ctx: EvalCtx<'_>,
 ) -> bool {
     // Check left context (reading backwards from pos)
-    if !match_left_context(chars, pos, &ctx.left, phonrule) {
+    if !match_left_context(chars, pos, &rctx.left, ctx) {
         return false;
     }
     // Check right context (reading forwards from pos + match_len)
-    if !match_right_context(chars, pos + match_len, &ctx.right, phonrule) {
+    if !match_right_context(chars, pos + match_len, &rctx.right, ctx) {
         return false;
     }
     true
@@ -296,13 +320,13 @@ fn match_left_context(
     chars: &[char],
     pos: usize,
     elements: &[PhonContextElem],
-    phonrule: &PhonRule,
+    ctx: EvalCtx<'_>,
 ) -> bool {
     // We need to match the elements right-to-left against chars left of pos
     let mut cursor = pos;
     // Process elements in reverse (rightmost element is closest to match position)
     for elem in elements.iter().rev() {
-        if !match_left_elem(chars, &mut cursor, elem, phonrule) {
+        if !match_left_elem(chars, &mut cursor, elem, ctx) {
             return false;
         }
     }
@@ -313,7 +337,7 @@ fn match_left_elem(
     chars: &[char],
     cursor: &mut usize,
     elem: &PhonContextElem,
-    phonrule: &PhonRule,
+    ctx: EvalCtx<'_>,
 ) -> bool {
     match elem {
         PhonContextElem::Boundary => {
@@ -339,7 +363,7 @@ fn match_left_elem(
                 return false;
             }
             let ch_str = chars[*cursor - 1].to_string();
-            if char_in_class(&ch_str, &name.node, phonrule) {
+            if char_in_class(&ch_str, &name.node, ctx) {
                 *cursor -= 1;
                 true
             } else {
@@ -354,7 +378,7 @@ fn match_left_elem(
                 return false;
             }
             let ch_str = chars[*cursor - 1].to_string();
-            if !char_in_class(&ch_str, &name.node, phonrule) {
+            if !char_in_class(&ch_str, &name.node, ctx) {
                 *cursor -= 1;
                 true
             } else {
@@ -364,7 +388,7 @@ fn match_left_elem(
         PhonContextElem::Repeat(inner) => {
             loop {
                 let saved = *cursor;
-                if !match_left_elem(chars, cursor, inner, phonrule) {
+                if !match_left_elem(chars, cursor, inner, ctx) {
                     *cursor = saved;
                     break;
                 }
@@ -386,7 +410,7 @@ fn match_left_elem(
         PhonContextElem::Alt(alts) => {
             for alt in alts {
                 let mut trial = *cursor;
-                if match_left_elem(chars, &mut trial, alt, phonrule) {
+                if match_left_elem(chars, &mut trial, alt, ctx) {
                     *cursor = trial;
                     return true;
                 }
@@ -401,11 +425,11 @@ fn match_right_context(
     chars: &[char],
     pos: usize,
     elements: &[PhonContextElem],
-    phonrule: &PhonRule,
+    ctx: EvalCtx<'_>,
 ) -> bool {
     let mut cursor = pos;
     for elem in elements {
-        if !match_right_elem(chars, &mut cursor, elem, phonrule) {
+        if !match_right_elem(chars, &mut cursor, elem, ctx) {
             return false;
         }
     }
@@ -416,7 +440,7 @@ fn match_right_elem(
     chars: &[char],
     cursor: &mut usize,
     elem: &PhonContextElem,
-    phonrule: &PhonRule,
+    ctx: EvalCtx<'_>,
 ) -> bool {
     match elem {
         PhonContextElem::Boundary => {
@@ -443,7 +467,7 @@ fn match_right_elem(
                 return false;
             }
             let ch_str = chars[*cursor].to_string();
-            if char_in_class(&ch_str, &name.node, phonrule) {
+            if char_in_class(&ch_str, &name.node, ctx) {
                 *cursor += 1;
                 true
             } else {
@@ -458,7 +482,7 @@ fn match_right_elem(
                 return false;
             }
             let ch_str = chars[*cursor].to_string();
-            if !char_in_class(&ch_str, &name.node, phonrule) {
+            if !char_in_class(&ch_str, &name.node, ctx) {
                 *cursor += 1;
                 true
             } else {
@@ -468,7 +492,7 @@ fn match_right_elem(
         PhonContextElem::Repeat(inner) => {
             loop {
                 let saved = *cursor;
-                if !match_right_elem(chars, cursor, inner, phonrule) {
+                if !match_right_elem(chars, cursor, inner, ctx) {
                     *cursor = saved;
                     break;
                 }
@@ -494,7 +518,7 @@ fn match_right_elem(
         PhonContextElem::Alt(alts) => {
             for alt in alts {
                 let mut trial = *cursor;
-                if match_right_elem(chars, &mut trial, alt, phonrule) {
+                if match_right_elem(chars, &mut trial, alt, ctx) {
                     *cursor = trial;
                     return true;
                 }

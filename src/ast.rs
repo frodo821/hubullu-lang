@@ -85,6 +85,7 @@ pub enum Item {
     Inflection(Inflection),
     Entry(Box<Entry>),
     PhonRule(PhonRule),
+    Phoneme(Phoneme),
     Render(RenderConfig),
 }
 
@@ -94,6 +95,33 @@ pub enum Item {
 pub struct RenderConfig {
     pub separator: Option<StringLit>,
     pub no_separator_before: Option<StringLit>,
+}
+
+// ---------------------------------------------------------------------------
+// phoneme
+// ---------------------------------------------------------------------------
+
+/// A top-level `phoneme NAME { ... }` declaration.
+///
+/// Phonemes name a set of phonological surface units. Members may be literal
+/// strings or references to other phonemes; the effective inventory is the
+/// union of all transitively reachable literal members. Multigraphs are
+/// supported via longest-match-first tokenization during phonrule evaluation.
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Phoneme {
+    pub name: Ident,
+    pub members: Vec<PhonemeMember>,
+    pub span: Span,
+}
+
+/// A single member of a `phoneme` block: either a literal surface form
+/// (e.g. `"a"`, `"ng"`) or a reference to another phoneme.
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum PhonemeMember {
+    Lit(StringLit),
+    Ref(Ident),
 }
 
 // ---------------------------------------------------------------------------
