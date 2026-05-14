@@ -52,6 +52,17 @@ const KEYWORDS: &[&str] = &[
     "inflection",
     "phonrule",
     "phoneme",
+    "syllable",
+    "template",
+    "nucleus",
+    "onset_max",
+    "coda_max",
+    "onset_priority",
+    "unknown",
+    "unknown_overrides",
+    "ignore",
+    "skip",
+    "warn",
     "headword",
     "stems",
     "meaning",
@@ -376,6 +387,7 @@ fn classify_item(item: &ast::Item, fid: FileId, map: &mut HashMap<(usize, usize)
         ast::Item::Entry(entry) => classify_entry(entry, fid, map),
         ast::Item::PhonRule(pr) => classify_phonrule(pr, fid, map),
         ast::Item::Phoneme(ph) => classify_phoneme(ph, fid, map),
+        ast::Item::Syllable(syl) => classify_syllable(syl, fid, map),
         ast::Item::Use(imp) | ast::Item::Reference(imp) => classify_import(imp, fid, map),
         ast::Item::Export(exp) => {
             // Classify the import target names/aliases within the @export
@@ -648,6 +660,17 @@ fn classify_phoneme(ph: &ast::Phoneme, fid: FileId, map: &mut HashMap<(usize, us
             put(map, &r.span, fid, TYPE);
         }
     }
+}
+
+fn classify_syllable(syl: &ast::Syllable, fid: FileId, map: &mut HashMap<(usize, usize), u32>) {
+    put(map, &syl.name.span, fid, TYPE);
+    // Template slot classes refer to phonemes — paint them as TYPE so they
+    // line up with the corresponding phoneme classifications.
+    for slot in &syl.template.slots {
+        put(map, &slot.class.span, fid, TYPE);
+    }
+    // Nucleus is also a phoneme reference.
+    put(map, &syl.nucleus.span, fid, TYPE);
 }
 
 fn classify_phon_context_elems(elems: &[ast::PhonContextElem], fid: FileId, map: &mut HashMap<(usize, usize), u32>) {

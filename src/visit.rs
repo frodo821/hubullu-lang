@@ -109,8 +109,8 @@ pub fn walk_item<V: Visitor>(visitor: &mut V, item: &Spanned<Item>) {
         Item::Entry(entry) => {
             visitor.visit_entry(entry);
         }
-        Item::PhonRule(_) | Item::Phoneme(_) | Item::Render(_) => {
-            // PhonRule/Phoneme/Render have no visitor methods yet; skip.
+        Item::PhonRule(_) | Item::Phoneme(_) | Item::Syllable(_) | Item::Render(_) => {
+            // PhonRule/Phoneme/Syllable/Render have no visitor methods yet; skip.
         }
     }
 }
