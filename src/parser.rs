@@ -1860,14 +1860,17 @@ impl Parser {
     }
 
     /// Parse a `.hut` file until EOF: leading `@reference` / `@use` / `@apply`
-    /// directives (in any order), then a token list.
+    /// directives (in any order, F1a + F1b), optional inline top-level
+    /// declarations (`phonrule` / `phoneme` / `syllable`, F4), then a token
+    /// list.
     pub fn parse_token_list_to_eof(mut self) -> (crate::ast::HutFile, Vec<Diagnostic>) {
-        // Parse leading @reference / @use / @apply directives (free order,
-        // F1a + F1b). `@apply IDENT` records a phonrule name to be applied to
-        // every phonological word in declaration order.
+        // F5: allow leading semicolons for symmetry with `.hu` parser.
+        self.skip_semicolons();
+
         let mut references = Vec::new();
         let mut uses = Vec::new();
         let mut apply_chain = Vec::new();
+        let mut inline_items: Vec<crate::ast::Spanned<crate::ast::Item>> = Vec::new();
         loop {
             match self.peek() {
                 TokenKind::AtReference => {
@@ -1905,13 +1908,42 @@ impl Parser {
                         Err(diag) => self.errors.push(diag),
                     }
                 }
+                // F4: top-level phonrule / phoneme / syllable definitions are
+                // accepted inline in the `.hut` file (or via `-e` eval). They
+                // are stored in `inline_items` and later injected into the
+                // virtual file's symbol scope by `HutPhonContext::build`.
+                TokenKind::Ident(s) if matches!(s.as_str(), "phonrule" | "phoneme" | "syllable") => {
+                    let start = self.current_span().start;
+                    let kind = s.clone();
+                    self.advance();
+                    let item_result: Result<crate::ast::Item, Diagnostic> = match kind.as_str() {
+                        "phonrule" => self.parse_phonrule().map(crate::ast::Item::PhonRule),
+                        "phoneme" => self.parse_phoneme().map(crate::ast::Item::Phoneme),
+                        "syllable" => self.parse_syllable().map(crate::ast::Item::Syllable),
+                        _ => unreachable!(),
+                    };
+                    match item_result {
+                        Ok(item) => {
+                            let end = self.current_span().start;
+                            let span = crate::ast::Span {
+                                file_id: self.file_id,
+                                start,
+                                end,
+                            };
+                            inline_items.push(crate::ast::Spanned::new(item, span));
+                        }
+                        Err(diag) => self.errors.push(diag),
+                    }
+                }
                 _ => break,
             }
+            // F5: allow `;` between top-level directives/items in the prologue.
+            self.skip_semicolons();
         }
 
         let tokens = self.parse_hut_tokens(None);
         (
-            crate::ast::HutFile { references, uses, apply_chain, tokens },
+            crate::ast::HutFile { references, uses, apply_chain, tokens, inline_items },
             self.errors,
         )
     }

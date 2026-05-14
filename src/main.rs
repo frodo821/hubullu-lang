@@ -45,6 +45,17 @@ enum Command {
         /// Site title (used for index.html page title and navigation label)
         #[clap(long)]
         title: Option<String>,
+
+        /// F4: Additional `.hut` code evaluated as if appended to the input
+        /// file. Repeatable: `-e A -e B` is equivalent to `-e "A; B"`.
+        /// `@file:<path>` reads the code from a file (curl-style sugar).
+        #[clap(
+            short = 'e',
+            long = "eval",
+            value_name = "CODE",
+            action = clap::ArgAction::Append,
+        )]
+        eval: Vec<String>,
     },
     /// Lint .hu files for warnings and style issues
     Lint {
@@ -163,8 +174,12 @@ fn main() {
                 process::exit(1);
             }
         }
-        Command::Render { input, dir, outdir, huc, title } => {
+        Command::Render { input, dir, outdir, huc, title, eval } => {
             if let Some(dir) = dir {
+                if !eval.is_empty() {
+                    eprintln!("error: -e/--eval is not supported with --dir");
+                    process::exit(1);
+                }
                 // Site mode: render all .hut files under dir to HTML.
                 let outdir = match outdir {
                     Some(o) => o,
@@ -195,7 +210,11 @@ fn main() {
                     }
                 };
 
-                let (hut_file, hut_source_map) = match hubullu::render::parse_hut(&source, &input.to_string_lossy()) {
+                let (hut_file, hut_source_map) = match hubullu::render::parse_hut_with_eval(
+                    &source,
+                    &input.to_string_lossy(),
+                    &eval,
+                ) {
                     Ok(h) => h,
                     Err(msg) => {
                         eprintln!("{}", msg);
