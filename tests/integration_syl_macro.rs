@@ -4,8 +4,8 @@
 //!
 //! M replaces the F2c non-ASCII `σ[` / `]σ` / `σ#N` digraphs with the ASCII
 //! macro syntax. `%syl<head>%` / `%syl<tail>%` and the `%syl[ ... ]%` content
-//! block keep the old semantics; `%syl<#N>%` / `%syl<#{a..b}>%` parse into a
-//! `SylIndex` AST node but their evaluation is deferred to F7.
+//! block keep the old semantics; `%syl<#N>%` / `%syl<#{a..b}>%` (F7) evaluate
+//! as zero-width syllable-index anchors.
 //!
 //! Covers:
 //!   1. Compile-time errors when a syllable macro is used without a `syllable:`
@@ -15,8 +15,8 @@
 //!   4. Runtime behaviour: `%syl<tail>%` match (word-final coda devoicing),
 //!      `%syl[ _ ]%` internal match (vowel inside a syllable), and lazy
 //!      syllabification (the boundary bitset is rebuilt after each rewrite).
-//!   5. `%syl<#N>%` / `%syl<#{a..b}>%` parse cleanly but are rejected at
-//!      phase2 (F7 not implemented yet).
+//!   5. F7: `%syl<#N>%` / `%syl<#{a..b}>%` syllable-index anchor evaluation,
+//!      plus the `#0` / empty-range / missing-`syllable:` compile-time checks.
 //!   6. Non-regression: phonrules without a syllable macro are unaffected.
 
 use hubullu::ast::{Item, PhonContextElem, SylSpec};
@@ -209,9 +209,9 @@ fn parser_accepts_syl_index_specs() {
 }
 
 #[test]
-fn syl_index_macro_is_rejected_at_phase2_pending_f7() {
-    // `%syl<#N>%` parses, but its evaluation is deferred to F7; phase2 must
-    // reject its use rather than let the rule silently no-op.
+fn syl_index_macro_accepted_at_phase2() {
+    // F7: `%syl<#N>%` is now a fully-evaluated anchor — phase2 accepts it as
+    // long as the enclosing phonrule has a `syllable:` field.
     let src = r#"
         phoneme C { "p" }
         phoneme V { "a" }
@@ -221,18 +221,79 @@ fn syl_index_macro_is_rejected_at_phase2_pending_f7() {
           "a" -> "e" / %syl<#-1>% _
         }
     "#;
-    let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("t.hu");
-    std::fs::write(&path, src).unwrap();
+    let (p1, p2) = compile_one_phonrule(src);
+    assert!(
+        !p2.diagnostics.has_errors(),
+        "phase2 should accept F7 syllable-index macro: {}",
+        p2.diagnostics.render_all(&p1.source_map)
+    );
+}
 
-    let p1 = phase1::run_phase1(&path, Default::default());
-    assert!(!p1.diagnostics.has_errors(), "phase1: {:?}", p1.diagnostics);
-    let p2 = phase2::run_phase2(&p1);
-    assert!(p2.diagnostics.has_errors(), "expected F7-pending error");
+#[test]
+fn syl_index_macro_without_syllable_field_errors() {
+    // F7: `%syl<#N>%` still requires a `syllable:` field (same as head/tail).
+    let src = r#"
+        phoneme C { "p" }
+        phoneme V { "a" }
+        syllable lang { template: V nucleus: V }
+        phonrule r {
+          "a" -> "e" / %syl<#1>% _
+        }
+    "#;
+    let (p1, p2) = compile_one_phonrule(src);
+    assert!(p2.diagnostics.has_errors(), "expected missing-syllable error");
     let rendered = p2.diagnostics.render_all(&p1.source_map);
     assert!(
-        rendered.contains("%syl<#...>%") && rendered.contains("F7"),
-        "expected diagnostic mentioning '%syl<#...>%' and 'F7', got: {}",
+        rendered.contains("%syl<#...>%") && rendered.contains("syllable:"),
+        "expected diagnostic mentioning '%syl<#...>%' and 'syllable:', got: {}",
+        rendered
+    );
+}
+
+#[test]
+fn syl_index_zero_is_compile_error() {
+    // F7: `%syl<#0>%` is invalid — syllable indices are 1-indexed.
+    let src = r#"
+        phoneme V { "a" }
+        syllable lang { template: V nucleus: V }
+        phonrule r {
+          syllable: lang
+          "a" -> "e" / %syl<#0>% _
+        }
+    "#;
+    let (p1, p2) = compile_one_phonrule(src);
+    assert!(p2.diagnostics.has_errors(), "expected '#0' compile error");
+    let rendered = p2.diagnostics.render_all(&p1.source_map);
+    assert!(
+        rendered.contains("%syl<#0>%") && rendered.contains("1-indexed"),
+        "expected diagnostic mentioning '%syl<#0>%' and '1-indexed', got: {}",
+        rendered
+    );
+}
+
+#[test]
+fn syl_index_empty_range_is_compile_warning() {
+    // F7: a provably-empty range (`lo > hi`, same sign) is a compile-time
+    // warning — the context can never match.
+    let src = r#"
+        phoneme V { "a" }
+        syllable lang { template: V nucleus: V }
+        phonrule r {
+          syllable: lang
+          "a" -> "e" / %syl<#{4..2}>% _
+        }
+    "#;
+    let (p1, p2) = compile_one_phonrule(src);
+    // It is a warning, not an error: phase2 still succeeds.
+    assert!(
+        !p2.diagnostics.has_errors(),
+        "empty range should warn, not error: {}",
+        p2.diagnostics.render_all(&p1.source_map)
+    );
+    let rendered = p2.diagnostics.render_all(&p1.source_map);
+    assert!(
+        rendered.contains("empty range"),
+        "expected an 'empty range' warning, got: {}",
         rendered
     );
 }
@@ -511,6 +572,213 @@ fn lazy_syllabification_rebuilds_after_each_rewrite() {
     };
     let out = apply_phonrule_with_resolver("ab", rule, &resolver).unwrap();
     assert_eq!(out, "aP", "lazy syllabification must persist through chain");
+}
+
+// ---------------------------------------------------------------------------
+// F7: syllable-index anchor evaluation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn syl_index_first_syllable() {
+    // F7: `%syl<#1>% _` matches only inside the word-initial syllable.
+    // "abata" syllabifies as a.ba.ta — three syllables [a][ba][ta]. The first
+    // 'a' (pos 0) is in syllable #1; the later 'a's are not.
+    //
+    // The rewrite target 'i' is itself a vowel, so lazy re-syllabification
+    // keeps the same syllable structure across loop iterations.
+    let src = r#"
+        phoneme C { "b", "t" }
+        phoneme V { "a", "i" }
+        syllable lang {
+          template: (C) V (C)
+          nucleus: V
+          onset_max: 1
+          coda_max: 1
+        }
+        phonrule head_only {
+          syllable: lang
+          "a" -> "i" / %syl<#1>% _
+        }
+    "#;
+    let (p1, p2) = compile_one_phonrule(src);
+    assert!(
+        !p2.diagnostics.has_errors(),
+        "phase2: {}",
+        p2.diagnostics.render_all(&p1.source_map)
+    );
+    let rule = pick_phonrule(&p1, "head_only");
+    let syl = pick_syllable(&p1, "lang");
+    let resolver = OneShotResolver { rule, inv: &p2.phonemes, syl: Some(syl) };
+    // Only the first 'a' (syllable #1) changes.
+    let out = apply_phonrule_with_resolver("abata", rule, &resolver).unwrap();
+    assert_eq!(out, "ibata");
+}
+
+#[test]
+fn syl_index_last_syllable() {
+    // F7: `%syl<#-1>% _` matches only inside the word-final syllable.
+    // "abata" → a.ba.ta; the last 'a' (pos 4) is in syllable #3 = #-1.
+    let src = r#"
+        phoneme C { "b", "t" }
+        phoneme V { "a", "i" }
+        syllable lang {
+          template: (C) V (C)
+          nucleus: V
+          onset_max: 1
+          coda_max: 1
+        }
+        phonrule tail_only {
+          syllable: lang
+          "a" -> "i" / %syl<#-1>% _
+        }
+    "#;
+    let (p1, p2) = compile_one_phonrule(src);
+    assert!(
+        !p2.diagnostics.has_errors(),
+        "phase2: {}",
+        p2.diagnostics.render_all(&p1.source_map)
+    );
+    let rule = pick_phonrule(&p1, "tail_only");
+    let syl = pick_syllable(&p1, "lang");
+    let resolver = OneShotResolver { rule, inv: &p2.phonemes, syl: Some(syl) };
+    let out = apply_phonrule_with_resolver("abata", rule, &resolver).unwrap();
+    assert_eq!(out, "abati");
+}
+
+#[test]
+fn syl_index_range_open_high_late_loss() {
+    // F7: `%syl<#{3..}>% _` — the proposal's `late_loss` example: drop vowels
+    // from the 3rd syllable onward. "abatara" → a.ba.ta.ra (4 syllables); the
+    // 'a' in syllables #3 ("ta") and #4 ("ra") are dropped, the 'a's in #1/#2
+    // stay.
+    //
+    // NOTE: deletion re-syllabifies on the next loop iteration (lazy), so we
+    // delete the syllable-3+ vowels one rewrite at a time. After "ta"/"ra"
+    // lose their vowels the string is "abatr" → a.batr (2 syllables) and no
+    // vowel is in syllable #3 anymore, so the loop converges.
+    let src = r#"
+        phoneme C { "b", "t", "r" }
+        phoneme V { "a" }
+        syllable lang {
+          template: (C) V (C)
+          nucleus: V
+          onset_max: 1
+          coda_max: 1
+        }
+        phonrule late_loss {
+          syllable: lang
+          "a" -> "" / %syl<#{3..}>% _
+        }
+    "#;
+    let (p1, p2) = compile_one_phonrule(src);
+    assert!(
+        !p2.diagnostics.has_errors(),
+        "phase2: {}",
+        p2.diagnostics.render_all(&p1.source_map)
+    );
+    let rule = pick_phonrule(&p1, "late_loss");
+    let syl = pick_syllable(&p1, "lang");
+    let resolver = OneShotResolver { rule, inv: &p2.phonemes, syl: Some(syl) };
+    // First pass: "abatara" a.ba.ta.ra → drop 'a' of "ta" → "abatra" a.ba.tra
+    // → 'a' of "ra" now sits in syllable #3 → drop → "abatr".
+    let out = apply_phonrule_with_resolver("abatara", rule, &resolver).unwrap();
+    assert_eq!(out, "abatr");
+}
+
+#[test]
+fn syl_index_range_middle_syllables() {
+    // F7: `%syl<#{2..-2}>% _` — middle syllables only (not first, not last).
+    // "abatara" → a.ba.ta.ra (4 syllables): #2 = "ba", #3 = "ta" are middle;
+    // #1 = "a", #4 = "ra" are excluded.
+    let src = r#"
+        phoneme C { "b", "t", "r" }
+        phoneme V { "a", "i" }
+        syllable lang {
+          template: (C) V (C)
+          nucleus: V
+          onset_max: 1
+          coda_max: 1
+        }
+        phonrule middle {
+          syllable: lang
+          "a" -> "i" / %syl<#{2..-2}>% _
+        }
+    "#;
+    let (p1, p2) = compile_one_phonrule(src);
+    assert!(
+        !p2.diagnostics.has_errors(),
+        "phase2: {}",
+        p2.diagnostics.render_all(&p1.source_map)
+    );
+    let rule = pick_phonrule(&p1, "middle");
+    let syl = pick_syllable(&p1, "lang");
+    let resolver = OneShotResolver { rule, inv: &p2.phonemes, syl: Some(syl) };
+    // 'a' in "ba" (#2) and "ta" (#3) become 'i'; "a" (#1) and "ra" (#4) stay.
+    let out = apply_phonrule_with_resolver("abatara", rule, &resolver).unwrap();
+    assert_eq!(out, "abitira");
+}
+
+#[test]
+fn syl_index_monosyllable_first_and_last_both_true() {
+    // F7 edge case: in a one-syllable word, `%syl<#1>%` and `%syl<#-1>%` both
+    // hold (syllable_count = 1, so #-1 normalises to #1).
+    let src = r#"
+        phoneme C { "b", "d" }
+        phoneme V { "a", "i" }
+        syllable lang {
+          template: (C) V (C)
+          nucleus: V
+          onset_max: 1
+          coda_max: 1
+        }
+        phonrule first { syllable: lang  "a" -> "i" / %syl<#1>% _ }
+        phonrule last  { syllable: lang  "a" -> "i" / %syl<#-1>% _ }
+    "#;
+    let (p1, p2) = compile_one_phonrule(src);
+    assert!(
+        !p2.diagnostics.has_errors(),
+        "phase2: {}",
+        p2.diagnostics.render_all(&p1.source_map)
+    );
+    let syl = pick_syllable(&p1, "lang");
+    // "bad" — one syllable. Both rules fire.
+    let first = pick_phonrule(&p1, "first");
+    let r1 = OneShotResolver { rule: first, inv: &p2.phonemes, syl: Some(syl) };
+    assert_eq!(apply_phonrule_with_resolver("bad", first, &r1).unwrap(), "bid");
+    let last = pick_phonrule(&p1, "last");
+    let r2 = OneShotResolver { rule: last, inv: &p2.phonemes, syl: Some(syl) };
+    assert_eq!(apply_phonrule_with_resolver("bad", last, &r2).unwrap(), "bid");
+}
+
+#[test]
+fn syl_index_out_of_range_is_noop() {
+    // F7 edge case: an index past the syllable count never matches (no-op).
+    // "abata" has 3 syllables; `%syl<#{10..}>%` matches nothing.
+    let src = r#"
+        phoneme C { "b", "t" }
+        phoneme V { "a" }
+        syllable lang {
+          template: (C) V (C)
+          nucleus: V
+          onset_max: 1
+          coda_max: 1
+        }
+        phonrule far {
+          syllable: lang
+          "a" -> "E" / %syl<#{10..}>% _
+        }
+    "#;
+    let (p1, p2) = compile_one_phonrule(src);
+    assert!(
+        !p2.diagnostics.has_errors(),
+        "phase2: {}",
+        p2.diagnostics.render_all(&p1.source_map)
+    );
+    let rule = pick_phonrule(&p1, "far");
+    let syl = pick_syllable(&p1, "lang");
+    let resolver = OneShotResolver { rule, inv: &p2.phonemes, syl: Some(syl) };
+    let out = apply_phonrule_with_resolver("abata", rule, &resolver).unwrap();
+    assert_eq!(out, "abata", "out-of-range syllable index must be a no-op");
 }
 
 // ---------------------------------------------------------------------------
