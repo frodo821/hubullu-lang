@@ -53,16 +53,32 @@ pub struct Phase1Result {
     pub content_hashes: HashMap<PathBuf, [u8; 32]>,
 }
 
-/// Run phase 1 from a set of import directives (used by `.hut` rendering).
+/// Run phase 1 from a set of `@reference` import directives (used by `.hut`
+/// rendering).
 ///
-/// Creates a virtual entry file that contains only the given imports, then
+/// Creates a virtual entry file that contains only the given references, then
 /// recursively loads all referenced `.hu` files exactly as [`run_phase1`] does.
 /// The virtual entry has no local declarations; its scope only contains the
 /// imported symbols.
 ///
 /// `base_dir` is used to resolve relative paths in the import directives.
 pub fn run_phase1_virtual(
-    imports: &[crate::ast::Import],
+    references: &[crate::ast::Import],
+    base_dir: &Path,
+) -> Phase1Result {
+    run_phase1_virtual_with_uses(references, &[], base_dir)
+}
+
+/// Like [`run_phase1_virtual`], but also processes `@use` imports from the
+/// `.hut` file (F1a).
+///
+/// `references` are loaded as `@reference` (entry source visibility, no cycle
+/// check) and `uses` are loaded as `@use` (declarative-symbol visibility,
+/// DFS cycle check).  Both contribute to the virtual file's symbol scope so
+/// that phase1/2 lookups from the `.hut` see the union.
+pub fn run_phase1_virtual_with_uses(
+    references: &[crate::ast::Import],
+    uses: &[crate::ast::Import],
     base_dir: &Path,
 ) -> Phase1Result {
     let mut ctx = Phase1Ctx {
@@ -83,13 +99,23 @@ pub fn run_phase1_virtual(
     ctx.path_to_id.insert(virtual_path, file_id);
     ctx.files.insert(file_id, File { items: Vec::new() });
 
-    // Process each import as a @reference from the virtual file.
-    for import in imports {
+    // Process each @reference from the virtual file.
+    for import in references {
         let dep_id = ctx.resolve_import(
             &import.path.node, base_dir, false, import.path.span,
         );
         if let Some(dep_id) = dep_id {
             ctx.register_imports(file_id, dep_id, &import.target, false);
+        }
+    }
+
+    // Process each @use from the virtual file (F1a).
+    for import in uses {
+        let dep_id = ctx.resolve_import(
+            &import.path.node, base_dir, true, import.path.span,
+        );
+        if let Some(dep_id) = dep_id {
+            ctx.register_imports(file_id, dep_id, &import.target, true);
         }
     }
 

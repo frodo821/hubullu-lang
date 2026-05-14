@@ -1235,4 +1235,67 @@ en.cat en.walk[tense=present] "."
             panic!("expected Ref token");
         }
     }
+
+    // F1a: `.hut` accepts `@use` directives, parseable on their own.
+    #[test]
+    fn test_parse_hut_with_use_glob() {
+        let src = r#"@use * from "phon/rules.hu"
+"a"
+"#;
+        let (hut, _sm) = parse_hut(src, "test.hut").unwrap();
+        assert!(hut.references.is_empty());
+        assert_eq!(hut.uses.len(), 1);
+        assert_eq!(hut.uses[0].path.node, "phon/rules.hu");
+        assert!(matches!(hut.uses[0].target, ast::ImportTarget::Glob { alias: None }));
+    }
+
+    // F1a: `.hut` accepts `@use` with named imports.
+    #[test]
+    fn test_parse_hut_with_use_named() {
+        let src = r#"@use lenition, palatalization as p from "phon/rules.hu"
+"a"
+"#;
+        let (hut, _sm) = parse_hut(src, "test.hut").unwrap();
+        assert_eq!(hut.uses.len(), 1);
+        match &hut.uses[0].target {
+            ast::ImportTarget::Named(entries) => {
+                assert_eq!(entries.len(), 2);
+                assert_eq!(entries[0].name.node, "lenition");
+                assert!(entries[0].alias.is_none());
+                assert_eq!(entries[1].name.node, "palatalization");
+                assert_eq!(entries[1].alias.as_ref().unwrap().node, "p");
+            }
+            other => panic!("expected Named, got {:?}", other),
+        }
+    }
+
+    // F1a: `@reference` and `@use` can be mixed in any order at the top.
+    #[test]
+    fn test_parse_hut_reference_use_free_order() {
+        let src = r#"@reference * as en from "english.hu"
+@use lenition from "phon/rules.hu"
+@reference * as ja from "japanese.hu"
+@use * from "phon/more.hu"
+en.cat
+"#;
+        let (hut, _sm) = parse_hut(src, "test.hut").unwrap();
+        assert_eq!(hut.references.len(), 2);
+        assert_eq!(hut.uses.len(), 2);
+        assert_eq!(hut.references[0].path.node, "english.hu");
+        assert_eq!(hut.references[1].path.node, "japanese.hu");
+        assert_eq!(hut.uses[0].path.node, "phon/rules.hu");
+        assert_eq!(hut.uses[1].path.node, "phon/more.hu");
+    }
+
+    // F1a: `@use` followed by `@reference` (reverse order) is also accepted.
+    #[test]
+    fn test_parse_hut_use_before_reference() {
+        let src = r#"@use * from "phon/rules.hu"
+@reference * as en from "english.hu"
+en.cat
+"#;
+        let (hut, _sm) = parse_hut(src, "test.hut").unwrap();
+        assert_eq!(hut.references.len(), 1);
+        assert_eq!(hut.uses.len(), 1);
+    }
 }

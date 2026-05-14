@@ -1561,20 +1561,34 @@ impl Parser {
         Ok(tokens)
     }
 
-    /// Parse a `.hut` file until EOF: leading `@reference` directives, then a token list.
+    /// Parse a `.hut` file until EOF: leading `@reference` / `@use` directives
+    /// (in any order), then a token list.
     pub fn parse_token_list_to_eof(mut self) -> (crate::ast::HutFile, Vec<Diagnostic>) {
-        // Parse leading @reference directives
+        // Parse leading @reference / @use directives (free order, F1a).
         let mut references = Vec::new();
-        while matches!(self.peek(), TokenKind::AtReference) {
-            self.advance();
-            match self.parse_import() {
-                Ok(import) => references.push(import),
-                Err(diag) => self.errors.push(diag),
+        let mut uses = Vec::new();
+        loop {
+            match self.peek() {
+                TokenKind::AtReference => {
+                    self.advance();
+                    match self.parse_import() {
+                        Ok(import) => references.push(import),
+                        Err(diag) => self.errors.push(diag),
+                    }
+                }
+                TokenKind::AtUse => {
+                    self.advance();
+                    match self.parse_import() {
+                        Ok(import) => uses.push(import),
+                        Err(diag) => self.errors.push(diag),
+                    }
+                }
+                _ => break,
             }
         }
 
         let tokens = self.parse_hut_tokens(None);
-        (crate::ast::HutFile { references, tokens }, self.errors)
+        (crate::ast::HutFile { references, uses, tokens }, self.errors)
     }
 
     /// Parse hut tokens. If `inside_tag` is Some, stop at the matching `</name>`;

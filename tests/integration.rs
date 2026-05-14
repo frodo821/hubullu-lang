@@ -1619,3 +1619,78 @@ fn test_std_import() {
         .unwrap();
     assert_eq!(entry_count, 1, "expected 1 entry using std:_test axis");
 }
+
+// =========================================================================
+// F1a: `.hut` accepts `@use` directives.
+// =========================================================================
+
+/// `@use` in a `.hut` makes the imported phonrule visible in the virtual
+/// scope built by `run_phase1_virtual_with_uses`, so phase1 sees the symbol.
+#[test]
+fn test_hut_use_brings_phonrule_into_scope() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("phon.hu"),
+        r#"
+phonrule lenition {
+  "t" -> "d"
+}
+"#,
+    )
+    .unwrap();
+
+    let hut_src = r#"@use lenition from "phon.hu"
+"hello"
+"#;
+    let (hut_file, _) =
+        hubullu::render::parse_hut(hut_src, "test.hut").expect("parse_hut should succeed");
+    assert_eq!(hut_file.uses.len(), 1);
+
+    let p1 = hubullu::phase1::run_phase1_virtual_with_uses(
+        &hut_file.references,
+        &hut_file.uses,
+        dir.path(),
+    );
+    assert!(
+        !p1.diagnostics.has_errors(),
+        "phase1 errors: {}",
+        p1.diagnostics.render_all(&p1.source_map)
+    );
+
+    // The virtual file's scope should now contain `lenition` as a phonrule symbol.
+    let virtual_path = dir.path().join("<hut-virtual>");
+    let virt_fid = p1
+        .path_to_id
+        .get(&virtual_path)
+        .copied()
+        .expect("virtual file id should be present");
+    let scope = p1
+        .symbol_table
+        .scope(virt_fid)
+        .expect("virtual scope should exist");
+    assert!(
+        !scope.resolve("lenition").is_empty(),
+        "lenition symbol should be visible in .hut virtual scope via @use"
+    );
+}
+
+/// `@use` to a missing file produces a phase1 diagnostic (same path as
+/// existing `.hu` `@use` failures).
+#[test]
+fn test_hut_use_missing_file_is_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let hut_src = r#"@use * from "does_not_exist.hu"
+"x"
+"#;
+    let (hut_file, _) =
+        hubullu::render::parse_hut(hut_src, "test.hut").expect("parse_hut should succeed");
+    let p1 = hubullu::phase1::run_phase1_virtual_with_uses(
+        &hut_file.references,
+        &hut_file.uses,
+        dir.path(),
+    );
+    assert!(
+        p1.diagnostics.has_errors(),
+        "missing @use target should produce an error diagnostic"
+    );
+}
