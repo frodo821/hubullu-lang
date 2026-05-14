@@ -125,7 +125,11 @@ fn create_schema(conn: &Connection) -> Result<(), Diagnostic> {
         CREATE TABLE IF NOT EXISTS phonrule_meta (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
-            derived_from TEXT
+            derived_from TEXT,
+            -- F2c: optional reference to a top-level `syllable NAME` declaration
+            -- (the `syllable:` field on a phonrule). Required at compile time
+            -- whenever the rule uses σ-aware context elements.
+            syllable_ref TEXT
         );
 
         CREATE TABLE IF NOT EXISTS phonrule_display (
@@ -262,8 +266,8 @@ fn insert_data(conn: &Connection, p2: &Phase2Result) -> Result<(), Diagnostic> {
     // the compiler does not consult these fields, but downstream tools may.
     for pr in &p2.phonrules {
         conn.execute(
-            "INSERT INTO phonrule_meta (name, derived_from) VALUES (?1, ?2)",
-            params![pr.name, pr.derived_from],
+            "INSERT INTO phonrule_meta (name, derived_from, syllable_ref) VALUES (?1, ?2, ?3)",
+            params![pr.name, pr.derived_from, pr.syllable_ref],
         )
         .map_err(|e| Diagnostic::error(format!("insert phonrule_meta failed: {}", e)))?;
         let pr_id = conn.last_insert_rowid();

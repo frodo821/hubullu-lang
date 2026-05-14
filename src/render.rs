@@ -1067,6 +1067,22 @@ impl<'a> crate::inflection_eval::PhonRuleResolver for HutPhonResolver<'a> {
     fn inventory(&self) -> Option<&crate::phoneme::PhonemeInventory> {
         Some(&self.ctx.inventory)
     }
+
+    fn resolve_syllable(&self, name: &str) -> Option<&crate::ast::Syllable> {
+        let scope = self.ctx.p1.symbol_table.scope(self.ctx.virtual_file_id)?;
+        for sym in scope.resolve(name) {
+            if sym.kind == crate::symbol_table::SymbolKind::Syllable {
+                if let Some(file) = self.ctx.p1.files.get(&sym.file_id) {
+                    if let Some(item) = file.items.get(sym.item_index) {
+                        if let crate::ast::Item::Syllable(syl) = &item.node {
+                            return Some(syl);
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
 }
 
 /// Apply the file-level `@apply` phonrule chain (F1b) to a resolved part list.

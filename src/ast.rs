@@ -327,6 +327,10 @@ pub struct PhonRule {
     pub display: DisplayMap,
     /// `derived_from: proto` — informational only, not used by the compiler.
     pub derived_from: Option<Ident>,
+    /// `syllable: NAME` — references a top-level `syllable` declaration (F2c).
+    /// Required whenever the body uses a σ context element (`σ[` / `]σ`).
+    /// Omitted phonrules cannot use σ-aware context.
+    pub syllable: Option<Ident>,
     pub classes: Vec<CharClassDef>,
     pub maps: Vec<PhonMapDef>,
     /// Ordered body items: rewrite rules and `apply <other>` statements,
@@ -474,6 +478,12 @@ pub enum PhonContextElem {
     Literal(StringLit),
     Repeat(Box<PhonContextElem>),
     Alt(Vec<PhonContextElem>),
+    /// `σ[` — current position is at the start of a syllable (F2c).
+    /// Requires the enclosing phonrule to have a `syllable: NAME` field.
+    SylStart,
+    /// `]σ` — current position is at the end of a syllable (F2c).
+    /// Requires the enclosing phonrule to have a `syllable: NAME` field.
+    SylEnd,
 }
 
 // ---------------------------------------------------------------------------

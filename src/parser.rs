@@ -1143,6 +1143,7 @@ impl Parser {
         let mut body: Vec<PhonBodyItem> = Vec::new();
         let mut display: DisplayMap = Vec::new();
         let mut derived_from: Option<Ident> = None;
+        let mut syllable: Option<Ident> = None;
 
         while !matches!(self.peek(), TokenKind::RBrace | TokenKind::Eof) {
             if self.at_ident("class") {
@@ -1168,6 +1169,12 @@ impl Parser {
                 self.advance(); // consume "derived_from"
                 self.expect(&TokenKind::Colon)?;
                 derived_from = Some(self.expect_ident()?);
+            } else if self.at_field("syllable") {
+                // `syllable: NAME` — references a top-level syllable
+                // declaration (F2c). Required for σ context elements.
+                self.advance(); // consume "syllable"
+                self.expect(&TokenKind::Colon)?;
+                syllable = Some(self.expect_ident()?);
             } else {
                 // Must be a rewrite rule
                 body.push(PhonBodyItem::Rewrite(self.parse_phon_rewrite_rule()?));
@@ -1179,6 +1186,7 @@ impl Parser {
             name,
             display,
             derived_from,
+            syllable,
             classes,
             maps,
             body,
@@ -1467,6 +1475,25 @@ impl Parser {
                 self.advance();
                 return Ok(PhonContextElem::WordEnd);
             }
+            // `]σ` — syllable-end boundary (F2c). The RBracket is otherwise
+            // an unexpected token in context position; we use it as the lead
+            // char of the `]σ` digraph and require an immediately-following
+            // `Ident("σ")` token.
+            TokenKind::RBracket => {
+                // Only consume if followed by Ident("σ").
+                if matches!(
+                    self.tokens.get(self.pos + 1).map(|t| &t.node),
+                    Some(TokenKind::Ident(s)) if s == "σ"
+                ) {
+                    self.advance(); // ]
+                    self.advance(); // σ
+                    return Ok(PhonContextElem::SylEnd);
+                }
+                return Err(self.error(format!(
+                    "expected context element, found {:?}",
+                    self.peek()
+                )));
+            }
             TokenKind::LParen => {
                 self.advance();
                 let mut alts = vec![self.parse_phon_context_elem()?];
@@ -1485,6 +1512,20 @@ impl Parser {
             TokenKind::StringLit(_) => {
                 let s = self.expect_string()?;
                 PhonContextElem::Literal(s)
+            }
+            // `σ[` — syllable-start boundary (F2c). The leading `σ` ident
+            // followed immediately by `[` is the only way to introduce a
+            // syllable-start element. A bare `σ` ident is still a valid
+            // class name and falls through to the generic Ident arm below.
+            TokenKind::Ident(s) if s == "σ"
+                && matches!(
+                    self.tokens.get(self.pos + 1).map(|t| &t.node),
+                    Some(TokenKind::LBracket)
+                ) =>
+            {
+                self.advance(); // σ
+                self.advance(); // [
+                return Ok(PhonContextElem::SylStart);
             }
             TokenKind::Ident(_) => {
                 let id = self.expect_ident()?;

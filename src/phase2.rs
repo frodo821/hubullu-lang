@@ -119,6 +119,9 @@ pub struct ResolvedPhonRule {
     pub name: String,
     pub display: Vec<(String, String)>,
     pub derived_from: Option<String>,
+    /// F2c: name of the `syllable NAME` declaration this phonrule references,
+    /// if any. Mirrors `PhonRule.syllable` flattened to a string for storage.
+    pub syllable_ref: Option<String>,
 }
 
 /// Run phase 2: resolve extends, validate inflections, expand entries, check DAG.
@@ -235,6 +238,7 @@ fn collect_phonrules(p1: &Phase1Result) -> Vec<ResolvedPhonRule> {
                     name: pr.name.node.clone(),
                     display,
                     derived_from: pr.derived_from.as_ref().map(|i| i.node.clone()),
+                    syllable_ref: pr.syllable.as_ref().map(|i| i.node.clone()),
                 });
             }
         }
@@ -258,6 +262,28 @@ fn find_phonrule_in<'a>(
                 if let Some(item) = file.items.get(sym.item_index) {
                     if let Item::PhonRule(pr) = &item.node {
                         return Some(pr);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Free function (F2c): resolve a syllable declaration by name in the scope of
+/// `file_id`. Mirrors [`find_phonrule_in`] for the Syllable symbol kind.
+pub(crate) fn find_syllable_in<'a>(
+    p1: &'a Phase1Result,
+    name: &str,
+    file_id: FileId,
+) -> Option<&'a Syllable> {
+    let scope = p1.symbol_table.scope(file_id)?;
+    for sym in scope.resolve(name) {
+        if sym.kind == SymbolKind::Syllable {
+            if let Some(file) = p1.files.get(&sym.file_id) {
+                if let Some(item) = file.items.get(sym.item_index) {
+                    if let Item::Syllable(syl) = &item.node {
+                        return Some(syl);
                     }
                 }
             }
@@ -589,6 +615,21 @@ impl<'a> Phase2Ctx<'a> {
             class_names.contains(name) || phoneme_names.contains(name)
         };
 
+        // F2c: `syllable: NAME` must resolve to a top-level `syllable`
+        // declaration visible from this file's scope. The actual σ-usage
+        // requirement is checked per context-element below.
+        if let Some(syl_ref) = &pr.syllable {
+            if find_syllable_in(self.p1, &syl_ref.node, file_id).is_none() {
+                self.diagnostics.add(
+                    Diagnostic::error(format!(
+                        "phonrule '{}': syllable: references undefined syllable '{}'",
+                        pr.name.node, syl_ref.node
+                    ))
+                    .with_label(syl_ref.span, "undefined syllable"),
+                );
+            }
+        }
+
         // Validate union references
         for cls in &pr.classes {
             if let CharClassBody::Union(members) = &cls.body {
@@ -784,6 +825,24 @@ impl<'a> Phase2Ctx<'a> {
             PhonContextElem::Alt(alts) => {
                 for alt in alts {
                     self.validate_context_elem(pr, alt, class_names, phoneme_names);
+                }
+            }
+            // F2c: σ context elements require an enclosing `syllable: NAME`
+            // field; otherwise we have no syllabification strategy to consult.
+            PhonContextElem::SylStart | PhonContextElem::SylEnd => {
+                if pr.syllable.is_none() {
+                    let sigma = if matches!(elem, PhonContextElem::SylStart) {
+                        "σ["
+                    } else {
+                        "]σ"
+                    };
+                    self.diagnostics.add(
+                        Diagnostic::error(format!(
+                            "phonrule '{}': context uses '{}' but no 'syllable:' field is set",
+                            pr.name.node, sigma
+                        ))
+                        .with_label(pr.name.span, "add 'syllable: NAME' to this phonrule"),
+                    );
                 }
             }
             PhonContextElem::Boundary | PhonContextElem::WordStart | PhonContextElem::WordEnd | PhonContextElem::Literal(_) => {}
@@ -1290,5 +1349,9 @@ impl<'a, 'b> PhonRuleResolver for Phase2PhonResolver<'a, 'b> {
 
     fn inventory(&self) -> Option<&crate::phoneme::PhonemeInventory> {
         Some(&self.ctx.phonemes)
+    }
+
+    fn resolve_syllable(&self, name: &str) -> Option<&Syllable> {
+        find_syllable_in(self.ctx.p1, name, self.file_id)
     }
 }
