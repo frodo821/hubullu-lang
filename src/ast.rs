@@ -750,6 +750,15 @@ pub enum Token {
     Tag { name: String, attrs: Vec<(String, String)>, children: Vec<Token>, span: Span },
     /// `<br/>` — self-closing XML-like tag.
     SelfClosingTag { name: String, attrs: Vec<(String, String)>, span: Span },
+    /// `f(token_seq)` — inline phonrule call (F1c). The inner sequence is
+    /// recursively resolved and then `rule` is applied to each emerging
+    /// phonological word. The outer `@apply` stack is **not** propagated into
+    /// the inner sequence: the explicit `rule` overrides any ambient applies.
+    PhonCall { rule: Ident, inner: Vec<Token>, span: Span },
+    /// `@apply IDENT { token_seq }` — scoped `@apply` block (F1c). While
+    /// evaluating `inner`, `rule` is pushed onto the active apply stack so
+    /// that file-level + nested `@apply` rules are chained left-to-right.
+    ApplyBlock { rule: Ident, inner: Vec<Token>, span: Span },
 }
 
 // ---------------------------------------------------------------------------

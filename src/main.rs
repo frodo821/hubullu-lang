@@ -242,8 +242,18 @@ fn main() {
                     }
                 };
 
-                // F1b: apply file-level `@apply` phonrule chain, if any.
-                let parts = if hut_file.apply_chain.is_empty() {
+                // F1b: apply file-level `@apply` phonrule chain. F1c: also
+                // dispatch on inline `phon_call` / `@apply { ... }` markers
+                // even when the file-level chain is empty.
+                let needs_phonrules = !hut_file.apply_chain.is_empty()
+                    || parts.iter().any(|p| {
+                        matches!(
+                            p,
+                            hubullu::render::ResolvedPart::PhonCallStart(_)
+                                | hubullu::render::ResolvedPart::ApplyBlockStart(_)
+                        )
+                    });
+                let parts = if !needs_phonrules {
                     parts
                 } else {
                     let phon_ctx = match hubullu::render::HutPhonContext::build(&hut_file, &hut_dir) {

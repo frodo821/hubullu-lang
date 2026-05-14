@@ -429,6 +429,14 @@ impl PartRenderer for HtmlRenderer {
                     let line = lines.last_mut().unwrap();
                     line.push(HtmlSegment::SelfClosingTag(name.clone(), attrs.clone()));
                 }
+                // F1c markers are consumed by `apply_phonrule_chain_annotated`
+                // before reaching the renderer. If any survive (e.g. when the
+                // file-level apply chain was empty), they have no HTML
+                // representation and are dropped.
+                AnnotatedPart::PhonCallStart(_)
+                | AnnotatedPart::PhonCallEnd
+                | AnnotatedPart::ApplyBlockStart(_)
+                | AnnotatedPart::ApplyBlockEnd => {}
             }
         }
 
@@ -1215,8 +1223,17 @@ pub fn render_site(dir: &Path, outdir: &Path, huc: Option<&Path>, site_title: Op
 
         let parts = render::resolve_annotated(&hut_file.tokens, &ctx, &hut_source_map)?;
 
-        // F1b: apply file-level `@apply` phonrule chain, if any.
-        let parts = if hut_file.apply_chain.is_empty() {
+        // F1b: apply file-level `@apply` phonrule chain. F1c: also dispatch on
+        // inline `phon_call` / `@apply { ... }` markers.
+        let needs_phonrules = !hut_file.apply_chain.is_empty()
+            || parts.iter().any(|p| {
+                matches!(
+                    p,
+                    render::AnnotatedPart::PhonCallStart(_)
+                        | render::AnnotatedPart::ApplyBlockStart(_)
+                )
+            });
+        let parts = if !needs_phonrules {
             parts
         } else {
             let phon_ctx = render::HutPhonContext::build(&hut_file, hut_dir)?;
