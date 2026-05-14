@@ -1214,6 +1214,20 @@ pub fn render_site(dir: &Path, outdir: &Path, huc: Option<&Path>, site_title: Op
         };
 
         let parts = render::resolve_annotated(&hut_file.tokens, &ctx, &hut_source_map)?;
+
+        // F1b: apply file-level `@apply` phonrule chain, if any.
+        let parts = if hut_file.apply_chain.is_empty() {
+            parts
+        } else {
+            let phon_ctx = render::HutPhonContext::build(&hut_file, hut_dir)?;
+            render::apply_phonrule_chain_annotated(
+                parts,
+                &hut_file.apply_chain,
+                &phon_ctx.resolver(),
+                &hut_source_map,
+            )?
+        };
+
         let (separator, no_sep_before) = render::read_render_config(&ctx);
 
         let body_html = HtmlRenderer.render(&parts, &separator, &no_sep_before);
