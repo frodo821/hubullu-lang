@@ -45,7 +45,7 @@ pub fn document_links(
     links
 }
 
-/// Produce document links for `@reference` paths in a `.hut` file.
+/// Produce document links for `@reference` and `@use` paths in a `.hut` file.
 ///
 /// Uses the project's phase1 source map to resolve the target file URIs.
 pub fn hut_reference_links(
@@ -61,16 +61,20 @@ pub fn hut_reference_links(
     let mut source_map = crate::span::SourceMap::new();
     let _file_id = source_map.add_file(hut_filename.into(), hut_text.to_string());
 
-    // Match each @reference's path to its token span.
+    // Match each @reference / @use path (F1a) to its token span.
     let mut links = Vec::new();
-    for reference in &hut_file.references {
-        let range = convert::span_to_range(&reference.path.span, &source_map);
-        let target = phase1.and_then(|p1| resolve_import_target(&reference.path.node, p1));
+    let imports = hut_file
+        .references
+        .iter()
+        .chain(hut_file.uses.iter());
+    for import in imports {
+        let range = convert::span_to_range(&import.path.span, &source_map);
+        let target = phase1.and_then(|p1| resolve_import_target(&import.path.node, p1));
         if let Some(uri) = target {
             links.push(DocumentLink {
                 range,
                 target: Some(uri),
-                tooltip: Some(format!("Open {}", reference.path.node)),
+                tooltip: Some(format!("Open {}", import.path.node)),
                 data: None,
             });
         }

@@ -1412,12 +1412,16 @@ fn try_load_hut_project(
         Ok(h) => h,
         Err(_) => return,
     };
-    if hut_file.references.is_empty() {
+    if hut_file.references.is_empty() && hut_file.uses.is_empty() {
         return;
     }
 
-    // Build a unified project from all @reference directives.
-    let phase1 = crate::phase1::run_phase1_virtual(&hut_file.references, &hut_dir);
+    // Build a unified project from all @reference / @use directives (F1a).
+    let phase1 = crate::phase1::run_phase1_virtual_with_uses(
+        &hut_file.references,
+        &hut_file.uses,
+        &hut_dir,
+    );
 
     let phase2 = if !phase1.diagnostics.has_errors() {
         Some(crate::phase2::run_phase2(&phase1))
