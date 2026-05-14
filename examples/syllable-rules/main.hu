@@ -1,0 +1,4 @@
+# Syllable-aware phonrule examples
+
+@use * from "profile.hu"
+@reference * from "words.hu"

@@ -1,0 +1,91 @@
+# Syllable-aware phonrule examples
+#
+# A tiny artificial language that demonstrates the proposal v2 phonrule
+# features. Render `proto.hut` for the bare forms and `daughter.hut` for
+# the same forms after a sound-change chain.
+#
+#   M  — macro syntax     %syl[ ... ]%   %syl<head>%   %syl<#N>%
+#   F6 — context quantifiers (C*, V+, ...) and the wildcard `.`
+#   F7 — syllable index anchors  %syl<#1>%  %syl<#-1>%  %syl<#{2..}>%
+#   F8 — LHS range rewrite (quantified / %syl[ ... ]% left-hand sides)
+
+tagaxis pos {
+  role: classificatory
+  display: { en: "Part of Speech" }
+  index: exact
+}
+
+@extend pos_values for tagaxis pos {
+  noun { display: { en: "Noun" } }
+}
+
+# --- Phoneme inventory ------------------------------------------------------
+
+phoneme C { "p", "t", "k", "b", "d", "g", "m", "n", "s", "l", "r" }
+phoneme V { "a", "e", "i", "o", "u" }
+
+# --- Syllable structure: (C)V(C) -------------------------------------------
+
+syllable syl {
+  template: (C) V (C)
+  nucleus: V
+  onset_max: 1
+  coda_max: 1
+  onset_priority: max
+  unknown: skip
+}
+
+# --- F6: quantified context ------------------------------------------------
+# `C*` matches any onset (zero or more consonants), so this fires on the
+# nucleus of an open syllable — one with no coda — however it begins.
+# `a` rounds to `o` there. (The rhs differs from the lhs, so the rewrite
+# converges in one pass.)
+
+phonrule open_rounding {
+  syllable: syl
+  "a" -> "o" / %syl[ C* _ ]%
+}
+
+# --- F7: syllable index anchor ---------------------------------------------
+# `%syl<#-1>%` is a zero-width anchor true inside the last syllable.
+# Voiced stops devoice there.
+
+phonrule final_devoicing {
+  syllable: syl
+  "b" -> "p" / %syl<#-1>% _
+  "d" -> "t" / %syl<#-1>% _
+  "g" -> "k" / %syl<#-1>% _
+}
+
+# --- F7: syllable index range ----------------------------------------------
+# `%syl<#{2..}>%` matches the 2nd syllable onward; every vowel outside the
+# first syllable reduces to `e`.
+
+phonrule reduction {
+  syllable: syl
+  V -> "e" / %syl<#{2..}>% _
+}
+
+# --- F8: quantified LHS ----------------------------------------------------
+# `C{2,}` matches a run of two or more consonants; the whole run collapses
+# to a single `t` in one rewrite.
+
+phonrule cluster_reduction {
+  C{2,} -> "t"
+}
+
+# --- F8: quantified %syl[ ... ]% block on the LHS --------------------------
+# Every syllable from the 3rd onward is matched as a range and deleted.
+
+phonrule truncation {
+  syllable: syl
+  (%syl[ C* V C* ]%)+ -> "" / %syl<#3>% _
+}
+
+# --- F3: composition -------------------------------------------------------
+# A daughter language chains several rules, applied in order.
+
+phonrule daughter {
+  apply final_devoicing
+  apply reduction
+}

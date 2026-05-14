@@ -1,0 +1,38 @@
+@use * from "profile.hu"
+
+# Proto words — bare (C)V(C) roots used to demonstrate the phonrules.
+
+entry tabo {
+  headword { default: "tabo" }
+  tags: [pos=noun]
+  stems {}
+  meaning: "river"
+}
+
+entry kanto {
+  headword { default: "kanto" }
+  tags: [pos=noun]
+  stems {}
+  meaning: "stone"
+}
+
+entry gudemi {
+  headword { default: "gudemi" }
+  tags: [pos=noun]
+  stems {}
+  meaning: "forest"
+}
+
+entry bolaki {
+  headword { default: "bolaki" }
+  tags: [pos=noun]
+  stems {}
+  meaning: "bird"
+}
+
+entry pidranu {
+  headword { default: "pidranu" }
+  tags: [pos=noun]
+  stems {}
+  meaning: "morning"
+}

@@ -1,0 +1,18 @@
+@reference * from "main.hu"
+@use * from "profile.hu"
+
+# F1b: `@apply daughter` runs the daughter sound-change chain
+# (final_devoicing -> reduction) over every word in this file.
+#
+# Try other rules from profile.hu the same way, e.g.:
+#   @apply truncation
+#   @apply open_rounding
+# or apply one inline to a single word: truncation(pidranu)
+
+@apply daughter
+
+tabo
+kanto
+gudemi
+bolaki
+pidranu

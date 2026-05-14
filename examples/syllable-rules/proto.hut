@@ -1,0 +1,15 @@
+@reference * from "main.hu"
+@use * from "profile.hu"
+
+# Bare proto forms — no phonrule applied here.
+#
+# `profile.hu` is in scope, so you can layer any rule on at the CLI:
+#   hubullu render proto.hut -e '@apply truncation'
+#   hubullu render proto.hut -e '@apply open_rounding'
+#   hubullu render proto.hut -e '@apply cluster_reduction'
+
+tabo
+kanto
+gudemi
+bolaki
+pidranu
