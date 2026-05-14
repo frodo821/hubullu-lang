@@ -15,17 +15,50 @@ use crate::ast::*;
 use crate::error::Diagnostic;
 use crate::inflection_eval::PhonRuleResolver;
 use crate::phoneme::PhonemeInventory;
+use crate::syllable::{syllabify, SyllableSpan};
 
 /// Boundary marker character used internally between morphemes.
 pub const BOUNDARY: char = '\0';
 
+/// Cached syllable boundaries for the current input (F2c).
+///
+/// Built lazily by [`compute_syllable_boundaries`] when a phonrule has a
+/// `syllable: NAME` field and σ context elements need to consult the
+/// current syllabification. Positions are character indices into the input
+/// *with* `\0` boundary markers preserved (the same coordinate system used
+/// by [`check_context`]) — we restore positions from the stripped-input
+/// coordinates returned by [`syllabify`] by replaying the original char
+/// stream.
+#[derive(Debug, Clone, Default)]
+struct SyllableBoundaries {
+    /// Inclusive character indices in the input where a syllable begins.
+    starts: Vec<usize>,
+    /// Exclusive character indices in the input where a syllable ends
+    /// (i.e. one past the last character of the syllable).
+    ends: Vec<usize>,
+}
+
+impl SyllableBoundaries {
+    fn is_start(&self, pos: usize) -> bool {
+        self.starts.binary_search(&pos).is_ok()
+    }
+    fn is_end(&self, pos: usize) -> bool {
+        self.ends.binary_search(&pos).is_ok()
+    }
+}
+
 /// Per-evaluation context: the phonrule being applied plus the optional
 /// global phoneme inventory used to resolve class names that don't match a
 /// local `class` definition.
+///
+/// `syllable_boundaries` is `None` when the rule has no `syllable:` field or
+/// when no inventory/resolver is available; σ context elements then never
+/// match (phase2 already rejected such combinations at compile time).
 #[derive(Copy, Clone)]
 struct EvalCtx<'a> {
     phonrule: &'a PhonRule,
     inventory: Option<&'a PhonemeInventory>,
+    syllable_boundaries: Option<&'a SyllableBoundaries>,
 }
 
 /// Apply a phonrule to an input string containing `\0` boundary markers.
@@ -61,13 +94,30 @@ fn apply_phonrule_inner<R: PhonRuleResolver + ?Sized>(
     resolver: Option<&R>,
 ) -> Result<String, Diagnostic> {
     let inventory = resolver.and_then(|r| r.inventory());
-    let ctx = EvalCtx { phonrule, inventory };
+    // F2c: resolve the optional `syllable:` reference once per phonrule entry.
+    // The syllable declaration itself is reused across all rewrite rules, but
+    // boundary positions are recomputed (lazy syllabification) after each
+    // rewrite that changes the string.
+    let syllable = phonrule
+        .syllable
+        .as_ref()
+        .and_then(|name| resolver.and_then(|r| r.resolve_syllable(&name.node)));
     let mut result = input.to_string();
     for item in &phonrule.body {
         match item {
             PhonBodyItem::Rewrite(rule) => {
-                // Apply iteratively until convergence (for cascading harmony)
+                // Apply iteratively until convergence (for cascading harmony).
+                // Each iteration rebuilds the syllable boundary bitset from
+                // the current string (lazy syllabification, F2c).
                 loop {
+                    let boundaries = compute_syllable_boundaries(
+                        &result, syllable, inventory,
+                    );
+                    let ctx = EvalCtx {
+                        phonrule,
+                        inventory,
+                        syllable_boundaries: boundaries.as_ref(),
+                    };
                     let next = apply_rewrite_rule(&result, rule, ctx);
                     if next == result {
                         break;
@@ -92,6 +142,61 @@ fn apply_phonrule_inner<R: PhonRuleResolver + ?Sized>(
         }
     }
     Ok(result)
+}
+
+/// Compute syllable-boundary positions for `input` under `syllable`. Returns
+/// `None` if either ingredient is missing — that signals "σ context elements
+/// cannot match" to the caller. Phase2 prevents σ usage without a `syllable:`
+/// field, so missing-here means a legacy non-resolver call: σ elements then
+/// fail open (never match) instead of erroring at runtime.
+///
+/// We translate stripped-input character offsets back to *raw* offsets (the
+/// coordinate system used by `check_context`, which walks the input char-by-
+/// char including any `\0` boundary markers) by replaying the original char
+/// stream and skipping over internal markers (`\0`, `+`) — these are exactly
+/// the chars [`syllabify`] strips before tokenisation.
+fn compute_syllable_boundaries(
+    input: &str,
+    syllable: Option<&Syllable>,
+    inventory: Option<&PhonemeInventory>,
+) -> Option<SyllableBoundaries> {
+    let syl = syllable?;
+    let inv = inventory?;
+    let result = syllabify(input, syl, inv);
+    if result.syllables.is_empty() {
+        return Some(SyllableBoundaries::default());
+    }
+
+    // Map each stripped-input offset to a raw-input offset.
+    let mut stripped_to_raw: Vec<usize> = Vec::new();
+    for (raw_idx, ch) in input.chars().enumerate() {
+        if ch == BOUNDARY || ch == '+' {
+            continue;
+        }
+        stripped_to_raw.push(raw_idx);
+    }
+    // Sentinel for `end == stripped_len`: raw end is char count of input.
+    let raw_end_sentinel = input.chars().count();
+    stripped_to_raw.push(raw_end_sentinel);
+
+    let lookup = |stripped: usize| -> usize {
+        stripped_to_raw
+            .get(stripped)
+            .copied()
+            .unwrap_or(raw_end_sentinel)
+    };
+
+    let mut starts = Vec::with_capacity(result.syllables.len());
+    let mut ends = Vec::with_capacity(result.syllables.len());
+    for SyllableSpan { start, end, .. } in &result.syllables {
+        starts.push(lookup(*start));
+        ends.push(lookup(*end));
+    }
+    starts.sort_unstable();
+    starts.dedup();
+    ends.sort_unstable();
+    ends.dedup();
+    Some(SyllableBoundaries { starts, ends })
 }
 
 /// Check if the FROM pattern is an empty literal (insertion rule).
@@ -417,6 +522,23 @@ fn match_left_elem(
             }
             false
         }
+        // F2c: σ-aware context elements. `σ[` in the *left* context means
+        // "the current cursor sits at a syllable start" — like `^`, it is a
+        // zero-width anchor and does not consume a character.
+        PhonContextElem::SylStart => {
+            match ctx.syllable_boundaries {
+                Some(b) => b.is_start(*cursor),
+                None => false,
+            }
+        }
+        // `]σ` in the *left* context means "the current cursor sits at a
+        // syllable end" (the syllable just finished to our left).
+        PhonContextElem::SylEnd => {
+            match ctx.syllable_boundaries {
+                Some(b) => b.is_end(*cursor),
+                None => false,
+            }
+        }
     }
 }
 
@@ -525,6 +647,21 @@ fn match_right_elem(
             }
             false
         }
+        // F2c: σ-aware context elements on the *right* side. Both are zero
+        // width (just like `^`/`$`) — they check that the cursor sits on a
+        // syllable boundary without consuming any character.
+        PhonContextElem::SylStart => {
+            match ctx.syllable_boundaries {
+                Some(b) => b.is_start(*cursor),
+                None => false,
+            }
+        }
+        PhonContextElem::SylEnd => {
+            match ctx.syllable_boundaries {
+                Some(b) => b.is_end(*cursor),
+                None => false,
+            }
+        }
     }
 }
 
@@ -561,6 +698,7 @@ mod tests {
             name: make_ident("harmony"),
             display: vec![],
             derived_from: None,
+            syllable: None,
             classes: vec![
                 CharClassDef {
                     name: make_ident("front"),
@@ -664,6 +802,7 @@ mod tests {
             name: make_ident("wb_test"),
             display: vec![],
             derived_from: None,
+            syllable: None,
             classes: vec![
                 CharClassDef {
                     name: make_ident("C"),
@@ -756,6 +895,7 @@ mod tests {
             name: make_ident("insert_test"),
             display: vec![],
             derived_from: None,
+            syllable: None,
             classes,
             maps: vec![],
             body: rewrite_body(vec![
@@ -881,6 +1021,7 @@ mod tests {
             name: make_ident("devoice"),
             display: vec![],
             derived_from: None,
+            syllable: None,
             classes: vec![consonant_class(), vowel_class()],
             maps: vec![],
             body: rewrite_body(vec![PhonRewriteRule {
@@ -912,6 +1053,7 @@ mod tests {
             name: make_ident("voice"),
             display: vec![],
             derived_from: None,
+            syllable: None,
             classes: vec![consonant_class(), vowel_class()],
             maps: vec![],
             body: rewrite_body(vec![PhonRewriteRule {
@@ -944,6 +1086,7 @@ mod tests {
             name: make_ident("devoice2"),
             display: vec![],
             derived_from: None,
+            syllable: None,
             classes: vec![consonant_class(), vowel_class()],
             maps: vec![],
             body: rewrite_body(vec![PhonRewriteRule {
@@ -976,6 +1119,7 @@ mod tests {
             name: make_ident("voicing"),
             display: vec![],
             derived_from: None,
+            syllable: None,
             classes: vec![vowel_class()],
             maps: vec![],
             body: rewrite_body(vec![PhonRewriteRule {
@@ -1007,6 +1151,7 @@ mod tests {
             name: make_ident("lit_cross"),
             display: vec![],
             derived_from: None,
+            syllable: None,
             classes: vec![],
             maps: vec![],
             body: rewrite_body(vec![PhonRewriteRule {
@@ -1036,6 +1181,7 @@ mod tests {
             name: make_ident("neg_cross"),
             display: vec![],
             derived_from: None,
+            syllable: None,
             classes: vec![vowel_class()],
             maps: vec![],
             body: rewrite_body(vec![PhonRewriteRule {
@@ -1075,6 +1221,7 @@ mod tests {
             name: make_ident(name),
             display: vec![],
             derived_from: None,
+            syllable: None,
             classes: vec![],
             maps: vec![],
             body,
