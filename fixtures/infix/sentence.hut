@@ -1,0 +1,9 @@
+@reference * from "lang.hu"
+
+# Phase 6 infix smoke: triliteral root `ktb` + perfect a-a vowel pattern.
+# Auto-fill picks `after_C1=vowel_a` and `after_C2=vowel_a`; splice into
+# the stem's structural map; the eager template
+# `{root.C1}{root.after_C1}{root.C2}{root.after_C2}{root.C3}` yields
+# `katab`. Imperfect u-u variant yields `kutub`.
+kataba[vowel_pattern=perfect_a_a]
+kataba[vowel_pattern=imperfect_u_u]

@@ -1,0 +1,14 @@
+# An eager slot/stem appears after a trailing lazy slot, breaking the
+# `lazy* eager* lazy*` layout. Phase 2 must reject this.
+@use * from "profile.hu"
+
+inflection bad_verb for {tense, number} {
+  requires stems: root
+
+  # `root` (eager-equivalent) appears after `enclitics` (trail lazy) →
+  # the eager block is not contiguous.
+  compose root + enclitics* + tense_sfx
+
+  slot tense_sfx { [tense=past, _] -> `ed` [tense=present, _] -> `` }
+  slot enclitics matching *
+}

@@ -1,0 +1,63 @@
+@use * from "profile.hu"
+
+# Host verb entry. Roots to `katab`, inflected via the lazy `verb_conj`.
+entry katab {
+  headword: "katab"
+  tags: [pos=verb]
+  stems { root: "katab" }
+  inflection_class: verb_conj
+  meaning: "to write"
+}
+
+# --- host's tense morphemes ---
+entry tns_pst {
+  headword: "ed"
+  tags: [tense=past]
+  meaning: "past tense suffix"
+}
+
+# --- host's person/number morphemes ---
+entry pn_1sg {
+  headword: "u"
+  tags: [person=p1, number=sg]
+  meaning: "1sg subject"
+}
+
+entry pn_2sg {
+  headword: "a"
+  tags: [person=p2, number=sg]
+  meaning: "2sg subject"
+}
+
+# ---------------------------------------------------------------------------
+# Clitic entry. THIS is the §3.4 nesting case: the clitic carries an
+# `inflection_class` of its own, so a host's `enclitics=cl[axes][slot=...]`
+# fill triggers another lazy-compose render for the clitic.
+# ---------------------------------------------------------------------------
+entry cl_wa {
+  headword: "wa"
+  tags: [pos=clitic]
+  stems { root: "wa" }
+  inflection_class: clitic_conj
+  is_peripheral: true
+  meaning: "and (clitic) — bears its own pronominal paradigm"
+}
+
+# --- clitic's pronominal suffixes (object) ---
+entry cl_pn_1sg {
+  headword: "ni"
+  tags: [person=p1, number=sg]
+  meaning: "me (clitic object)"
+}
+
+entry cl_pn_2sg {
+  headword: "ka"
+  tags: [person=p2, number=sg]
+  meaning: "you (clitic object)"
+}
+
+entry cl_pn_3sg {
+  headword: "hu"
+  tags: [person=p3, number=sg]
+  meaning: "him/her (clitic object)"
+}

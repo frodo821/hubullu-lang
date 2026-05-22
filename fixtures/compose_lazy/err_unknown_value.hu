@@ -1,0 +1,12 @@
+# A lazy `matching [axis=value]` filter uses a value not declared for the
+# axis. Typo prevention.
+@use * from "profile.hu"
+
+inflection bad_verb for {tense} {
+  requires stems: root
+
+  compose root + sfx?
+
+  # `future` is not a declared value of `tense` (only `present`/`past` are).
+  slot sfx matching [tense=future]
+}

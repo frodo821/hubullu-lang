@@ -253,7 +253,31 @@ fn main() {
                     }
                 };
 
-                let parts = match hubullu::render::resolve(&hut_file.tokens, &ctx, &hut_source_map) {
+                // Phase 4: the lazy-compose render path needs the
+                // `HutPhonContext` (entry/inflection AST + phonrule resolver)
+                // *during* `resolve()`. Pre-scan the token tree to decide
+                // whether to pre-build the context — non-slot-spec renders
+                // keep the old fast path that skips phase1/phase2 entirely.
+                let needs_lazy_render =
+                    hubullu::render::tokens_need_phon_ctx(&hut_file.tokens);
+                let early_phon_ctx = if needs_lazy_render {
+                    match hubullu::render::HutPhonContext::build(&hut_file, &hut_dir) {
+                        Ok(c) => Some(c),
+                        Err(msg) => {
+                            eprintln!("{}", msg);
+                            process::exit(1);
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                let parts = match hubullu::render::resolve_with_phon_ctx(
+                    &hut_file.tokens,
+                    &ctx,
+                    early_phon_ctx.as_ref(),
+                    &hut_source_map,
+                ) {
                     Ok(p) => p,
                     Err(msg) => {
                         eprintln!("{}", msg);
@@ -275,17 +299,28 @@ fn main() {
                 let parts = if !needs_phonrules {
                     parts
                 } else {
-                    let phon_ctx = match hubullu::render::HutPhonContext::build(&hut_file, &hut_dir) {
-                        Ok(c) => c,
-                        Err(msg) => {
-                            eprintln!("{}", msg);
-                            process::exit(1);
+                    // Reuse the early context if we already built one; the
+                    // existing build helper is idempotent / cheap to re-run
+                    // but we'd prefer not to.
+                    let owned_ctx;
+                    let phon_ctx_ref = if let Some(c) = early_phon_ctx.as_ref() {
+                        c
+                    } else {
+                        match hubullu::render::HutPhonContext::build(&hut_file, &hut_dir) {
+                            Ok(c) => {
+                                owned_ctx = c;
+                                &owned_ctx
+                            }
+                            Err(msg) => {
+                                eprintln!("{}", msg);
+                                process::exit(1);
+                            }
                         }
                     };
                     match hubullu::render::apply_phonrule_chain(
                         parts,
                         &hut_file.apply_chain,
-                        &phon_ctx.resolver(),
+                        &phon_ctx_ref.resolver(),
                         &hut_source_map,
                     ) {
                         Ok(p) => p,

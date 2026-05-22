@@ -143,9 +143,12 @@ pub fn walk_inflection_body<V: Visitor>(visitor: &mut V, body: &InflectionBody) 
         }
         InflectionBody::Compose(comp) => {
             for slot in &comp.slots {
-                for rule in &slot.rules {
-                    visitor.visit_inflection_rule(rule);
+                if let SlotBody::Eager(rules) = &slot.body {
+                    for rule in rules {
+                        visitor.visit_inflection_rule(rule);
+                    }
                 }
+                // Lazy slots carry an axis filter, not inflection rules.
             }
             for rule in &comp.overrides {
                 visitor.visit_inflection_rule(rule);

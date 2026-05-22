@@ -306,6 +306,12 @@ pub struct ExtendValue {
     pub display: DisplayMap,
     /// `slots: [C1, C2, C3]` — only meaningful for structural axes.
     pub slots: Vec<Ident>,
+    /// Phase 6 — `infix_positions: [after_C1, after_C2]` — named
+    /// insertion points between the structural `slots`. Templates may
+    /// interpolate them as `{root.after_C1}`; the renderer fills them
+    /// from a same-named [`SlotDef`] of kind [`SlotKind::Infix`].
+    #[cfg_attr(feature = "serialization", serde(default))]
+    pub infix_positions: Vec<Ident>,
 }
 
 // ---------------------------------------------------------------------------
@@ -634,7 +640,8 @@ pub struct StemReq {
 pub enum InflectionBody {
     /// Simple rule list, optionally with an `apply` phonrule wrapper.
     Rules(RulesBody),
-    /// Agglutinative: `compose root + sfx1 + sfx2` with slots and optional overrides.
+    /// Agglutinative: `compose root + sfx1 + sfx2` with `slot` declarations
+    /// (eager rule lists or lazy `matching` filters) and optional overrides.
     Compose(ComposeBody),
 }
 
@@ -672,19 +679,153 @@ pub struct ComposeBody {
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ComposeExpr {
-    /// A single slot reference: `root`, `sfx1`
-    Slot(Ident),
+    /// A single slot reference with a quantifier: `root`, `sfx?`, `cl*`,
+    /// `enc+`, `n{1,3}`. An un-quantified slot uses [`SlotQuantifier::One`].
+    Slot { name: Ident, quantifier: SlotQuantifier },
     /// Concatenation of elements: `root + sfx1 + sfx2`
     Concat(Vec<ComposeExpr>),
     /// Phonological rule application: `harmony(root + sfx1 + sfx2)`
     PhonApply { rule: Ident, inner: Box<ComposeExpr> },
 }
 
+/// Quantifier on a slot reference inside a compose chain.
+///
+/// Quantifiers greater than 1 (`*`, `+`, bounded with max>1) are only legal
+/// on **lazy** slots (`slot NAME matching ...`). Eager slots (`slot NAME { rules }`)
+/// must use [`SlotQuantifier::One`].
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SlotQuantifier {
+    /// Default — exactly one filler.
+    One,
+    /// `?` — zero or one filler.
+    ZeroOrOne,
+    /// `*` — zero or more fillers.
+    ZeroOrMore,
+    /// `+` — one or more fillers.
+    OneOrMore,
+    /// `{n,m}` — between `n` and `m` (inclusive) fillers.
+    Bounded { min: u32, max: u32 },
+}
+
+impl SlotQuantifier {
+    /// Lower bound on the number of fillers this quantifier allows.
+    pub fn min(self) -> u32 {
+        match self {
+            SlotQuantifier::One => 1,
+            SlotQuantifier::ZeroOrOne | SlotQuantifier::ZeroOrMore => 0,
+            SlotQuantifier::OneOrMore => 1,
+            SlotQuantifier::Bounded { min, .. } => min,
+        }
+    }
+
+    /// Upper bound on the number of fillers (`None` = unbounded).
+    pub fn max(self) -> Option<u32> {
+        match self {
+            SlotQuantifier::One | SlotQuantifier::ZeroOrOne => Some(1),
+            SlotQuantifier::ZeroOrMore | SlotQuantifier::OneOrMore => None,
+            SlotQuantifier::Bounded { max, .. } => Some(max),
+        }
+    }
+
+    /// Whether this quantifier admits more than one filler. Eager slots may
+    /// only carry [`SlotQuantifier::One`]; everything else is lazy-only.
+    pub fn is_variadic(self) -> bool {
+        match self.max() {
+            Some(m) => m > 1,
+            None => true,
+        }
+    }
+}
+
+/// One slot declaration inside a [`ComposeBody`]. The body distinguishes the
+/// **eager** form (an explicit per-cell rule list) from the **lazy** form
+/// (a `matching` filter consumed at render time).
+///
+/// `kind` records additional discontinuous-morphology dispositions
+/// (introduced in Phase 6): a `circumfix` slot's filler surface is split at
+/// the splice marker `^` and emitted at the slot's two positions in the
+/// chain; an `infix` slot's filler is spliced into the stem template at the
+/// matching `infix_positions` key (declared on the corresponding
+/// `@extend ... slots: [...] infix_positions: [...]` axis value).
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SlotDef {
     pub name: Ident,
-    pub rules: Vec<InflectionRule>,
+    pub body: SlotBody,
+    /// Discontinuous-morphology disposition. Defaults to `Normal`.
+    #[cfg_attr(feature = "serialization", serde(default))]
+    pub kind: SlotKind,
+    pub span: Span,
+}
+
+/// Phase 6 — discontinuous-morphology disposition for a [`SlotDef`].
+///
+/// - `Normal`: ordinary slot — its filler is concatenated in the position
+///   the chain references it.
+/// - `Circumfix`: the slot's single filler carries a splice marker `^` in
+///   its surface (e.g. headword `"ge^t"`); the slot must be referenced
+///   twice in the compose chain. At render time, the surface is split at
+///   `^` — first half lands at the first reference, second half at the
+///   second.
+/// - `Infix`: the slot's name matches an `infix_positions` ident declared
+///   on the structural axis value. The slot does NOT appear in the compose
+///   chain; instead, at render time, its filler's surface is folded into
+///   the per-stem `struct_stems` map under that key, so eager rule
+///   templates (`{root.after_C1}`) can interpolate it.
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SlotKind {
+    #[default]
+    Normal,
+    Circumfix,
+    Infix,
+}
+
+/// What a `slot NAME ...` declaration contains.
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SlotBody {
+    /// `slot NAME { rules }` — eager paradigm cell rules (existing behavior).
+    Eager(Vec<InflectionRule>),
+    /// `slot NAME matching <filter>` — lazy slot consumed by an explicit
+    /// morpheme list at render time.
+    Lazy(LazyMatching),
+}
+
+/// The filter on a `slot NAME matching ...` lazy slot.
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum LazyMatching {
+    /// `matching *` — accepts any morpheme. No axis constraint.
+    CatchAll,
+    /// `matching [axis_filters]` — AND of [`AxisFilter`]s.
+    Filter(Vec<AxisFilter>),
+}
+
+/// One per-axis filter inside a [`LazyMatching::Filter`] slot. Multiple
+/// `AxisFilter`s on the same slot are **AND**ed together: a filler must
+/// satisfy every one.
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AxisFilter {
+    pub axis: Ident,
+    pub constraint: AxisConstraint,
+}
+
+/// Per-axis constraint inside an [`AxisFilter`]: any value, a specific value,
+/// or one of an enumerated set.
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AxisConstraint {
+    /// `[axis]` — any value of the axis is acceptable; the filler just has to
+    /// carry *some* tag on that axis.
+    Any,
+    /// `[axis=value]` — the filler must carry exactly this value on the axis.
+    Eq(Ident),
+    /// `[axis={v1, v2}]` — the filler must carry one of these values on the
+    /// axis. Ordered for parsing but semantically a set.
+    OneOf(Vec<Ident>),
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
@@ -782,6 +923,11 @@ pub struct Entry {
     pub forms_override: Vec<InflectionRule>,
     pub etymology: Option<Etymology>,
     pub examples: Vec<Example>,
+    /// `is_peripheral: true` — suppress the lazy catch-all warning when this
+    /// entry, used as a slot filler, carries a slot-defined feature axis but
+    /// is intentionally placed in a lazy catch-all zone.
+    #[cfg_attr(feature = "serialization", serde(default))]
+    pub is_peripheral: bool,
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
@@ -927,5 +1073,35 @@ pub struct EntryRef {
     pub form_spec: Option<TagConditionList>,
     /// `[$=stem_name]` — extract a raw stem value instead of an inflected form.
     pub stem_spec: Option<Ident>,
+    /// `[slots: { slot: ref, ... }]` — explicit lazy slot filling.
+    #[cfg_attr(feature = "serialization", serde(default))]
+    pub slot_spec: Option<SlotSpec>,
     pub span: Span,
+}
+
+/// `[slots: { slot_name: value, ... }]` — explicit slot filling on an entry
+/// reference. Each value is a single morpheme reference or an ordered `{...}`
+/// list (for variadic slots).
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SlotSpec {
+    pub assignments: Vec<SlotAssignment>,
+    pub span: Span,
+}
+
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SlotAssignment {
+    pub slot: Ident,
+    pub value: SlotValue,
+}
+
+#[cfg_attr(feature = "serialization", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SlotValue {
+    /// A single morpheme reference.
+    Single(Box<EntryRef>),
+    /// An ordered list `{ ref, ref, ... }` filling a variadic slot. Morpheme
+    /// order is significant.
+    List(Vec<EntryRef>),
 }

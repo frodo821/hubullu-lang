@@ -1,0 +1,14 @@
+# A variadic compose-chain quantifier (`*`) is applied to an eager slot.
+# Quantifiers > 1 are only legal on lazy slots.
+@use * from "profile.hu"
+
+inflection bad_verb for {tense} {
+  requires stems: root
+
+  compose root + tense_sfx*
+
+  slot tense_sfx {
+    [tense=past, _] -> `ed`
+    [tense=present, _] -> ``
+  }
+}

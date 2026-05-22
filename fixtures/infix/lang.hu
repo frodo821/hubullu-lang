@@ -1,0 +1,28 @@
+@use * from "profile.hu"
+
+# Triliteral root `ktb` ("to write"). Note: stem characters `k`, `t`, `b`
+# are exactly 3, matching the structural-axis `slots: [C1, C2, C3]`.
+entry kataba {
+  headword: "kataba"
+  tags: [pos=verb, root_type=triliteral]
+  stems { root: "ktb" }
+  inflection_class: arabic_root_pattern
+  meaning: "to write"
+}
+
+# Vowel-pattern morphemes. Each carries one `vowel_pattern` tag; the
+# headword is the literal vowel surface inserted at the infix position.
+# Two infix slots (`after_C1`, `after_C2`) but only one morpheme per
+# pattern: both slots auto-fill to the same morpheme via the inflection's
+# axis match, producing `k + a + t + a + b = katab`.
+entry vowel_a {
+  headword: "a"
+  tags: [vowel_pattern=perfect_a_a]
+  meaning: "perfect aspect vowel (a)"
+}
+
+entry vowel_u {
+  headword: "u"
+  tags: [vowel_pattern=imperfect_u_u]
+  meaning: "imperfect aspect vowel (u)"
+}

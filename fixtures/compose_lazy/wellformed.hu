@@ -1,0 +1,56 @@
+# A well-formed compose body with mixed eager + lazy `matching` slots and
+# compose-chain quantifiers. Compiles and lints cleanly.
+@use * from "profile.hu"
+
+# Layout `lazy* eager* lazy*`:
+#   proclitics*  — lazy CatchAll, ZeroOrMore (lead lazy)
+#   root         — declared stem, eager-equivalent
+#   tense_sfx    — eager `slot { rules }`
+#   pn_sfx?      — lazy Filter, ZeroOrOne (trail lazy)
+#   enclitics*   — lazy CatchAll, ZeroOrMore (trail lazy)
+inflection slot_verb for {tense, number, person} {
+  requires stems: root
+
+  compose proclitics* + root + tense_sfx + pn_sfx? + enclitics*
+
+  slot tense_sfx {
+    [tense=past, _] -> `ed`
+    [tense=present, _] -> ``
+  }
+
+  slot pn_sfx    matching [tense, person, number]
+  slot proclitics matching *
+  slot enclitics  matching *
+}
+
+# Affix-like entries: inflectionless, plain `headword` + `tags` + `meaning`.
+# The slot grammar's lazy filter is what selects them — there is no
+# `is_morpheme` flag any more.
+entry past_sfx {
+  headword: "ed"
+  tags: [tense=past]
+  meaning: "past tense suffix"
+}
+
+entry pl_sfx {
+  headword: "en"
+  tags: [number=pl]
+  meaning: "plural suffix"
+}
+
+entry topic_clitic {
+  headword: "wa"
+  is_peripheral: true
+  tags: [parts_of_speech=clitic]
+  meaning: "topic clitic"
+}
+
+# An ordinary lexeme inflected by the any-lazy compose body. Forms emission
+# for any-lazy bodies is deferred to Phase 7; for now it emits no rows.
+entry katab {
+  headword: "katab"
+  tags: [parts_of_speech=verb]
+  stems { root: "katab" }
+  inflection_class: slot_verb
+  meaning: "to write"
+}

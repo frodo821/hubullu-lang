@@ -1,0 +1,64 @@
+# Phase 6 — infix mechanism smoke fixture.
+#
+# Toy Arabic-style triliteral root-and-pattern morphology. The root has 3
+# consonant slots `C1 C2 C3` plus 2 named infix positions `after_C1` and
+# `after_C2`. An eager rule template interpolates them as `{root.C1}{root.after_C1}{root.C2}{root.after_C2}{root.C3}`,
+# producing root `ktb` + pattern `a-a` = `katab`.
+#
+# The vowel-pattern morphemes are inflectionless entries with one tag each;
+# their headwords carry the vowel surface (`"a"`). At render time, the
+# `slot after_C1 infix matching [vowel_pattern]` (and `after_C2`) auto-fill
+# them and splice into the stem's structural map.
+
+tagaxis pos {
+  role: classificatory
+  display: { en: "Part of Speech" }
+}
+
+tagaxis root_type {
+  role: structural
+  display: { en: "Root Type" }
+}
+
+tagaxis vowel_pattern {
+  role: inflectional
+  display: { en: "Vowel Pattern" }
+}
+
+@extend pos_values for tagaxis pos {
+  verb { display: { en: "Verb" } }
+}
+
+# A structural axis value that names the consonant slots AND the infix
+# positions between them. `after_C1` is the splice point between `C1` and
+# `C2`; `after_C2` is between `C2` and `C3`.
+@extend root_type_values for tagaxis root_type {
+  triliteral {
+    display: { en: "Triliteral" }
+    slots: [C1, C2, C3]
+    infix_positions: [after_C1, after_C2]
+  }
+}
+
+@extend vowel_pattern_values for tagaxis vowel_pattern {
+  perfect_a_a { display: { en: "Perfect (a-a)" } }
+  imperfect_u_u { display: { en: "Imperfect (u-u)" } }
+}
+
+# Pattern-style inflection: single eager slot whose template assembles the
+# root + infix vowels. The `after_C1` / `after_C2` slots are declared with
+# the `infix` modifier — they don't appear in the compose chain; their
+# fillers are spliced into the stem's structural map (`{root.after_C1}`).
+inflection arabic_root_pattern for {vowel_pattern} {
+  requires stems: root[root_type=triliteral]
+
+  compose root_template
+
+  slot root_template {
+    [vowel_pattern=perfect_a_a, _]   -> `{root.C1}{root.after_C1}{root.C2}{root.after_C2}{root.C3}`
+    [vowel_pattern=imperfect_u_u, _] -> `{root.C1}{root.after_C1}{root.C2}{root.after_C2}{root.C3}`
+  }
+
+  slot after_C1 infix matching [vowel_pattern]
+  slot after_C2 infix matching [vowel_pattern]
+}

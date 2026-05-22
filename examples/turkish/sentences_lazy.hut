@@ -1,0 +1,23 @@
+@reference * from "main.hu"
+@use harmony, elision from "profile.hu"
+
+# Phase 4 smoke test — explicit `[axes][slot=ref, ...]` filling.
+#
+# The verb inflection `verb_conj` declares:
+#   compose harmony(elision(proclitics* + root + neg_sfx? + tense_sfx
+#                            + pn_sfx? + enclitics*))
+# with lazy slots `proclitics`, `neg_sfx`, `tense_sfx`, `pn_sfx`, `enclitics`.
+# The pre-Phase-7 forms table emits no rows for any-lazy bodies, so the
+# legacy `[axes]` form (see sentences.hut) fails. With explicit slot fills
+# the renderer assembles `yaz + iyor + um` (BOUNDARY-marked) and applies
+# the deferred `harmony(elision(...))` wrapper to yield `yazıyorum`.
+
+# Yazıyorum. (I am writing.) — yaz + iyor + um → harmony: i→ı after `a`.
+yazmak[tense=present_cont, person=1, number=sg, negation=pos][tense_sfx=tns_pc, pn_sfx=pn_pc_1sg] "."
+
+# Gelmedim. (I did not come.) — gel + me + di + m. Front-vowel root, so
+# `me`/`di` stay as-is (no harmony shift); confirms the no-harmony path.
+gelmek[tense=past, person=1, number=sg, negation=neg][neg_sfx=neg_pst, tense_sfx=tns_pst, pn_sfx=pn_pst_1sg] "."
+
+# Yazdık. (We wrote.) — yaz + di + k → harmony: i→ı after `a` → yazdık.
+yazmak[tense=past, person=1, number=pl, negation=pos][tense_sfx=tns_pst, pn_sfx=pn_pst_1pl] "."

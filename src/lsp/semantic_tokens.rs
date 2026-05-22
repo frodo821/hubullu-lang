@@ -461,8 +461,16 @@ fn classify_inflection_body(body: &ast::InflectionBody, fid: FileId, map: &mut H
             classify_compose_expr(&comp.chain, fid, map);
             for slot in &comp.slots {
                 put(map, &slot.name.span, fid, VARIABLE);
-                for rule in &slot.rules {
-                    classify_inflection_rule(rule, fid, map);
+                match &slot.body {
+                    ast::SlotBody::Eager(rules) => {
+                        for rule in rules {
+                            classify_inflection_rule(rule, fid, map);
+                        }
+                    }
+                    ast::SlotBody::Lazy(_) => {
+                        // Lazy slots carry an axis filter; classification is
+                        // currently a no-op (TODO: surface axis idents).
+                    }
                 }
             }
             for rule in &comp.overrides {
@@ -526,7 +534,7 @@ fn classify_rule_rhs(rhs: &ast::RuleRhs, fid: FileId, map: &mut HashMap<(usize, 
 
 fn classify_compose_expr(expr: &ast::ComposeExpr, fid: FileId, map: &mut HashMap<(usize, usize), u32>) {
     match expr {
-        ast::ComposeExpr::Slot(ident) => put(map, &ident.span, fid, VARIABLE),
+        ast::ComposeExpr::Slot { name, .. } => put(map, &name.span, fid, VARIABLE),
         ast::ComposeExpr::Concat(exprs) => {
             for e in exprs {
                 classify_compose_expr(e, fid, map);

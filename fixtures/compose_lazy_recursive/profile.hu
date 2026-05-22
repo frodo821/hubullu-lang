@@ -1,0 +1,75 @@
+# Shared schema for the recursive compose+lazy fixtures (Phase 5).
+#
+# Mini invented language exercising §3.4: a host verb with a clitic slot, and
+# the clitic itself uses its own lazy `compose` body (its own internal
+# pronominal paradigm). At render time, filling the host's enclitic slot with
+# `cl[axes][slot=...]` recurses through the lazy-render dispatch.
+
+tagaxis pos {
+  role: classificatory
+  display: { en: "Part of Speech" }
+}
+
+tagaxis tense {
+  role: inflectional
+  display: { en: "Tense" }
+}
+
+tagaxis person {
+  role: inflectional
+  display: { en: "Person" }
+}
+
+tagaxis number {
+  role: inflectional
+  display: { en: "Number" }
+}
+
+@extend pos_values for tagaxis pos {
+  verb   { display: { en: "Verb" } }
+  clitic { display: { en: "Clitic" } }
+}
+
+@extend tense_values for tagaxis tense {
+  past    { display: { en: "Past" } }
+  present { display: { en: "Present" } }
+}
+
+@extend person_values for tagaxis person {
+  p1 { display: { en: "1st" } }
+  p2 { display: { en: "2nd" } }
+  p3 { display: { en: "3rd" } }
+}
+
+@extend number_values for tagaxis number {
+  sg { display: { en: "Singular" } }
+  pl { display: { en: "Plural" } }
+}
+
+# ---------------------------------------------------------------------------
+# Host verb inflection: lazy tense and pronoun suffixes plus a lazy enclitic
+# zone. The enclitic zone is where the recursive case enters: a clitic
+# reference there can itself carry `[axes][slot=...]`.
+# ---------------------------------------------------------------------------
+inflection verb_conj for {tense, person, number} {
+  requires stems: root
+
+  compose root + tense_sfx + pn_sfx + enclitics*
+
+  slot tense_sfx matching [tense]
+  slot pn_sfx    matching [person, number]
+  slot enclitics matching *
+}
+
+# ---------------------------------------------------------------------------
+# Clitic inflection: the clitic itself has a tiny stem + a pronominal suffix.
+# The point of Phase 5 is that this inflection is exercised through the
+# *outer* host's slot-fill recursion, not through a top-level reference.
+# ---------------------------------------------------------------------------
+inflection clitic_conj for {person, number} {
+  requires stems: root
+
+  compose root + cl_pn_sfx
+
+  slot cl_pn_sfx matching [person, number]
+}

@@ -116,7 +116,15 @@ fn format_inflection(i: &ast::Inflection) -> String {
     let rule_count = match &i.body {
         ast::InflectionBody::Rules(body) => body.rules.len(),
         ast::InflectionBody::Compose(c) => {
-            c.slots.iter().map(|s| s.rules.len()).sum::<usize>() + c.overrides.len()
+            let eager: usize = c
+                .slots
+                .iter()
+                .map(|s| match &s.body {
+                    ast::SlotBody::Eager(rules) => rules.len(),
+                    ast::SlotBody::Lazy(_) => 0,
+                })
+                .sum();
+            eager + c.overrides.len()
         }
     };
     let body_kind = match &i.body {

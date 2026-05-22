@@ -46,6 +46,8 @@ pub mod render_html;
 pub mod error;
 /// Inflection paradigm evaluator — cartesian expansion, rule matching, compose, delegation.
 pub mod inflection_eval;
+/// Lazy slot morphology parser — backtracking recursive descent over a slot grammar.
+pub mod slot_parse;
 /// Linter for `.hu` files — warnings and style checks with optional auto-fix.
 pub mod lint;
 /// Hand-written lexer (scanner) for the Hubullu language.
@@ -78,6 +80,13 @@ pub mod lsp;
 /// Claude Code skill installer.
 #[cfg(feature = "cli")]
 pub mod skill;
+
+/// Phase 6 — splice marker inside a circumfix morpheme's surface string.
+/// A circumfix entry whose headword reads `ge^t` splits at this character:
+/// `ge` is emitted at the slot's first chain position, `t` at the second.
+/// Chosen because `^` is already an out-of-band ASCII character with no
+/// meaning in `headword` literals, `.hut` token text, or template syntax.
+pub const CIRCUMFIX_SPLICE: char = '^';
 
 use std::path::Path;
 

@@ -1,0 +1,12 @@
+# A lazy `matching [...]` filter names an axis that is not in the
+# inflection's `for {}`.
+@use * from "profile.hu"
+
+inflection bad_verb for {tense} {
+  requires stems: root
+
+  compose root + sfx?
+
+  # `person` is not in `for {tense}`.
+  slot sfx matching [person]
+}

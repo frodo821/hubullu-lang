@@ -1,0 +1,18 @@
+@use * from "profile.hu"
+
+# Host verb. `werken` -> root `werk`. Past participle wraps with `ge-t`.
+entry werken {
+  headword: "werken"
+  tags: [pos=verb]
+  stems { root: "werk" }
+  inflection_class: participle
+  meaning: "to work"
+}
+
+# The circumfix morpheme. `^` is the splice marker — `ge` lands at the
+# first chain position, `t` at the second.
+entry ge_t_ptcp {
+  headword: "ge^t"
+  tags: [tense=past_ptcp]
+  meaning: "past participle circumfix"
+}

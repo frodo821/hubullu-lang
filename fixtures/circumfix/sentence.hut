@@ -1,0 +1,6 @@
+@reference * from "lang.hu"
+
+# Phase 6 circumfix smoke: `werken[tense=past_ptcp]` should auto-fill
+# `ge_circ=ge_t_ptcp` and render with `ge` at the first chain position
+# and `t` at the second, yielding `gewerkt`.
+werken[tense=past_ptcp]

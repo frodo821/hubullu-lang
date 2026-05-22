@@ -73,7 +73,11 @@ fn test_simple_compile() {
         .unwrap();
     assert_eq!(form, "fars");
 
-    // Check no forms for hus (no inflection)
+    // An inflectionless entry now emits exactly one `forms` row whose
+    // `form_str` is the headword and whose `tags` are the entry's own `tags`.
+    // This is the uniform replacement for the old morpheme-specific path:
+    // any entry is pluggable into a slot, and `find_form_by_spec` subset-
+    // matches the row by `entry_id + tags`.
     let hus_forms: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM forms WHERE entry_id = (SELECT id FROM entries WHERE name = 'hus')",
@@ -81,7 +85,7 @@ fn test_simple_compile() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(hus_forms, 0);
+    assert_eq!(hus_forms, 1);
 
     // Check tags
     let tag_value: String = conn
@@ -950,6 +954,10 @@ entry foo {
 
 #[test]
 fn test_phase2_entry_no_inflection() {
+    // After the slot-morphology reshape any entry — including an inflectionless
+    // one — emits exactly one `forms` row carrying the headword + the entry's
+    // own `tags`, so that `find_form_by_spec` can resolve `entry[axis=value]`
+    // references uniformly.
     let (_, p2) = run_p1_p2(&[(
         "main.hu",
         r#"
@@ -962,7 +970,9 @@ entry bar {
 
     assert!(!p2.diagnostics.has_errors());
     assert_eq!(p2.entries.len(), 1);
-    assert_eq!(p2.entries[0].forms.len(), 0);
+    assert_eq!(p2.entries[0].forms.len(), 1);
+    assert_eq!(p2.entries[0].forms[0].form_str, "bar");
+    assert!(p2.entries[0].forms[0].tags.is_empty());
 }
 
 #[test]
@@ -1618,6 +1628,70 @@ fn test_std_import() {
         .query_row("SELECT COUNT(*) FROM entries", [], |r| r.get(0))
         .unwrap();
     assert_eq!(entry_count, 1, "expected 1 entry using std:_test axis");
+}
+
+// =========================================================================
+// Compose + lazy `matching` slots (Phase 2): well-formed compose body with
+// mixed eager + lazy slots + quantifiers, plus affix-style entries used as
+// slot fillers.
+// =========================================================================
+
+/// A well-formed compose body with a mix of eager + lazy `matching` slots and
+/// compose-chain quantifiers compiles cleanly. The any-lazy inflection emits
+/// no `forms` rows yet (forms-emission for any-lazy bodies is Phase 7), but
+/// each affix entry emits exactly one `forms` row carrying its `tags`.
+#[test]
+fn test_compose_lazy_wellformed_compiles() {
+    let input = fixture_path("compose_lazy/wellformed.hu");
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("compose_lazy_wellformed.huc");
+
+    let result = hubullu::compile(&input, &output);
+    assert!(result.is_ok(), "compile failed: {:?}", result.err());
+
+    let conn = Connection::open(&output).unwrap();
+
+    // The any-lazy compose lexeme `katab` emits no forms in Phase 2.
+    let katab_forms: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM forms WHERE entry_id = \
+             (SELECT id FROM entries WHERE name = 'katab')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(katab_forms, 0, "any-lazy compose body emits no forms yet (Phase 7)");
+
+    // Each affix entry (inflectionless) emits exactly one `forms` row.
+    let past_form: String = conn
+        .query_row(
+            "SELECT form_str FROM forms WHERE entry_id = \
+             (SELECT id FROM entries WHERE name = 'past_sfx')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(past_form, "ed");
+
+    let past_tags: String = conn
+        .query_row(
+            "SELECT tags FROM forms WHERE entry_id = \
+             (SELECT id FROM entries WHERE name = 'past_sfx')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(past_tags, "tense=past");
+
+    let affix_form_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM forms WHERE entry_id IN \
+             (SELECT id FROM entries WHERE name IN ('past_sfx', 'pl_sfx', 'topic_clitic'))",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(affix_form_count, 3, "each affix emits exactly one forms row");
 }
 
 // =========================================================================

@@ -1221,7 +1221,22 @@ pub fn render_site(dir: &Path, outdir: &Path, huc: Option<&Path>, site_title: Op
             render::ResolveContext::from_references(&hut_file.references, hut_dir)?
         };
 
-        let parts = render::resolve_annotated(&hut_file.tokens, &ctx, &hut_source_map)?;
+        // Phase 4/7: pre-build the phon context when any token has an
+        // explicit `[slot=...]` *or* a bare `[axes]` ref (which might land on
+        // an any-lazy compose entry and need auto-fill).
+        let needs_lazy_render = render::tokens_need_phon_ctx(&hut_file.tokens);
+        let early_phon_ctx = if needs_lazy_render {
+            Some(render::HutPhonContext::build(&hut_file, hut_dir)?)
+        } else {
+            None
+        };
+
+        let parts = render::resolve_annotated_with_phon_ctx(
+            &hut_file.tokens,
+            &ctx,
+            early_phon_ctx.as_ref(),
+            &hut_source_map,
+        )?;
 
         // F1b: apply file-level `@apply` phonrule chain. F1c: also dispatch on
         // inline `phon_call` / `@apply { ... }` markers.
@@ -1236,11 +1251,17 @@ pub fn render_site(dir: &Path, outdir: &Path, huc: Option<&Path>, site_title: Op
         let parts = if !needs_phonrules {
             parts
         } else {
-            let phon_ctx = render::HutPhonContext::build(&hut_file, hut_dir)?;
+            let owned_ctx;
+            let phon_ctx_ref: &render::HutPhonContext = if let Some(c) = early_phon_ctx.as_ref() {
+                c
+            } else {
+                owned_ctx = render::HutPhonContext::build(&hut_file, hut_dir)?;
+                &owned_ctx
+            };
             render::apply_phonrule_chain_annotated(
                 parts,
                 &hut_file.apply_chain,
-                &phon_ctx.resolver(),
+                &phon_ctx_ref.resolver(),
                 &hut_source_map,
             )?
         };

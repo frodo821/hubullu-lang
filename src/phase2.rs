@@ -12,7 +12,7 @@ use crate::dag;
 use crate::error::{Diagnostic, Diagnostics};
 use crate::inflection_eval::{
     collect_referenced_axes, enumerate_cells, evaluate_compose, evaluate_rules_with_overrides,
-    CellResult, DelegateResolver, PhonRuleResolver,
+    CellResult, DelegateResolver, ExpandedParadigm, PhonRuleResolver,
 };
 use crate::phase1::Phase1Result;
 use crate::phoneme::{resolve_inventory, PhonemeInventory};
@@ -27,6 +27,14 @@ pub struct ResolvedAxis {
     pub display: HashMap<String, Vec<(String, String)>>,
     /// slots per value (for structural axes)
     pub slots: HashMap<String, Vec<String>>,
+    /// Phase 6 — `infix_positions: [...]` per value (for structural axes).
+    /// Named insertion points between [`slots`](Self::slots); the renderer
+    /// pre-populates them with empty strings in `build_struct_stems` so
+    /// templates can interpolate `{root.after_C1}` cleanly, and a
+    /// same-named `slot ... infix matching [...]` filler is spliced in at
+    /// render time.
+    #[cfg_attr(feature = "serialization", serde(default))]
+    pub infix_positions: HashMap<String, Vec<String>>,
 }
 
 /// Resolved render configuration.
@@ -208,6 +216,15 @@ pub fn run_phase2_incremental(
         render_config,
         diagnostics: ctx.diagnostics,
     }
+}
+
+/// Classification of a slot reference in a compose chain for layout checking.
+/// Stem references and eager slot refs both behave as "eager-equivalent" anchors
+/// that may only appear in the contiguous eager block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChainSlotKind {
+    Lazy,
+    Eager,
 }
 
 struct Phase2Ctx<'a> {
@@ -481,6 +498,17 @@ impl<'a> Phase2Ctx<'a> {
                                 val.slots.iter().map(|s| s.node.clone()).collect();
                             axis.slots.insert(val.name.node.clone(), slot_names);
                         }
+                        // Phase 6 — collect infix_positions (declared on the
+                        // same structural axis value).
+                        if !val.infix_positions.is_empty() {
+                            let pos_names: Vec<String> = val
+                                .infix_positions
+                                .iter()
+                                .map(|p| p.node.clone())
+                                .collect();
+                            axis.infix_positions
+                                .insert(val.name.node.clone(), pos_names);
+                        }
                     }
                 }
             }
@@ -492,16 +520,16 @@ impl<'a> Phase2Ctx<'a> {
     // -----------------------------------------------------------------------
 
     fn validate_inflections(&mut self) {
-        for file in self.p1.files.values() {
+        for (file_id, file) in &self.p1.files {
             for item in &file.items {
                 if let Item::Inflection(infl) = &item.node {
-                    self.validate_inflection(infl);
+                    self.validate_inflection(infl, *file_id);
                 }
             }
         }
     }
 
-    fn validate_inflection(&mut self, infl: &Inflection) {
+    fn validate_inflection(&mut self, infl: &Inflection, file_id: FileId) {
         // Check that all axes in `for {}` are defined
         for axis in &infl.axes {
             if !self.axes.contains_key(&axis.node) {
@@ -517,7 +545,13 @@ impl<'a> Phase2Ctx<'a> {
 
         // Validate rules reference only declared axes
         let declared_axes: HashSet<_> = infl.axes.iter().map(|a| &a.node).collect();
-        self.validate_body_axes(&infl.body, &declared_axes, &infl.name.node);
+        self.validate_body_axes(
+            &infl.body,
+            &declared_axes,
+            &infl.name.node,
+            file_id,
+            &infl.required_stems,
+        );
     }
 
     fn validate_body_axes(
@@ -525,6 +559,8 @@ impl<'a> Phase2Ctx<'a> {
         body: &InflectionBody,
         declared: &HashSet<&String>,
         infl_name: &str,
+        file_id: FileId,
+        required_stems: &[StemReq],
     ) {
         match body {
             InflectionBody::Rules(body) => {
@@ -533,15 +569,283 @@ impl<'a> Phase2Ctx<'a> {
                 }
             }
             InflectionBody::Compose(comp) => {
+                // Per-slot validation: eager slots have rule lists, lazy slots
+                // have axis filters whose axes/values must match the inflection's
+                // `for {}` declaration.
                 for slot in &comp.slots {
-                    for rule in &slot.rules {
-                        self.validate_rule_axes(rule, declared, infl_name);
+                    match &slot.body {
+                        SlotBody::Eager(rules) => {
+                            for rule in rules {
+                                self.validate_rule_axes(rule, declared, infl_name);
+                            }
+                        }
+                        SlotBody::Lazy(matching) => {
+                            self.validate_lazy_matching_axes(
+                                matching, declared, infl_name, &slot.name.node,
+                            );
+                        }
                     }
                 }
                 for rule in &comp.overrides {
                     self.validate_rule_axes(rule, declared, infl_name);
                 }
+                // Compose-chain checks: every slot named in the chain exists in
+                // `comp.slots` (or is a declared stem); quantifiers > 1 only on
+                // lazy slots; layout sequence must be `lazy* eager* lazy*`.
+                self.validate_compose_layout(comp, infl_name, file_id, required_stems);
             }
+        }
+    }
+
+    /// Validate axes/values inside a `slot NAME matching [..]` lazy filter.
+    fn validate_lazy_matching_axes(
+        &mut self,
+        matching: &LazyMatching,
+        declared: &HashSet<&String>,
+        infl_name: &str,
+        slot_name: &str,
+    ) {
+        let filters = match matching {
+            LazyMatching::CatchAll => return,
+            LazyMatching::Filter(fs) => fs,
+        };
+        for filter in filters {
+            if !declared.contains(&filter.axis.node) {
+                self.diagnostics.add(
+                    Diagnostic::error(format!(
+                        "inflection '{}': lazy slot '{}' filter names axis '{}' \
+                         which is not in the inflection's `for {{}}` declaration",
+                        infl_name, slot_name, filter.axis.node
+                    ))
+                    .with_label(filter.axis.span, "undeclared axis"),
+                );
+                continue;
+            }
+            let declared_values: Option<Vec<String>> = self
+                .axes
+                .get(&filter.axis.node)
+                .map(|ra| ra.values.clone());
+            match &filter.constraint {
+                AxisConstraint::Any => {}
+                AxisConstraint::Eq(v) => {
+                    if let Some(vals) = &declared_values {
+                        if !vals.contains(&v.node) {
+                            self.diagnostics.add(
+                                Diagnostic::error(format!(
+                                    "inflection '{}': lazy slot '{}' filter \
+                                     [{}={}] uses value '{}' which is not a \
+                                     declared value of axis '{}'",
+                                    infl_name,
+                                    slot_name,
+                                    filter.axis.node,
+                                    v.node,
+                                    v.node,
+                                    filter.axis.node
+                                ))
+                                .with_label(v.span, "undeclared value"),
+                            );
+                        }
+                    }
+                }
+                AxisConstraint::OneOf(vs) => {
+                    if let Some(vals) = &declared_values {
+                        for v in vs {
+                            if !vals.contains(&v.node) {
+                                self.diagnostics.add(
+                                    Diagnostic::error(format!(
+                                        "inflection '{}': lazy slot '{}' filter \
+                                         [{}={{...}}] uses value '{}' which is \
+                                         not a declared value of axis '{}'",
+                                        infl_name,
+                                        slot_name,
+                                        filter.axis.node,
+                                        v.node,
+                                        filter.axis.node
+                                    ))
+                                    .with_label(v.span, "undeclared value"),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Validate the compose chain against the slot declarations:
+    /// - every slot name in the chain is either a declared stem or a `SlotDef`;
+    /// - quantifiers > 1 are only legal on lazy slots;
+    /// - the chain's kind sequence is `lazy* eager* lazy*` (where stem refs
+    ///   and eager slot refs both count as "eager-equivalent" anchors).
+    fn validate_compose_layout(
+        &mut self,
+        comp: &ComposeBody,
+        infl_name: &str,
+        _file_id: FileId,
+        required_stems: &[StemReq],
+    ) {
+        // Index slot defs by name for lookup.
+        let mut slot_kind: HashMap<&str, ChainSlotKind> = HashMap::new();
+        for slot in &comp.slots {
+            let kind = match &slot.body {
+                SlotBody::Eager(_) => ChainSlotKind::Eager,
+                SlotBody::Lazy(_) => ChainSlotKind::Lazy,
+            };
+            slot_kind.insert(slot.name.node.as_str(), kind);
+        }
+        let stem_names: HashSet<&str> = required_stems
+            .iter()
+            .map(|s| s.name.node.as_str())
+            .collect();
+
+        // Flatten the chain into an ordered list of (name, quantifier, span).
+        let mut chain_refs: Vec<(&Ident, SlotQuantifier)> = Vec::new();
+        Self::collect_chain_refs(&comp.chain, &mut chain_refs);
+
+        // Per-ref checks; build the kind sequence as we go.
+        let mut kinds: Vec<(ChainSlotKind, &Ident)> = Vec::new();
+        for (name, quantifier) in &chain_refs {
+            let quantifier = *quantifier;
+            let kind = if stem_names.contains(name.node.as_str()) {
+                // Stem refs in the chain are eager-equivalent anchors.
+                if quantifier != SlotQuantifier::One {
+                    self.diagnostics.add(
+                        Diagnostic::error(format!(
+                            "inflection '{}': stem '{}' in the compose chain has \
+                             a quantifier — stem references must be exactly 1",
+                            infl_name, name.node
+                        ))
+                        .with_label(name.span, "stem ref with quantifier"),
+                    );
+                }
+                ChainSlotKind::Eager
+            } else if let Some(&kind) = slot_kind.get(name.node.as_str()) {
+                if kind == ChainSlotKind::Eager && quantifier.is_variadic() {
+                    self.diagnostics.add(
+                        Diagnostic::error(format!(
+                            "inflection '{}': eager slot '{}' has a variadic \
+                             quantifier — only lazy slots may use `*`, `+`, or \
+                             a bounded quantifier with max > 1",
+                            infl_name, name.node
+                        ))
+                        .with_label(name.span, "variadic quantifier on eager slot"),
+                    );
+                }
+                kind
+            } else {
+                self.diagnostics.add(
+                    Diagnostic::error(format!(
+                        "inflection '{}': compose chain references slot '{}' \
+                         which is neither a declared stem nor a `slot` decl",
+                        infl_name, name.node
+                    ))
+                    .with_label(name.span, "unknown slot in compose chain"),
+                );
+                continue;
+            };
+            kinds.push((kind, name));
+        }
+
+        // Layout: lazy* eager* lazy* (eager block must be contiguous).
+        #[derive(PartialEq)]
+        enum Zone {
+            LeadLazy,
+            Eager,
+            TrailLazy,
+        }
+        let mut zone = Zone::LeadLazy;
+        for (kind, name) in &kinds {
+            match (&zone, kind) {
+                (Zone::LeadLazy, ChainSlotKind::Lazy) => {}
+                (Zone::LeadLazy, ChainSlotKind::Eager) => zone = Zone::Eager,
+                (Zone::Eager, ChainSlotKind::Eager) => {}
+                (Zone::Eager, ChainSlotKind::Lazy) => zone = Zone::TrailLazy,
+                (Zone::TrailLazy, ChainSlotKind::Lazy) => {}
+                (Zone::TrailLazy, ChainSlotKind::Eager) => {
+                    self.diagnostics.add(
+                        Diagnostic::error(format!(
+                            "inflection '{}': eager slot/stem '{}' appears after \
+                             a trailing lazy slot — the eager block must be a \
+                             single contiguous run (`lazy* eager* lazy*`)",
+                            infl_name, name.node
+                        ))
+                        .with_label(name.span, "eager after trailing lazy"),
+                    );
+                }
+            }
+        }
+
+        // Phase 6 — circumfix / infix slot rules:
+        //   * `Circumfix` slots must be referenced **exactly twice** in
+        //     the compose chain (the two splice positions).
+        //   * `Infix` slots must NOT appear in the chain — their filler
+        //     is folded into the stem's structural map at render time.
+        use std::collections::HashMap as Hm;
+        let mut ref_counts: Hm<&str, usize> = Hm::new();
+        let mut ref_spans: Hm<&str, &Ident> = Hm::new();
+        for (name, _) in &chain_refs {
+            *ref_counts.entry(name.node.as_str()).or_insert(0) += 1;
+            ref_spans.entry(name.node.as_str()).or_insert(name);
+        }
+        for slot in &comp.slots {
+            match slot.kind {
+                crate::ast::SlotKind::Circumfix => {
+                    let n = ref_counts
+                        .get(slot.name.node.as_str())
+                        .copied()
+                        .unwrap_or(0);
+                    if n != 2 {
+                        self.diagnostics.add(
+                            Diagnostic::error(format!(
+                                "inflection '{}': circumfix slot '{}' must be \
+                                 referenced exactly twice in the compose chain \
+                                 (got {})",
+                                infl_name, slot.name.node, n
+                            ))
+                            .with_label(slot.span, "circumfix slot declared here"),
+                        );
+                    }
+                }
+                crate::ast::SlotKind::Infix => {
+                    if let Some(span_name) =
+                        ref_spans.get(slot.name.node.as_str())
+                    {
+                        self.diagnostics.add(
+                            Diagnostic::error(format!(
+                                "inflection '{}': infix slot '{}' must NOT \
+                                 appear in the compose chain — its filler is \
+                                 spliced into the stem's structural map at \
+                                 render time via the matching \
+                                 `infix_positions` declaration",
+                                infl_name, slot.name.node
+                            ))
+                            .with_label(
+                                span_name.span,
+                                "infix slot referenced in chain",
+                            )
+                            .with_label(slot.span, "declared infix here"),
+                        );
+                    }
+                }
+                crate::ast::SlotKind::Normal => {}
+            }
+        }
+    }
+
+    /// Flatten a compose expression into the ordered list of slot references
+    /// it contains, with each ref's quantifier.
+    fn collect_chain_refs<'b>(
+        expr: &'b ComposeExpr,
+        out: &mut Vec<(&'b Ident, SlotQuantifier)>,
+    ) {
+        match expr {
+            ComposeExpr::Slot { name, quantifier } => out.push((name, *quantifier)),
+            ComposeExpr::Concat(terms) => {
+                for t in terms {
+                    Self::collect_chain_refs(t, out);
+                }
+            }
+            ComposeExpr::PhonApply { inner, .. } => Self::collect_chain_refs(inner, out),
         }
     }
 
@@ -1065,6 +1369,15 @@ impl<'a> Phase2Ctx<'a> {
             .map(|s| (s.name.node.clone(), s.value.node.clone()))
             .collect();
 
+        // Every entry goes through the uniform forms-expansion path. The path
+        // itself dispatches: an entry with `inflection: Some(_)` is cartesian-
+        // expanded against the inflection grammar (or, for `InflectionBody::
+        // Slots`, currently emits no rows — that's Phase 7); an entry with
+        // `inflection: None` (an affix, particle, or other inflectionless
+        // lexeme) emits a single forms row whose `form_str` is the headword and
+        // whose `tags` are the entry's `tags`, so that `find_form_by_spec` can
+        // later subset-match `entry_id[axis=value]` slot-filler references
+        // against it.
         let forms = self.expand_inflection_forms(file_id, entry, &stems);
 
         let inflection_class = match &entry.inflection {
@@ -1138,6 +1451,13 @@ impl<'a> Phase2Ctx<'a> {
     }
 
     /// Expand inflection forms for an entry, returning resolved forms.
+    ///
+    /// An entry with `inflection: None` (an affix, particle, or any other
+    /// inflectionless lexeme) emits a single [`ResolvedForm`] whose `form_str`
+    /// is the headword and whose `tags` are the entry's own `tags`. This is the
+    /// uniform replacement for the old morpheme-specific path: any entry is
+    /// pluggable into a slot, and `find_form_by_spec` subset-matches the row
+    /// by `entry_id + tags` to resolve `entry[axis=value]` references.
     fn expand_inflection_forms(
         &mut self,
         file_id: FileId,
@@ -1148,7 +1468,17 @@ impl<'a> Phase2Ctx<'a> {
 
         let infl = match &entry.inflection {
             Some(infl) => infl,
-            None => return forms,
+            None => {
+                // Inflectionless entry: one forms row, headword + entry.tags.
+                let (form_str, _) = Self::extract_headword(entry);
+                let tags: Vec<(String, String)> = entry
+                    .tags
+                    .iter()
+                    .map(|tc| (tc.axis.node.clone(), tc.value.node.clone()))
+                    .collect();
+                forms.push(ResolvedForm { form_str, tags });
+                return forms;
+            }
         };
 
         let (axes, body, stem_reqs, infl_span) = match infl {
@@ -1219,7 +1549,20 @@ impl<'a> Phase2Ctx<'a> {
                 )
             }
             InflectionBody::Compose(comp) => {
-                evaluate_compose(comp, &entry.forms_override, &cells, stems, &struct_stems, &phon_resolver)
+                // A compose body with any lazy `slot ... matching ...` slot is
+                // assembled at render time, not cartesian-expanded here. Until
+                // Phase 7 implements the eager-core enumeration for any-lazy
+                // bodies, such bodies emit no forms; legacy all-eager bodies
+                // continue to be expanded by `evaluate_compose` exactly as
+                // before. (This is the intentional behavior pre-Phase-4/7 —
+                // see `docs/proposals/slot-morphology.md` and the plan at
+                // `/Users/csakai/.claude/plans/eager-booping-spark.md`.)
+                let any_lazy = comp.slots.iter().any(|s| matches!(s.body, SlotBody::Lazy(_)));
+                if any_lazy {
+                    Ok(ExpandedParadigm { forms: Vec::new() })
+                } else {
+                    evaluate_compose(comp, &entry.forms_override, &cells, stems, &struct_stems, &phon_resolver)
+                }
             }
         };
 
@@ -1255,6 +1598,12 @@ impl<'a> Phase2Ctx<'a> {
     }
 
     /// Build structural stems mapping from required_stems constraints and axis slots.
+    ///
+    /// Phase 6 — also pre-populates `infix_positions` keys with empty strings.
+    /// The renderer (or a `slot NAME infix matching [...]` filler) overwrites
+    /// them with the infix's surface; templates that reference an unfilled
+    /// position interpolate the empty string (effectively the "no infix"
+    /// case).
     fn build_struct_stems(
         &mut self,
         stem_reqs: &[StemReq],
@@ -1282,10 +1631,20 @@ impl<'a> Phase2Ctx<'a> {
                             );
                             continue;
                         }
-                        let slot_map: HashMap<String, String> = slot_names.iter()
+                        let mut slot_map: HashMap<String, String> = slot_names.iter()
                             .zip(chars.iter())
                             .map(|(name, ch)| (name.clone(), ch.clone()))
                             .collect();
+                        // Phase 6 — pre-populate infix positions with empty
+                        // strings so eager-rule templates that reference
+                        // `{root.after_C1}` succeed even when no filler has
+                        // landed there yet. The render-time infix path
+                        // overwrites these.
+                        if let Some(pos_names) = axis.infix_positions.get(&cond.value.node) {
+                            for pos in pos_names {
+                                slot_map.entry(pos.clone()).or_default();
+                            }
+                        }
                         struct_stems.insert(req.name.node.clone(), slot_map);
                     }
                 }

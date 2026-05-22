@@ -488,6 +488,7 @@ mod tests {
             meaning: None,
             form_spec: None,
             stem_spec: None,
+            slot_spec: None,
             span: span(s, e),
         })
     }

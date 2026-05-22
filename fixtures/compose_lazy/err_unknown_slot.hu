@@ -1,0 +1,15 @@
+# The compose chain references a slot name that is neither a declared stem
+# nor a `slot` declaration.
+@use * from "profile.hu"
+
+inflection bad_verb for {tense} {
+  requires stems: root
+
+  # `nope` is not a stem and is not a declared slot.
+  compose root + nope
+
+  slot tense_sfx {
+    [tense=past, _] -> `ed`
+    [tense=present, _] -> ``
+  }
+}

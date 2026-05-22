@@ -448,6 +448,7 @@ impl Parser {
 
         let mut display = Vec::new();
         let mut slots = Vec::new();
+        let mut infix_positions = Vec::new();
 
         while !matches!(self.peek(), TokenKind::RBrace | TokenKind::Eof) {
             if self.at_ident("display") {
@@ -460,6 +461,19 @@ impl Parser {
                 self.expect(&TokenKind::LBracket)?;
                 while !matches!(self.peek(), TokenKind::RBracket | TokenKind::Eof) {
                     slots.push(self.expect_ident()?);
+                    if matches!(self.peek(), TokenKind::Comma) {
+                        self.advance();
+                    }
+                }
+                self.expect(&TokenKind::RBracket)?;
+            } else if self.at_ident("infix_positions") {
+                // Phase 6 — named insertion points between structural slots.
+                // Same syntax as `slots:` — a bracketed comma list of idents.
+                self.advance();
+                self.expect(&TokenKind::Colon)?;
+                self.expect(&TokenKind::LBracket)?;
+                while !matches!(self.peek(), TokenKind::RBracket | TokenKind::Eof) {
+                    infix_positions.push(self.expect_ident()?);
                     if matches!(self.peek(), TokenKind::Comma) {
                         self.advance();
                     }
@@ -478,6 +492,7 @@ impl Parser {
             name,
             display,
             slots,
+            infix_positions,
         })
     }
 
@@ -777,6 +792,22 @@ impl Parser {
         Template { segments, span }
     }
 
+    /// Parse a `true` / `false` boolean literal (lexed as bare idents).
+    fn parse_bool_literal(&mut self) -> Result<bool, Diagnostic> {
+        if self.at_ident("true") {
+            self.advance();
+            Ok(true)
+        } else if self.at_ident("false") {
+            self.advance();
+            Ok(false)
+        } else {
+            Err(self.error(format!(
+                "expected 'true' or 'false', found {:?}",
+                self.peek()
+            )))
+        }
+    }
+
     fn parse_delegate(&mut self) -> Result<Delegate, Diagnostic> {
         let target = self.expect_ident()?;
         self.expect(&TokenKind::LBracket)?;
@@ -844,12 +875,40 @@ impl Parser {
 
         while !matches!(self.peek(), TokenKind::RBrace | TokenKind::Eof) {
             if self.at_ident("slot") {
+                let start = self.current_span().start;
                 self.advance();
                 let name = self.expect_ident()?;
-                self.expect(&TokenKind::LBrace)?;
-                let rules = self.parse_rule_list()?;
-                self.expect(&TokenKind::RBrace)?;
-                slots.push(SlotDef { name, rules });
+                // Phase 6 — optional discontinuous-morphology modifier
+                // between the slot name and the body:
+                //   `slot NAME circumfix matching [...]`
+                //   `slot NAME infix matching [...]`
+                let kind = if self.at_ident("circumfix") {
+                    self.advance();
+                    crate::ast::SlotKind::Circumfix
+                } else if self.at_ident("infix") {
+                    self.advance();
+                    crate::ast::SlotKind::Infix
+                } else {
+                    crate::ast::SlotKind::Normal
+                };
+                // Two body forms:
+                //   `slot NAME { rules }`          — eager
+                //   `slot NAME matching <filter>`  — lazy (CatchAll or Filter)
+                let body = if self.at_ident("matching") {
+                    self.advance();
+                    SlotBody::Lazy(self.parse_lazy_matching()?)
+                } else {
+                    self.expect(&TokenKind::LBrace)?;
+                    let rules = self.parse_rule_list()?;
+                    self.expect(&TokenKind::RBrace)?;
+                    SlotBody::Eager(rules)
+                };
+                slots.push(SlotDef {
+                    name,
+                    body,
+                    kind,
+                    span: self.span_from(start),
+                });
             } else if self.at_ident("override") {
                 self.advance();
                 overrides.push(self.parse_inflection_rule()?);
@@ -871,8 +930,9 @@ impl Parser {
     /// Parse a compose expression.
     /// ```text
     /// compose_expr = compose_term ('+' compose_term)*
-    /// compose_term = IDENT '(' compose_expr ')'   // PhonApply
-    ///              | IDENT                          // Slot
+    /// compose_term = IDENT '(' compose_expr ')'           // PhonApply
+    ///              | IDENT slot_quantifier?                 // Slot with optional quantifier
+    /// slot_quantifier = '*' | '?' | '+' | '{' N ',' M '}'
     /// ```
     fn parse_compose_expr(&mut self) -> Result<ComposeExpr, Diagnostic> {
         let mut terms = Vec::new();
@@ -900,8 +960,163 @@ impl Parser {
                 inner: Box::new(inner),
             })
         } else {
-            Ok(ComposeExpr::Slot(ident))
+            let quantifier = self.parse_slot_quantifier()?;
+            Ok(ComposeExpr::Slot {
+                name: ident,
+                quantifier,
+            })
         }
+    }
+
+    /// Parse an optional slot quantifier suffix in a compose chain: `*`, `?`,
+    /// `+`, `{n,m}`. Absence ⇒ [`SlotQuantifier::One`].
+    fn parse_slot_quantifier(&mut self) -> Result<SlotQuantifier, Diagnostic> {
+        match self.peek() {
+            TokenKind::Star => {
+                self.advance();
+                Ok(SlotQuantifier::ZeroOrMore)
+            }
+            TokenKind::Question => {
+                self.advance();
+                Ok(SlotQuantifier::ZeroOrOne)
+            }
+            TokenKind::Plus => {
+                // `+` here is the quantifier; `compose_expr` only consumes
+                // `+` between terms via lookahead in parse_compose_expr, which
+                // looks at the *next* token — so we must peek further to avoid
+                // mistaking the inter-term `+` for a quantifier. The simplest
+                // disambiguation: a quantifier `+` must be followed by `+` or
+                // a token that ends the term (RParen / RBrace / Eof / `slot` /
+                // `override`). If it's followed by an identifier or LParen the
+                // `+` is the inter-term operator and we should NOT consume it.
+                if self.lookahead_is_quantifier_plus_terminator() {
+                    self.advance();
+                    Ok(SlotQuantifier::OneOrMore)
+                } else {
+                    Ok(SlotQuantifier::One)
+                }
+            }
+            TokenKind::LBrace => {
+                // `{n,m}` bounded quantifier. Be conservative: only consume if
+                // it really looks like `{ NUMBER , NUMBER }`. If not, leave it
+                // alone (the surrounding context will hit a parse error).
+                if self.lookahead_is_bounded_quantifier() {
+                    self.advance(); // `{`
+                    let min = self.parse_quant_number()?;
+                    self.expect(&TokenKind::Comma)?;
+                    let max = self.parse_quant_number()?;
+                    self.expect(&TokenKind::RBrace)?;
+                    if min > max {
+                        return Err(self.error(format!(
+                            "invalid quantifier '{{{},{}}}': lower bound {} \
+                             exceeds upper bound {}",
+                            min, max, min, max
+                        )));
+                    }
+                    Ok(SlotQuantifier::Bounded { min, max })
+                } else {
+                    Ok(SlotQuantifier::One)
+                }
+            }
+            _ => Ok(SlotQuantifier::One),
+        }
+    }
+
+    /// True when a `+` we just peeked at is a slot quantifier rather than the
+    /// inter-term `+` operator of the compose chain. The quantifier `+` is
+    /// followed by another term boundary: end-of-body / a fresh `slot` or
+    /// `override` keyword / the next inter-term `+` (e.g. `a+ + b`).
+    fn lookahead_is_quantifier_plus_terminator(&self) -> bool {
+        match self.tokens.get(self.pos + 1).map(|t| &t.node) {
+            Some(TokenKind::Plus) => true,
+            Some(TokenKind::RParen)
+            | Some(TokenKind::RBrace)
+            | Some(TokenKind::Eof)
+            | None => true,
+            Some(TokenKind::Ident(s)) if s == "slot" || s == "override" => true,
+            // Followed by another ident / LParen => inter-term `+`, not a quantifier.
+            _ => false,
+        }
+    }
+
+    /// True when `{` `NUMBER` `,` `NUMBER` `}` follows. Numbers are lexed as
+    /// digit-only identifiers, the same convention `parse_quant_number` uses.
+    fn lookahead_is_bounded_quantifier(&self) -> bool {
+        fn is_digits(tok: Option<&TokenKind>) -> bool {
+            matches!(
+                tok,
+                Some(TokenKind::Ident(s))
+                    if !s.is_empty() && s.chars().all(|c| c.is_ascii_digit())
+            )
+        }
+        let t1 = self.tokens.get(self.pos + 1).map(|t| &t.node);
+        let t2 = self.tokens.get(self.pos + 2).map(|t| &t.node);
+        let t3 = self.tokens.get(self.pos + 3).map(|t| &t.node);
+        let t4 = self.tokens.get(self.pos + 4).map(|t| &t.node);
+        is_digits(t1)
+            && matches!(t2, Some(TokenKind::Comma))
+            && is_digits(t3)
+            && matches!(t4, Some(TokenKind::RBrace))
+    }
+
+    /// Parse the body of `slot NAME matching ...`: either `*` (CatchAll) or
+    /// `[axis_filter, ...]` (Filter).
+    fn parse_lazy_matching(&mut self) -> Result<LazyMatching, Diagnostic> {
+        match self.peek() {
+            TokenKind::Star => {
+                self.advance();
+                Ok(LazyMatching::CatchAll)
+            }
+            TokenKind::LBracket => {
+                self.advance();
+                let mut filters = Vec::new();
+                while !matches!(self.peek(), TokenKind::RBracket | TokenKind::Eof) {
+                    filters.push(self.parse_axis_filter()?);
+                    if matches!(self.peek(), TokenKind::Comma) {
+                        self.advance();
+                    }
+                }
+                self.expect(&TokenKind::RBracket)?;
+                Ok(LazyMatching::Filter(filters))
+            }
+            other => Err(self.error(format!(
+                "expected '*' or '[axis_filters]' after 'matching', found {:?}",
+                other
+            ))),
+        }
+    }
+
+    /// Parse one axis filter inside a `[...]` filter list:
+    ///
+    /// - `axis`               → `AxisConstraint::Any`
+    /// - `axis = value`       → `AxisConstraint::Eq(value)`
+    /// - `axis = { v1, v2 }`  → `AxisConstraint::OneOf([v1, v2])`
+    ///
+    /// Multiple filters on a single slot are **AND**ed together at match time.
+    fn parse_axis_filter(&mut self) -> Result<AxisFilter, Diagnostic> {
+        let axis = self.expect_ident()?;
+        let constraint = if matches!(self.peek(), TokenKind::Eq) {
+            self.advance();
+            if matches!(self.peek(), TokenKind::LBrace) {
+                // `{ v1, v2, ... }` — ordered list, semantically a set.
+                self.advance();
+                let mut values = Vec::new();
+                while !matches!(self.peek(), TokenKind::RBrace | TokenKind::Eof) {
+                    values.push(self.expect_ident()?);
+                    if matches!(self.peek(), TokenKind::Comma) {
+                        self.advance();
+                    }
+                }
+                self.expect(&TokenKind::RBrace)?;
+                AxisConstraint::OneOf(values)
+            } else {
+                let value = self.expect_ident()?;
+                AxisConstraint::Eq(value)
+            }
+        } else {
+            AxisConstraint::Any
+        };
+        Ok(AxisFilter { axis, constraint })
     }
 
     // -----------------------------------------------------------------------
@@ -1977,6 +2192,7 @@ impl Parser {
         let mut forms_override = Vec::new();
         let mut etymology = None;
         let mut examples = Vec::new();
+        let mut is_peripheral = false;
 
         while !matches!(self.peek(), TokenKind::RBrace | TokenKind::Eof) {
             if self.at_ident("headword") {
@@ -2021,6 +2237,10 @@ impl Parser {
             } else if self.at_ident("examples") {
                 self.advance();
                 examples = self.parse_examples()?;
+            } else if self.at_ident("is_peripheral") {
+                self.advance();
+                self.expect(&TokenKind::Colon)?;
+                is_peripheral = self.parse_bool_literal()?;
             } else {
                 return Err(self.error(format!(
                     "unexpected field in entry: {:?}",
@@ -2031,10 +2251,18 @@ impl Parser {
 
         self.expect(&TokenKind::RBrace)?;
 
-        let headword =
-            headword.ok_or_else(|| self.error("entry missing 'headword' field"))?;
-        let meaning =
-            meaning.ok_or_else(|| self.error("entry missing 'meaning' or 'meanings' field"))?;
+        let headword = match headword {
+            Some(hw) => hw,
+            None => return Err(self.error("entry missing 'headword' field")),
+        };
+        let meaning = match meaning {
+            Some(m) => m,
+            None => {
+                return Err(
+                    self.error("entry missing 'meaning' or 'meanings' field")
+                )
+            }
+        };
 
         Ok(Entry {
             name,
@@ -2046,6 +2274,7 @@ impl Parser {
             forms_override,
             etymology,
             examples,
+            is_peripheral,
         })
     }
 
@@ -2711,14 +2940,68 @@ impl Parser {
             }
         }
 
+        // Optional second bracket = explicit slot filling (§4). Disambiguation
+        // is purely positional: the first `[...]` is the axes/form spec, any
+        // second `[...]` is the slot spec. `entry[X]` is always axes; to give
+        // slots with no axes, write `entry[][slot=...]`.
+        let mut slot_spec = None;
+        if matches!(self.peek(), TokenKind::LBracket) {
+            slot_spec = Some(self.parse_slot_spec()?);
+        }
+
         Ok(EntryRef {
             namespace,
             entry_id,
             meaning,
             form_spec,
             stem_spec,
+            slot_spec,
             span: self.span_from(start),
         })
+    }
+
+    /// Parse the second entry-ref bracket: `[slot=value, slot=value, ...]` —
+    /// explicit slot filling (§4). The `[...]` itself is the container; each
+    /// assignment uses `=`, and a value is either a single entry reference
+    /// (which may carry its own `[axes][slots]` brackets) or an ordered
+    /// `{ ref, ref, ... }` list for a variadic slot.
+    fn parse_slot_spec(&mut self) -> Result<SlotSpec, Diagnostic> {
+        let start = self.current_span().start;
+        self.expect(&TokenKind::LBracket)?;
+        let mut assignments = Vec::new();
+        while !matches!(self.peek(), TokenKind::RBracket | TokenKind::Eof) {
+            assignments.push(self.parse_slot_assignment()?);
+            if matches!(self.peek(), TokenKind::Comma) {
+                self.advance();
+            }
+        }
+        self.expect(&TokenKind::RBracket)?;
+        Ok(SlotSpec {
+            assignments,
+            span: self.span_from(start),
+        })
+    }
+
+    /// Parse `slot = value` where value is a single entry ref or an ordered
+    /// `{ ref, ref, ... }` list.
+    fn parse_slot_assignment(&mut self) -> Result<SlotAssignment, Diagnostic> {
+        let slot = self.expect_ident()?;
+        self.expect(&TokenKind::Eq)?;
+        let value = if matches!(self.peek(), TokenKind::LBrace) {
+            self.advance();
+            let mut refs = Vec::new();
+            while !matches!(self.peek(), TokenKind::RBrace | TokenKind::Eof) {
+                refs.push(self.parse_entry_ref()?);
+                if matches!(self.peek(), TokenKind::Comma) {
+                    self.advance();
+                }
+            }
+            self.expect(&TokenKind::RBrace)?;
+            SlotValue::List(refs)
+        } else {
+            SlotValue::Single(Box::new(self.parse_entry_ref()?))
+        };
+        Ok(SlotAssignment { slot, value })
     }
 }
 
@@ -2897,6 +3180,286 @@ mod tests {
                 _ => panic!("expected Rules body"),
             },
             other => panic!("expected Inflection, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_inflection_compose_lazy_matching() {
+        // `slot NAME matching ...` (CatchAll `*` and `Filter [..]`) plus
+        // compose-chain slot quantifiers (`*`, `?`, `+`, `{n,m}`, default 1).
+        let (file, errors) = parse_str(
+            r#"
+            inflection verb_conj for {tense, person, number, negation} {
+                requires stems: root
+
+                compose harmony(elision(proclitics* + root + neg_sfx? + tense_sfx + pn_sfx? + enclitics+))
+
+                slot neg_sfx   matching [negation, tense]
+                slot tense_sfx matching [tense]
+                slot pn_sfx    matching [tense, person, number]
+                slot proclitics matching *
+                slot enclitics  matching *
+            }
+            "#,
+        );
+        assert!(errors.is_empty(), "errors: {:?}", errors);
+        match &file.items[0].node {
+            Item::Inflection(infl) => match &infl.body {
+                InflectionBody::Compose(comp) => {
+                    // Top-level chain: harmony(elision(Concat))
+                    let inner = match &comp.chain {
+                        ComposeExpr::PhonApply { rule, inner } => {
+                            assert_eq!(rule.node, "harmony");
+                            inner
+                        }
+                        other => panic!("expected harmony PhonApply, got {:?}", other),
+                    };
+                    let inner2 = match inner.as_ref() {
+                        ComposeExpr::PhonApply { rule, inner } => {
+                            assert_eq!(rule.node, "elision");
+                            inner
+                        }
+                        other => panic!("expected elision PhonApply, got {:?}", other),
+                    };
+                    let terms = match inner2.as_ref() {
+                        ComposeExpr::Concat(t) => t,
+                        other => panic!("expected Concat, got {:?}", other),
+                    };
+                    assert_eq!(terms.len(), 6);
+                    // proclitics* — ZeroOrMore
+                    match &terms[0] {
+                        ComposeExpr::Slot { name, quantifier } => {
+                            assert_eq!(name.node, "proclitics");
+                            assert_eq!(*quantifier, SlotQuantifier::ZeroOrMore);
+                        }
+                        other => panic!("expected Slot, got {:?}", other),
+                    }
+                    // root — One (default)
+                    match &terms[1] {
+                        ComposeExpr::Slot { name, quantifier } => {
+                            assert_eq!(name.node, "root");
+                            assert_eq!(*quantifier, SlotQuantifier::One);
+                        }
+                        other => panic!("expected Slot, got {:?}", other),
+                    }
+                    // neg_sfx? — ZeroOrOne
+                    match &terms[2] {
+                        ComposeExpr::Slot { name, quantifier } => {
+                            assert_eq!(name.node, "neg_sfx");
+                            assert_eq!(*quantifier, SlotQuantifier::ZeroOrOne);
+                        }
+                        other => panic!("expected Slot, got {:?}", other),
+                    }
+                    // enclitics+ — OneOrMore
+                    match &terms[5] {
+                        ComposeExpr::Slot { name, quantifier } => {
+                            assert_eq!(name.node, "enclitics");
+                            assert_eq!(*quantifier, SlotQuantifier::OneOrMore);
+                        }
+                        other => panic!("expected Slot, got {:?}", other),
+                    }
+
+                    // Slot decls: 5 entries.
+                    assert_eq!(comp.slots.len(), 5);
+                    // neg_sfx matching [negation, tense] — Filter with 2 Any
+                    match &comp.slots[0].body {
+                        SlotBody::Lazy(LazyMatching::Filter(fs)) => {
+                            assert_eq!(fs.len(), 2);
+                            assert_eq!(fs[0].axis.node, "negation");
+                            assert!(matches!(fs[0].constraint, AxisConstraint::Any));
+                            assert_eq!(fs[1].axis.node, "tense");
+                            assert!(matches!(fs[1].constraint, AxisConstraint::Any));
+                        }
+                        other => panic!("expected Lazy Filter, got {:?}", other),
+                    }
+                    // proclitics matching * — CatchAll
+                    match &comp.slots[3].body {
+                        SlotBody::Lazy(LazyMatching::CatchAll) => {}
+                        other => panic!("expected Lazy CatchAll, got {:?}", other),
+                    }
+                }
+                other => panic!("expected Compose body, got {:?}", other),
+            },
+            other => panic!("expected Inflection, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_lazy_matching_filter_eq_oneof() {
+        // axis=value (Eq) and axis={v1, v2} (OneOf) inside `matching [...]`.
+        let (file, errors) = parse_str(
+            r#"
+            inflection v for {tense, person} {
+                requires stems: root
+                compose root + tns
+                slot tns matching [tense=past, person={1, 2}]
+            }
+            "#,
+        );
+        assert!(errors.is_empty(), "errors: {:?}", errors);
+        match &file.items[0].node {
+            Item::Inflection(infl) => match &infl.body {
+                InflectionBody::Compose(comp) => match &comp.slots[0].body {
+                    SlotBody::Lazy(LazyMatching::Filter(fs)) => {
+                        assert_eq!(fs.len(), 2);
+                        match &fs[0].constraint {
+                            AxisConstraint::Eq(v) => assert_eq!(v.node, "past"),
+                            other => panic!("expected Eq, got {:?}", other),
+                        }
+                        match &fs[1].constraint {
+                            AxisConstraint::OneOf(vs) => {
+                                assert_eq!(vs.len(), 2);
+                                assert_eq!(vs[0].node, "1");
+                                assert_eq!(vs[1].node, "2");
+                            }
+                            other => panic!("expected OneOf, got {:?}", other),
+                        }
+                    }
+                    other => panic!("expected Lazy Filter, got {:?}", other),
+                },
+                _ => panic!("expected Compose"),
+            },
+            _ => panic!("expected Inflection"),
+        }
+    }
+
+    #[test]
+    fn test_compose_bounded_quantifier() {
+        // `{n,m}` bounded quantifier on a compose chain slot.
+        let (file, errors) = parse_str(
+            r#"
+            inflection v for {tense} {
+                requires stems: root
+                compose root + sfx{1,3}
+                slot sfx matching *
+            }
+            "#,
+        );
+        assert!(errors.is_empty(), "errors: {:?}", errors);
+        match &file.items[0].node {
+            Item::Inflection(infl) => match &infl.body {
+                InflectionBody::Compose(comp) => {
+                    let terms = match &comp.chain {
+                        ComposeExpr::Concat(t) => t,
+                        other => panic!("expected Concat, got {:?}", other),
+                    };
+                    match &terms[1] {
+                        ComposeExpr::Slot { name, quantifier } => {
+                            assert_eq!(name.node, "sfx");
+                            assert_eq!(*quantifier, SlotQuantifier::Bounded { min: 1, max: 3 });
+                        }
+                        other => panic!("expected Slot, got {:?}", other),
+                    }
+                }
+                _ => panic!("expected Compose"),
+            },
+            _ => panic!("expected Inflection"),
+        }
+    }
+
+    #[test]
+    fn test_morpheme_entry() {
+        // After the Part-A refactor, an "affix" entry is just an inflectionless
+        // entry with `headword` + `tags` + `meaning`. The slot grammar's typed
+        // filter is what selects it; `is_morpheme`/`form` no longer exist.
+        let (file, errors) = parse_str(
+            r#"
+            entry past_sfx {
+                headword: "əp"
+                tags: [tense=past]
+                meaning: "past tense suffix"
+            }
+            "#,
+        );
+        assert!(errors.is_empty(), "errors: {:?}", errors);
+        match &file.items[0].node {
+            Item::Entry(e) => {
+                assert!(!e.is_peripheral);
+                assert!(e.inflection.is_none());
+                assert_eq!(e.tags.len(), 1);
+                match &e.headword {
+                    Headword::Simple(s) => assert_eq!(s.node, "əp"),
+                    other => panic!("expected Simple headword, got {:?}", other),
+                }
+            }
+            other => panic!("expected Entry, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_entry_ref_slot_spec() {
+        // §4 positional syntax: `entry[axes][slot=val, slot=val[axes], slot={..}]`.
+        let (file, errors) = parse_str(
+            r#"
+            entry dummy {
+                headword: "d"
+                meaning: "x"
+                stems {}
+                examples {
+                    example {
+                        tokens: katab[][abs_pers=as3, erg_pers=erg2[person=p1], extra={c1, c2}] "."
+                        translation: "t"
+                    }
+                }
+            }
+            "#,
+        );
+        assert!(errors.is_empty(), "errors: {:?}", errors);
+        match &file.items[0].node {
+            Item::Entry(e) => match &e.examples[0].tokens[0] {
+                crate::ast::Token::Ref(r) => {
+                    let spec = r.slot_spec.as_ref().expect("slot_spec present");
+                    assert_eq!(spec.assignments.len(), 3);
+                    assert_eq!(spec.assignments[0].slot.node, "abs_pers");
+                    assert!(matches!(spec.assignments[0].value, SlotValue::Single(_)));
+                    // a slot value entry ref may carry its own `[axes]` bracket
+                    match &spec.assignments[1].value {
+                        SlotValue::Single(inner) => {
+                            assert_eq!(inner.entry_id.node, "erg2");
+                            assert!(inner.form_spec.is_some());
+                        }
+                        other => panic!("expected Single, got {:?}", other),
+                    }
+                    match &spec.assignments[2].value {
+                        SlotValue::List(refs) => assert_eq!(refs.len(), 2),
+                        other => panic!("expected List, got {:?}", other),
+                    }
+                }
+                other => panic!("expected Ref token, got {:?}", other),
+            },
+            _ => panic!("expected Entry"),
+        }
+    }
+
+    #[test]
+    fn test_entry_ref_legacy_form_spec_unaffected() {
+        // A single `[axes]` bracket with no following `[slots:` must still
+        // parse as a plain form_spec, with slot_spec None.
+        let (file, errors) = parse_str(
+            r#"
+            entry dummy {
+                headword: "d"
+                meaning: "x"
+                stems {}
+                examples {
+                    example {
+                        tokens: katab[tense=past] "."
+                        translation: "t"
+                    }
+                }
+            }
+            "#,
+        );
+        assert!(errors.is_empty(), "errors: {:?}", errors);
+        match &file.items[0].node {
+            Item::Entry(e) => match &e.examples[0].tokens[0] {
+                crate::ast::Token::Ref(r) => {
+                    assert!(r.form_spec.is_some());
+                    assert!(r.slot_spec.is_none());
+                }
+                other => panic!("expected Ref token, got {:?}", other),
+            },
+            _ => panic!("expected Entry"),
         }
     }
 

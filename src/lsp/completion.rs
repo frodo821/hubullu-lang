@@ -923,10 +923,17 @@ fn format_inflection_doc(i: &ast::Inflection) -> String {
     let stems: Vec<_> = i.required_stems.iter().map(|s| s.name.node.as_str()).collect();
     let (rule_count, body_kind) = match &i.body {
         ast::InflectionBody::Rules(body) => (body.rules.len(), "rules"),
-        ast::InflectionBody::Compose(c) => (
-            c.slots.iter().map(|s| s.rules.len()).sum::<usize>() + c.overrides.len(),
-            "compose",
-        ),
+        ast::InflectionBody::Compose(c) => {
+            let eager_rule_count: usize = c
+                .slots
+                .iter()
+                .map(|s| match &s.body {
+                    ast::SlotBody::Eager(rules) => rules.len(),
+                    ast::SlotBody::Lazy(_) => 0,
+                })
+                .sum();
+            (eager_rule_count + c.overrides.len(), "compose")
+        }
     };
 
     let apply_info = match &i.body {

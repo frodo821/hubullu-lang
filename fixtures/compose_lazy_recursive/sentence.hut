@@ -1,0 +1,8 @@
+@reference * from "lang.hu"
+
+# Phase 5 smoke: 2-level recursion.
+# Host: katab[tense=past, person=p1, number=sg][tense_sfx=tns_pst, pn_sfx=pn_1sg,
+#         enclitics=cl_wa[person=p2, number=sg][cl_pn_sfx=cl_pn_2sg]]
+# Inner: cl_wa stem `wa` + cl_pn_sfx=`ka` → `waka`
+# Outer: `katab` + `ed` + `u` + `waka` → `katabeduwaka`
+katab[tense=past, person=p1, number=sg][tense_sfx=tns_pst, pn_sfx=pn_1sg, enclitics=cl_wa[person=p2, number=sg][cl_pn_sfx=cl_pn_2sg]]

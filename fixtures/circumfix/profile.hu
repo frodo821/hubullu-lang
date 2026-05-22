@@ -1,0 +1,39 @@
+# Phase 6 — circumfix mechanism smoke fixture.
+#
+# A toy German-style past participle inflection: the morpheme `ge-t`
+# (entry headword `"ge^t"`, with `^` as the splice marker) wraps the verb
+# root. The compose chain references the circumfix slot twice — once
+# before the root, once after — and the renderer splits the filler
+# surface at `^` to emit `ge` then `t` around the stem.
+#
+# `werken -> ge + werk + t = gewerkt`.
+
+tagaxis pos {
+  role: classificatory
+  display: { en: "Part of Speech" }
+}
+
+tagaxis tense {
+  role: inflectional
+  display: { en: "Tense" }
+}
+
+@extend pos_values for tagaxis pos {
+  verb { display: { en: "Verb" } }
+}
+
+@extend tense_values for tagaxis tense {
+  past_ptcp { display: { en: "Past Participle" } }
+}
+
+# The verb's `compose` chain references `ge_circ` twice — that's the
+# splice-position notation for a circumfix slot. The slot itself is
+# declared `circumfix` so the renderer knows to split the filler's surface
+# at `^` rather than concatenate it whole at both positions.
+inflection participle for {tense} {
+  requires stems: root
+
+  compose ge_circ + root + ge_circ
+
+  slot ge_circ circumfix matching [tense=past_ptcp]
+}

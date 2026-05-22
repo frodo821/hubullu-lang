@@ -94,7 +94,11 @@ pub fn collect_referenced_axes(body: &InflectionBody, overrides: &[InflectionRul
         }
         InflectionBody::Compose(comp) => {
             for slot in &comp.slots {
-                collect_from_rules(&slot.rules);
+                if let SlotBody::Eager(rules) = &slot.body {
+                    collect_from_rules(rules);
+                }
+                // Lazy slots carry an axis filter, not rule conditions; their
+                // axes are validated separately in phase2.
             }
             collect_from_rules(&comp.overrides);
         }
@@ -569,7 +573,11 @@ fn eval_compose_expr(
     phon_resolver: &dyn PhonRuleResolver,
 ) -> Result<Option<String>, Diagnostic> {
     match expr {
-        ComposeExpr::Slot(slot_ref) => {
+        ComposeExpr::Slot { name: slot_ref, quantifier: _ } => {
+            // Quantifiers > 1 are only legal on lazy slots, and any-lazy
+            // compose bodies skip this evaluator entirely (forms emission is
+            // deferred to Phase 7). For the all-eager path the quantifier is
+            // always `One`, so we don't need to consult it here.
             let slot_name = &slot_ref.node;
 
             // Check if it's a stem
@@ -579,7 +587,20 @@ fn eval_compose_expr(
 
             // Find the slot definition
             if let Some(slot_def) = slots.iter().find(|s| s.name.node == *slot_name) {
-                match find_best_match(&slot_def.rules, cell)? {
+                let rules = match &slot_def.body {
+                    SlotBody::Eager(rs) => rs,
+                    SlotBody::Lazy(_) => {
+                        // The any-lazy guard in `expand_inflection_forms` skips
+                        // this path, but be defensive: a lazy slot has no per-
+                        // cell rules to evaluate at compile time.
+                        return Err(Diagnostic::error(format!(
+                            "slot '{}' is lazy (`matching`) — compile-time \
+                             paradigm expansion is not applicable",
+                            slot_name
+                        )));
+                    }
+                };
+                match find_best_match(rules, cell)? {
                     Some(rule) => match &rule.rhs.node {
                         RuleRhs::Template(tmpl) => {
                             render_template(tmpl, stems, struct_stems).map(Some)
@@ -1320,9 +1341,12 @@ mod tests {
 
     #[test]
     fn test_compose_slot_not_defined() {
-        let span = make_span();
+        let _span = make_span();
         let compose = ComposeBody {
-            chain: ComposeExpr::Slot(make_ident("undefined_slot")),
+            chain: ComposeExpr::Slot {
+                name: make_ident("undefined_slot"),
+                quantifier: SlotQuantifier::One,
+            },
             slots: vec![],
             overrides: vec![],
         };
@@ -1342,12 +1366,17 @@ mod tests {
     fn test_compose_no_rule_matches_slot() {
         let span = make_span();
         let compose = ComposeBody {
-            chain: ComposeExpr::Slot(make_ident("prefix")),
+            chain: ComposeExpr::Slot {
+                name: make_ident("prefix"),
+                quantifier: SlotQuantifier::One,
+            },
             slots: vec![SlotDef {
                 name: make_ident("prefix"),
-                rules: vec![
+                body: SlotBody::Eager(vec![
                     make_rule(&[("tense", "present")], false, "pre"),
-                ],
+                ]),
+                kind: crate::ast::SlotKind::Normal,
+                span,
             }],
             overrides: vec![],
         };
@@ -1369,13 +1398,18 @@ mod tests {
         let compose = ComposeBody {
             chain: ComposeExpr::PhonApply {
                 rule: make_ident("missing_rule"),
-                inner: Box::new(ComposeExpr::Slot(make_ident("s"))),
+                inner: Box::new(ComposeExpr::Slot {
+                    name: make_ident("s"),
+                    quantifier: SlotQuantifier::One,
+                }),
             },
             slots: vec![SlotDef {
                 name: make_ident("s"),
-                rules: vec![
+                body: SlotBody::Eager(vec![
                     make_rule(&[("tense", "present")], true, "form"),
-                ],
+                ]),
+                kind: crate::ast::SlotKind::Normal,
+                span,
             }],
             overrides: vec![],
         };

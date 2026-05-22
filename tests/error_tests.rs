@@ -294,6 +294,49 @@ fn test_cyclic_derived_from() {
 }
 
 // =========================================================================
+// Compose + lazy `matching` slots (Phase 2): per-slot filter checks, compose-
+// chain quantifier checks, layout checks.
+// =========================================================================
+
+#[test]
+fn test_compose_lazy_bad_layout() {
+    // Eager slot after a trailing lazy slot violates `lazy* eager* lazy*`.
+    let errors = compile_error("compose_lazy/err_bad_layout.hu");
+    assert_error_contains(&errors, "eager block must be a single contiguous run");
+}
+
+#[test]
+fn test_compose_lazy_variadic_on_eager_slot() {
+    // `*`/`+`/bounded(max>1) quantifier on a slot whose body is an eager rule
+    // list — quantifiers > 1 are only legal on lazy slots.
+    let errors = compile_error("compose_lazy/err_variadic_on_eager.hu");
+    assert_error_contains(&errors, "variadic quantifier");
+}
+
+#[test]
+fn test_compose_lazy_unknown_axis() {
+    // `slot NAME matching [axis]` where `axis` is not in the inflection's `for {}`.
+    let errors = compile_error("compose_lazy/err_unknown_axis.hu");
+    assert_error_contains(&errors, "is not in the inflection's `for {}` declaration");
+}
+
+#[test]
+fn test_compose_lazy_unknown_value() {
+    // `slot NAME matching [axis=value]` where `value` is not a declared value
+    // of the axis.
+    let errors = compile_error("compose_lazy/err_unknown_value.hu");
+    assert_error_contains(&errors, "not a declared value of axis");
+}
+
+#[test]
+fn test_compose_lazy_unknown_slot_in_chain() {
+    // The compose chain references a slot name that is neither a declared
+    // stem nor a `slot` declaration.
+    let errors = compile_error("compose_lazy/err_unknown_slot.hu");
+    assert_error_contains(&errors, "compose chain references slot");
+}
+
+// =========================================================================
 // Import scheme errors
 // =========================================================================
 

@@ -72,6 +72,11 @@ a priori 祖語プロジェクト（`/Users/csakai/repos/writing/a_priori/run_01
   - flatter な代替: circumfix を「2 スロットを連動して埋める 1 エントリ」にする（eager 再帰不要、代わりに「1 エントリが複数スロットを束ねる」機構を足す）
 - **不連続テンプレート**（語幹そのものの内部不連続、root-and-pattern）= **stem 構造の機構**。hubullu は既にこれを持つ（`stems { root: "ktb" }` + `root_type` の `slots: [C1,C2,C3]` + `{root.C1}a{root.C2}…` の補間）。「stem 構造に入れられるものを拡張する」のが正しいレバーで、slot モデルを触る話ではない。stem 構造が**内部スロット位置**を宣言できるよう拡張すれば、同じレバーで **infix** まで届く。
 
+**Phase 6 で採用した実装**（2026-05-16、reshape 後のスコープ縮小版）:
+
+- **circumfix**: flatter な代替「1 エントリが 2 スロット位置に束縛」を採用（wrapping node + eager 再帰は不要）。形態素エントリの `headword` 内に splice marker `^` を埋め込み（例: `"ge^t"`）、`slot NAME circumfix matching [...]` で宣言したスロットを `compose` chain 内で**ちょうど 2 回**参照する。レンダー時、`^` で前半・後半に split し、第 1 出現に prefix、第 2 出現に suffix を流し込む。`werken[tense=past_ptcp]` → `gewerkt`。Phase 2 で chain 出現回数を静的検査（2 回未満／超過は compile error）。
+- **infix**: 既存の stem-template 機構を拡張。`@extend` 値に `infix_positions: [after_C1, after_C2]` を追加し、`build_struct_stems` がそれらを空文字列で pre-populate。同名の `slot NAME infix matching [...]` を inflection に宣言する（**chain には現れない** — Phase 2 で検査）。レンダー時、infix slot の filler の surface を `struct_stems[stem_name][slot_name]` に splice in し、eager rule の template `{root.after_C1}` が解決できるようにする。`kataba[vowel_pattern=perfect_a_a]` (root=`ktb`) → `katab`。当初 proposal の `Nested` 機構は不要（compose chain がフラットなので nested grammar が消えた reshape の副産物）。
+
 ## 4. 構文
 
 スロット構造をもつエントリ参照の構文:

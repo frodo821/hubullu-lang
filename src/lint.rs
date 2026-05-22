@@ -601,7 +601,9 @@ fn check_body_duplicate_conditions(body: &InflectionBody, lints: &mut Vec<LintDi
         }
         InflectionBody::Compose(comp) => {
             for slot in &comp.slots {
-                check_duplicate_conditions_inner(&slot.rules, lints);
+                if let SlotBody::Eager(rules) = &slot.body {
+                    check_duplicate_conditions_inner(rules, lints);
+                }
             }
             check_duplicate_conditions_inner(&comp.overrides, lints);
         }
@@ -946,9 +948,14 @@ fn collect_body_tag_values(body: &InflectionBody, used: &mut HashSet<(String, St
         }
         InflectionBody::Compose(comp) => {
             for slot in &comp.slots {
-                for rule in &slot.rules {
-                    collect_rule_tag_values(rule, used);
+                if let SlotBody::Eager(rules) = &slot.body {
+                    for rule in rules {
+                        collect_rule_tag_values(rule, used);
+                    }
                 }
+                // Lazy slot filter axes/values are validated in phase2 against
+                // the inflection's `for {}`; they do not contribute to the
+                // unused-extend-value lint (no tag values referenced).
             }
             for rule in &comp.overrides {
                 collect_rule_tag_values(rule, used);
@@ -1024,7 +1031,9 @@ fn collect_template_stem_refs(body: &InflectionBody) -> HashSet<String> {
         }
         InflectionBody::Compose(comp) => {
             for slot in &comp.slots {
-                collect_rules_template_stems(&slot.rules, &mut stems);
+                if let SlotBody::Eager(rules) = &slot.body {
+                    collect_rules_template_stems(rules, &mut stems);
+                }
             }
             collect_rules_template_stems(&comp.overrides, &mut stems);
         }
@@ -1114,7 +1123,9 @@ fn check_shadowed_in_body(
         }
         InflectionBody::Compose(comp) => {
             for slot in &comp.slots {
-                check_shadowed_rules(&slot.rules, axes, axis_values, lints);
+                if let SlotBody::Eager(rules) = &slot.body {
+                    check_shadowed_rules(rules, axes, axis_values, lints);
+                }
             }
             check_shadowed_rules(&comp.overrides, axes, axis_values, lints);
         }

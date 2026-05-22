@@ -437,9 +437,12 @@ fn phonrule_refs(body: &InflectionBody) -> HashSet<String> {
         InflectionBody::Compose(comp) => {
             collect_phonrules_from_compose(&comp.chain, &mut refs);
             for slot in &comp.slots {
-                for rule in &slot.rules {
-                    collect_phonrules_from_rhs(&rule.rhs.node, &mut refs);
+                if let SlotBody::Eager(rules) = &slot.body {
+                    for rule in rules {
+                        collect_phonrules_from_rhs(&rule.rhs.node, &mut refs);
+                    }
                 }
+                // Lazy slots carry no phonrule references in their filter.
             }
             for rule in &comp.overrides {
                 collect_phonrules_from_rhs(&rule.rhs.node, &mut refs);
@@ -471,7 +474,7 @@ fn collect_phonrules_from_rhs(rhs: &RuleRhs, refs: &mut HashSet<String>) {
 
 fn collect_phonrules_from_compose(expr: &ComposeExpr, refs: &mut HashSet<String>) {
     match expr {
-        ComposeExpr::Slot(_) => {}
+        ComposeExpr::Slot { .. } => {}
         ComposeExpr::Concat(parts) => {
             for part in parts {
                 collect_phonrules_from_compose(part, refs);
@@ -495,9 +498,12 @@ fn delegate_refs(body: &InflectionBody) -> HashSet<String> {
         }
         InflectionBody::Compose(comp) => {
             for slot in &comp.slots {
-                for rule in &slot.rules {
-                    collect_delegates_from_rhs(&rule.rhs.node, &mut refs);
+                if let SlotBody::Eager(rules) = &slot.body {
+                    for rule in rules {
+                        collect_delegates_from_rhs(&rule.rhs.node, &mut refs);
+                    }
                 }
+                // Lazy slots have no rule-rhs delegation.
             }
             for rule in &comp.overrides {
                 collect_delegates_from_rhs(&rule.rhs.node, &mut refs);
