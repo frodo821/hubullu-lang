@@ -28,6 +28,10 @@ log = "0.4"
 env_logger = { version = "0.11", optional = true }
 thiserror = "1"
 unicode-xid = "0.2"
+# F1 (FST migration foundation): rustfst is wrapped behind src/fst/ trait surface.
+# Pinned to >= 1.2.6 per rustfst-survey.md (TrivialWeight + WeaklyDivisibleSemiring fixes).
+rustfst = "1.3"
+anyhow = "1"
 
 [[bin]]
 name = "hubullu"

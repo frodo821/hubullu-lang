@@ -74,6 +74,10 @@ pub mod symbol_table;
 pub mod token;
 /// AST visitor trait with default walk functions.
 pub mod visit;
+/// FST kernel facade (F1 of FST migration). Wraps `rustfst` behind a
+/// swap-ready trait so the morphology layer (F2+) stays backend-agnostic.
+/// See `docs/proposals/fst-kernel-design.md` Appendix B for the swap procedure.
+pub mod fst;
 /// Language Server Protocol implementation.
 #[cfg(feature = "lsp")]
 pub mod lsp;
